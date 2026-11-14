@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">PingAssist</string>
+    <string name="accessibility_service_label">PingAssist Auto-Send &amp; Triggers</string>
+    <string name="accessibility_service_description">Optional helper that automates WhatsApp voice note sending (native PTT or Send button), optional volume-hold trigger, floating pill, and auto-return when armed by PingAssist.</string>
+    <string name="widget_description">Tap to open your pinned WhatsApp contact or tap the mic to record &amp; send a voice note.</string>
+    <string name="qs_tile_label">PingAssist</string>
+    <string name="direct_voice_label">PingAssist Voice</string>
+    <string name="shortcut_open_chat_short">Open Chat</string>
+    <string name="shortcut_open_chat_long">Open WhatsApp Chat</string>
+    <string name="shortcut_voice_short">Voice Ping</string>
+    <string name="shortcut_voice_long">Record &amp; Send Audio</string>
+</resources>

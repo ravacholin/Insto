@@ -1,0 +1,6 @@
+{
+  "name": "PingAssist",
+  "description": "Dedicated single-contact WhatsApp assistant that opens your chosen chat on activation and records and auto-sends voice notes on long press.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
