@@ -103,7 +103,7 @@ data class AssistantPreferences(
   val orbHoldBehavior: OrbHoldBehavior = OrbHoldBehavior.PROGRESSIVE_CHAT_THEN_AUDIO,
   val preferredFlavor: WhatsAppFlavor = WhatsAppFlavor.AUTO,
   val voiceRecordingMode: VoiceRecordingMode = VoiceRecordingMode.AUDIO_FILE_AUTO_SEND,
-  val volumeKeyTrigger: VolumeKeyTrigger = VolumeKeyTrigger.DISABLED,
+  val volumeKeyTrigger: VolumeKeyTrigger = VolumeKeyTrigger.VOLUME_DOWN_HOLD,
   val floatingPillMode: FloatingPillMode = FloatingPillMode.OFF,
   val eyesFreeAudioCues: Boolean = true,
   val boomerangReturnEnabled: Boolean = false,

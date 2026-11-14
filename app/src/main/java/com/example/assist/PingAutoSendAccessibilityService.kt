@@ -71,6 +71,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   // Volume key hold state
   private var volumeHoldRunnable: Runnable? = null
   private var volumeHoldTriggered = false
+  private var volumeHoldElapsed = false
   private var volumeHoldStartedAtMs = 0L
 
   // Floating pill overlay state
@@ -153,19 +154,22 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
 
     if (event.keyCode != targetKeyCode) return super.onKeyEvent(event)
 
+    // The key is consumed so that holding it to record never changes the volume; a short tap
+    // applies its one volume step on release instead.
     when (event.action) {
       KeyEvent.ACTION_DOWN -> {
         if (event.repeatCount == 0) {
           volumeHoldRunnable?.let { mainHandler.removeCallbacks(it) }
           volumeHoldTriggered = false
+          volumeHoldElapsed = false
           val holdTask = Runnable {
+            volumeHoldElapsed = true
             volumeHoldTriggered = startBackgroundVoiceCapture()
           }
           volumeHoldRunnable = holdTask
           mainHandler.postDelayed(holdTask, 420L)
-          return false // Let normal short taps adjust volume seamlessly
         }
-        return volumeHoldTriggered
+        return true
       }
       KeyEvent.ACTION_UP -> {
         volumeHoldRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -173,11 +177,25 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
         if (volumeHoldTriggered) {
           volumeHoldTriggered = false
           stopAndDispatchBackgroundVoice(startedAtMs = volumeHoldStartedAtMs)
-          return true
+        } else if (!volumeHoldElapsed) {
+          applyVolumeStep(raise = targetKeyCode == KeyEvent.KEYCODE_VOLUME_UP)
         }
+        return true
       }
     }
     return super.onKeyEvent(event)
+  }
+
+  private fun applyVolumeStep(raise: Boolean) {
+    val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+    // Can throw when the step would toggle Do Not Disturb without policy access.
+    runCatching {
+      audioManager.adjustSuggestedStreamVolume(
+        if (raise) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+        AudioManager.USE_DEFAULT_STREAM_TYPE,
+        AudioManager.FLAG_SHOW_UI,
+      )
+    }
   }
 
   override fun onInterrupt() {

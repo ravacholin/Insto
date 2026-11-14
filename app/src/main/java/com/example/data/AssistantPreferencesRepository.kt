@@ -181,7 +181,7 @@ class AssistantPreferencesRepository(private val context: Context) {
     val volumeTrigger =
       prefs[Keys.VOLUME_KEY_TRIGGER]?.let { raw ->
         runCatching { VolumeKeyTrigger.valueOf(raw) }.getOrNull()
-      } ?: VolumeKeyTrigger.DISABLED
+      } ?: VolumeKeyTrigger.VOLUME_DOWN_HOLD
 
     val pillMode =
       prefs[Keys.FLOATING_PILL_MODE]?.let { raw ->
