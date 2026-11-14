@@ -1,6 +1,10 @@
 package com.example.data
 
 enum class AssistantActivationMode(val title: String, val subtitle: String) {
+  TAP_CHAT_HOLD_AUDIO(
+    title = "Tap = Chat · Hold = Voice Note",
+    subtitle = "Press the hotkey once to open the chat; keep it held to record and send on release",
+  ),
   DYNAMIC_VOICE_OR_CHAT(
     title = "Dynamic Smart Window (Auto)",
     subtitle = "Silent launch opens chat directly (~2s); speaking or holding records & sends audio automatically",
@@ -95,7 +99,7 @@ data class PingActionLog(
 
 data class AssistantPreferences(
   val pinnedContact: PinnedContact? = null,
-  val activationMode: AssistantActivationMode = AssistantActivationMode.DYNAMIC_VOICE_OR_CHAT,
+  val activationMode: AssistantActivationMode = AssistantActivationMode.TAP_CHAT_HOLD_AUDIO,
   val orbHoldBehavior: OrbHoldBehavior = OrbHoldBehavior.PROGRESSIVE_CHAT_THEN_AUDIO,
   val preferredFlavor: WhatsAppFlavor = WhatsAppFlavor.AUTO,
   val voiceRecordingMode: VoiceRecordingMode = VoiceRecordingMode.AUDIO_FILE_AUTO_SEND,

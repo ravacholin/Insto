@@ -334,6 +334,7 @@ fun PingOrb(
                         currentOnStopAndSend()
                       }
                       is RecordingUiState.Idle,
+                      is RecordingUiState.HoldPending,
                       is RecordingUiState.ListeningWindow -> {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         currentOnTapOpenChat()
@@ -393,7 +394,8 @@ fun PingOrb(
                   when (recordingState) {
                     is RecordingUiState.Recording -> formatElapsed(recordingState.elapsedMs)
                     RecordingUiState.Sending -> "Sending..."
-                    is RecordingUiState.ListeningWindow -> "LISTENING…"
+                    is RecordingUiState.ListeningWindow,
+                    RecordingUiState.HoldPending -> "LISTENING…"
                     RecordingUiState.Idle ->
                       when {
                         contactName == null -> "SET CONTACT"

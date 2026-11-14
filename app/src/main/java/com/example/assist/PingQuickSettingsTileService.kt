@@ -26,6 +26,7 @@ class PingQuickSettingsTileService : TileService() {
         tile.subtitle =
           route.activeContextLabel
             ?: when (route.activationMode) {
+              AssistantActivationMode.TAP_CHAT_HOLD_AUDIO -> "Tap Chat / Hold Voice"
               AssistantActivationMode.DYNAMIC_VOICE_OR_CHAT -> "Smart Chat / Voice"
               AssistantActivationMode.INSTANT_RECORD_AUDIO -> "Record Voice"
               AssistantActivationMode.INSTANT_OPEN_CHAT -> "Open Chat"
