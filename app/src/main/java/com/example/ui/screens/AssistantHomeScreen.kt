@@ -544,6 +544,20 @@ private fun AssistantSetupSheet(
         }
       }
 
+      if (
+        prefs.activationMode == AssistantActivationMode.TAP_CHAT_HOLD_AUDIO &&
+          !system.isAutoSendEnabled
+      ) {
+        Text(
+          text =
+            "Hold-to-record needs the Accessibility Helper (section below) to see the hotkey. " +
+              "Until it is on, the hotkey always opens the chat.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.error,
+          modifier = Modifier.testTag("hold_mode_accessibility_hint"),
+        )
+      }
+
       Button(
         onClick = onSetDefaultAssistantClick,
         shape = RoundedCornerShape(16.dp),

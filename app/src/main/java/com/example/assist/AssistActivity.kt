@@ -77,11 +77,30 @@ class AssistActivity : ComponentActivity() {
       return
     }
 
+    // Tap = chat, hold = voice note. A hold is only knowable when the accessibility helper saw the
+    // hotkey go down and it is still down now; otherwise this press is treated as a tap.
+    var heldHotkey: HotkeyHoldTracker.HeldKey? = null
+    if (
+      action != ACTION_RECORD_AUDIO &&
+        route.activationMode == AssistantActivationMode.TAP_CHAT_HOLD_AUDIO
+    ) {
+      val hasMic =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+          PackageManager.PERMISSION_GRANTED
+      heldHotkey = HotkeyHoldTracker.heldCandidate()
+      // Without mic access a hold can't record; only keep the overlay to ask for it the first time.
+      if (heldHotkey == null || (!hasMic && prefs.hasPromptedMicPermission)) {
+        openChatAndFinish(repository, contact, prefs.preferredFlavor)
+        return
+      }
+    }
+    val holdKey = heldHotkey
+
     val isDynamicWindow =
       action != ACTION_RECORD_AUDIO &&
         route.activationMode == AssistantActivationMode.DYNAMIC_VOICE_OR_CHAT
 
-    if (!isDynamicWindow) {
+    if (!isDynamicWindow && holdKey == null) {
       val canUseNativePtt =
         prefs.voiceRecordingMode == VoiceRecordingMode.NATIVE_WHATSAPP_PTT &&
           PingAutoSendAccessibilityService.isEnabled(this) &&
@@ -129,7 +148,10 @@ class AssistActivity : ComponentActivity() {
             contract = ActivityResultContracts.RequestPermission()
           ) { granted ->
             hasAudioPermission = granted
-            if (granted) {
+            if (holdKey != null) {
+              // The key was released long ago while the dialog was up: behave as a tap.
+              openChatAndFinish(repository, contact, prefs.preferredFlavor)
+            } else if (granted) {
               if (isDynamicWindow) {
                 viewModel.startDynamicAssistantSession { finish() }
               } else {
@@ -146,7 +168,9 @@ class AssistActivity : ComponentActivity() {
 
         LaunchedEffect(Unit) {
           if (hasAudioPermission) {
-            if (isDynamicWindow) {
+            if (holdKey != null) {
+              viewModel.startHoldToTalkSession(holdKey) { finish() }
+            } else if (isDynamicWindow) {
               viewModel.startDynamicAssistantSession { finish() }
             } else {
               viewModel.startRecording(lockedHandsFree = true)

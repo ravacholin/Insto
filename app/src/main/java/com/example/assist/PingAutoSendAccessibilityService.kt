@@ -139,6 +139,8 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
 
   override fun onKeyEvent(event: KeyEvent?): Boolean {
     if (event == null) return super.onKeyEvent(event)
+    // Observe only (never consume): lets the assist hotkey tell a tap from a hold.
+    HotkeyHoldTracker.onKeyEvent(event)
     val trigger = cachedPrefs.volumeKeyTrigger
     if (trigger == VolumeKeyTrigger.DISABLED) return super.onKeyEvent(event)
 
@@ -181,6 +183,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   override fun onInterrupt() {
     volumeHoldRunnable?.let { mainHandler.removeCallbacks(it) }
     volumeHoldRunnable = null
+    HotkeyHoldTracker.reset()
     AutoSendCoordinator.disarm()
     backgroundRecorder.cancelRecording()
   }
@@ -189,6 +192,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     audioDeviceCallback?.let { audioManager?.unregisterAudioDeviceCallback(it) }
     removeFloatingPill()
+    HotkeyHoldTracker.reset()
     backgroundRecorder.release()
     serviceScope.cancel()
     super.onDestroy()

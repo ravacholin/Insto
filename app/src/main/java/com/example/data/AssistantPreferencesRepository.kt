@@ -161,7 +161,7 @@ class AssistantPreferencesRepository(private val context: Context) {
     val mode =
       prefs[Keys.ACTIVATION_MODE]?.let { raw ->
         runCatching { AssistantActivationMode.valueOf(raw) }.getOrNull()
-      } ?: AssistantActivationMode.DYNAMIC_VOICE_OR_CHAT
+      } ?: AssistantActivationMode.TAP_CHAT_HOLD_AUDIO
 
     val orbBehavior =
       prefs[Keys.ORB_HOLD_BEHAVIOR]?.let { raw ->

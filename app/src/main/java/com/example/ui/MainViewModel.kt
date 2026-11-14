@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.assist.AssistantRoleHelper
+import com.example.assist.HotkeyHoldTracker
 import com.example.assist.PingAssistWidgetProvider
 import com.example.assist.PingAutoSendAccessibilityService
 import com.example.assist.ShortcutHelper
@@ -43,9 +44,13 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface RecordingUiState {
   data object Idle : RecordingUiState
+
+  /** Hotkey is down but not long enough yet to know whether it is a tap or a hold. */
+  data object HoldPending : RecordingUiState
 
   data class ListeningWindow(
     val elapsedMs: Long,
@@ -73,7 +78,7 @@ data class PingAssistUiState(
   val effectiveRoute: EffectiveContextRoute =
     EffectiveContextRoute(
       contact = null,
-      activationMode = AssistantActivationMode.DYNAMIC_VOICE_OR_CHAT,
+      activationMode = AssistantActivationMode.TAP_CHAT_HOLD_AUDIO,
       activeContextLabel = null,
       isCarOrBluetoothActive = false,
       connectedAudioDeviceName = null,
@@ -97,6 +102,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   private var amplitudeJob: Job? = null
   private var stopDispatchJob: Job? = null
   private var dynamicSessionJob: Job? = null
+  private var holdSessionJob: Job? = null
   private var dynamicHoldLocked = false
   private var audioCallback: AudioDeviceCallback? = null
 
@@ -237,9 +243,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     viewModelScope.launch { repository.clearLogs() }
   }
 
-  fun openPinnedWhatsAppChat(): Boolean {
-    val prefs = uiState.value.preferences
-    val contact = uiState.value.effectiveRoute.contact ?: prefs.pinnedContact
+  /**
+   * @param freshPrefs pass freshly loaded preferences when calling right after launch, before
+   *   [uiState] has had time to emit real data.
+   */
+  fun openPinnedWhatsAppChat(freshPrefs: AssistantPreferences? = null): Boolean {
+    val prefs = freshPrefs ?: uiState.value.preferences
+    val contact =
+      if (freshPrefs != null) {
+        ContextRoutingEngine.resolveRoute(getApplication(), freshPrefs).contact
+      } else {
+        uiState.value.effectiveRoute.contact
+      } ?: prefs.pinnedContact
     if (contact == null) {
       bannerState.value = "Select a WhatsApp contact first." to true
       return false
@@ -387,6 +402,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
       }
   }
 
+  /**
+   * Tap-vs-hold session for the assistant hotkey. The mic starts immediately so no syllable is
+   * lost, then:
+   * - key released within [HOLD_GRACE_MS] -> it was a tap: discard audio and open the chat.
+   * - key still down after that -> it is a hold: keep recording and send when the key is released.
+   */
+  fun startHoldToTalkSession(heldKey: HotkeyHoldTracker.HeldKey, onFinished: () -> Unit) {
+    if (holdSessionJob?.isActive == true || stopDispatchJob?.isActive == true) return
+    dynamicSessionJob?.cancel()
+    dynamicSessionJob = null
+
+    val app = getApplication<Application>()
+    val prefs = runBlockingPrefs(app)
+
+    if (recorder.startRecording().isFailure) {
+      openPinnedWhatsAppChat(prefs)
+      onFinished()
+      return
+    }
+    recordingState.value = RecordingUiState.HoldPending
+
+    holdSessionJob =
+      viewModelScope.launch {
+        val releasedAsTap =
+          withTimeoutOrNull(HOLD_GRACE_MS) { HotkeyHoldTracker.awaitRelease(heldKey) } != null
+        if (releasedAsTap) {
+          recorder.cancelRecording()
+          recordingState.value = RecordingUiState.Idle
+          openPinnedWhatsAppChat(prefs)
+          onFinished()
+          return@launch
+        }
+
+        EyesFreeFeedbackManager.playStartCue(app, prefs.eyesFreeAudioCues)
+        launchAmplitudeUpdates(lockedHandsFree = false)
+        HotkeyHoldTracker.awaitRelease(heldKey)
+        holdSessionJob = null
+        stopAndSendRecording { onFinished() }
+      }
+  }
+
   fun lockDynamicSessionByHold() {
     dynamicHoldLocked = true
   }
@@ -438,10 +494,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     EyesFreeFeedbackManager.playStartCue(app, prefs.eyesFreeAudioCues)
 
+    launchAmplitudeUpdates(lockedHandsFree)
+    return true
+  }
+
+  private fun launchAmplitudeUpdates(lockedHandsFree: Boolean) {
     val initialBars = List(24) { 0.14f }
     recordingState.value =
       RecordingUiState.Recording(
-        elapsedMs = 0L,
+        elapsedMs = recorder.elapsedMillis(),
         amplitudes = initialBars,
         isLockedHandsFree = lockedHandsFree,
       )
@@ -465,10 +526,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
           delay(65L)
         }
       }
-    return true
   }
 
   fun cancelRecording() {
+    holdSessionJob?.cancel()
+    holdSessionJob = null
     dynamicSessionJob?.cancel()
     dynamicSessionJob = null
     stopDispatchJob?.cancel()
@@ -481,6 +543,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun stopAndSendRecording(onComplete: (Boolean) -> Unit = {}) {
+    // Detach (don't cancel mid-flight): the hold session itself may be the caller.
+    holdSessionJob.also { holdSessionJob = null }?.cancel()
     dynamicSessionJob?.cancel()
     dynamicSessionJob = null
     if (!recorder.isRecording) {
@@ -605,10 +669,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val audioManager =
       getApplication<Application>().getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     audioCallback?.let { audioManager?.unregisterAudioDeviceCallback(it) }
+    holdSessionJob?.cancel()
     dynamicSessionJob?.cancel()
     stopDispatchJob?.cancel()
     amplitudeJob?.cancel()
     recorder.release()
     super.onCleared()
+  }
+
+  companion object {
+    /** How long the hotkey must stay down, after the assistant fires, to count as a hold. */
+    const val HOLD_GRACE_MS = 350L
   }
 }

@@ -72,6 +72,9 @@ fun AssistOverlayScreen(
   onRequestAudioPermission: () -> Unit,
   onDismissOverlay: () -> Unit,
 ) {
+  // Tap-vs-hold not decided yet: stay invisible so a quick tap jumps to the chat with no flash.
+  if (uiState.recordingState is RecordingUiState.HoldPending) return
+
   val contact = uiState.effectiveRoute.contact ?: uiState.preferences.pinnedContact
   val listening = uiState.recordingState as? RecordingUiState.ListeningWindow
   val recording = uiState.recordingState as? RecordingUiState.Recording
@@ -186,7 +189,8 @@ fun AssistOverlayScreen(
                 listening != null -> "Opening chat… Speak or hold to record"
                 recording != null -> {
                   val secs = (recording.elapsedMs / 1000L).toInt()
-                  String.format(Locale.US, "Recording %02d:%02d…", secs / 60, secs % 60)
+                  val hint = if (recording.isLockedHandsFree) "…" else " · release to send"
+                  String.format(Locale.US, "Recording %02d:%02d%s", secs / 60, secs % 60, hint)
                 }
                 !hasAudioPermission -> "Microphone permission needed"
                 uiState.statusBanner != null -> uiState.statusBanner
