@@ -96,6 +96,10 @@ class AssistActivity : ComponentActivity() {
             else if (state.mode == FloatingMode.TYPING) viewModel.sendFloatingText { finish() }
             else viewModel.sendFloatingAudio { finish() }
           },
+          onOpenChat = {
+            startAfterPermission = false
+            if (viewModel.openFloatingWhatsAppChat()) finish()
+          },
           onDismissOverlay = dismiss,
         )
       }

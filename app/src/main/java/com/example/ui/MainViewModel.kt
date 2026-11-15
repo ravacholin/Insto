@@ -268,6 +268,25 @@ class MainViewModel @JvmOverloads constructor(
     pendingFloatingAudio = null
   }
 
+  /** Opens the panel's contact immediately, discarding drafts and any pending send. */
+  fun openFloatingWhatsAppChat(): Boolean {
+    dismissFloatingAssistant()
+    com.example.assist.AutoSendCoordinator.disarm()
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", amplitude = 0f, attachment = null)
+    val contact = floatingContact
+    val prefs = floatingPrefs
+    if (contact == null || prefs == null) {
+      floatingState.value = floatingState.value.copy(error = "Configurá el contacto de WhatsApp.")
+      return false
+    }
+    val result = WhatsAppDispatcher.openWhatsAppChat(getApplication(), contact.phoneNumber, prefs.preferredFlavor)
+    if (result is DispatchResult.Error) {
+      floatingState.value = floatingState.value.copy(error = result.message)
+      return false
+    }
+    return result is DispatchResult.OpenedChat
+  }
+
   fun sendFloatingAudio(onDispatched: () -> Unit) {
     if (floatingState.value.mode !in listOf(FloatingMode.RECORDING, FloatingMode.AUDIO_READY)) return
     floatingJob?.cancel()

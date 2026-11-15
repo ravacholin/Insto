@@ -48,6 +48,7 @@ fun AssistOverlayScreen(
   onMicrophone: () -> Unit,
   onSend: () -> Unit,
   onDismissOverlay: () -> Unit,
+  onOpenChat: () -> Unit,
   onAttach: () -> Unit = {},
   onRemoveAttachment: () -> Unit = {},
 ) {
@@ -86,7 +87,11 @@ fun AssistOverlayScreen(
           }
           Spacer(Modifier.width(10.dp))
           Column(Modifier.weight(1f)) {
-            Text(state.contactName, fontWeight = FontWeight.Bold,
+            Text(state.contactName,
+              modifier = Modifier.testTag("overlay_open_chat").clickable(
+                role = androidx.compose.ui.semantics.Role.Button,
+                onClickLabel = "Abrir chat de WhatsApp", onClick = onOpenChat),
+              fontWeight = FontWeight.Bold,
               style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("ASISTENTE / WHATSAPP", color = secondary,
               style = MaterialTheme.typography.labelSmall)
