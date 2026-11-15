@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -50,7 +49,10 @@ fun AssistOverlayScreen(
   onDismissOverlay: () -> Unit,
 ) {
   val context = LocalContext.current
-  val accent = Color(0xFFB9B1FF)
+  val accent = Color.White
+  val secondary = Color(0xFFAAAAAA)
+  val edge = Color(0xFF555555)
+  val controlShape = RoundedCornerShape(2.dp)
   val busy = state.mode == FloatingMode.SENDING
   val recording = state.mode == FloatingMode.RECORDING
   val listening = state.mode == FloatingMode.LISTENING
@@ -66,30 +68,31 @@ fun AssistOverlayScreen(
     Surface(
       modifier = Modifier.imePadding().navigationBarsPadding().padding(12.dp)
         .widthIn(max = 560.dp).fillMaxWidth(),
-      shape = RoundedCornerShape(28.dp),
-      color = Color(0xFF1B1D29).copy(alpha = 0.94f),
+      shape = RoundedCornerShape(4.dp),
+      color = Color(0xFF111111),
       contentColor = Color.White,
-      border = BorderStroke(1.dp, accent.copy(alpha = 0.40f)),
-      shadowElevation = 16.dp,
+      border = BorderStroke(1.dp, edge),
+      shadowElevation = 0.dp,
       onClick = {},
     ) {
-      Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-          Box(Modifier.size(34.dp).background(accent.copy(alpha = 0.18f), CircleShape),
+          Box(Modifier.size(34.dp).background(Color.White, controlShape),
             contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Mic, null, tint = accent, modifier = Modifier.size(19.dp))
+            Icon(Icons.Filled.Mic, null, tint = Color.Black, modifier = Modifier.size(19.dp))
           }
           Spacer(Modifier.width(10.dp))
           Column(Modifier.weight(1f)) {
-            Text(state.contactName, fontWeight = FontWeight.SemiBold,
+            Text(state.contactName, fontWeight = FontWeight.Bold,
               style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("Asistente · WhatsApp", color = Color.White.copy(alpha = 0.6f),
+            Text("ASISTENTE / WHATSAPP", color = secondary,
               style = MaterialTheme.typography.labelSmall)
           }
           IconButton(onClick = onDismissOverlay, modifier = Modifier.testTag("overlay_close_button")) {
-            Icon(Icons.Filled.Close, "Cerrar asistente", tint = Color.White.copy(alpha = 0.7f))
+            Icon(Icons.Filled.Close, "Cerrar asistente", tint = secondary)
           }
         }
+        HorizontalDivider(color = edge)
         Text(
           text = when (state.mode) {
             FloatingMode.LISTENING -> "Te escucho… o tocá para escribir"
@@ -111,7 +114,7 @@ fun AssistOverlayScreen(
                 val half = 2f + size.height * 0.45f * state.amplitude * shape
                 val x = size.width * (i + 0.5f) / 32f
                 drawLine(accent, Offset(x, size.height / 2 - half),
-                  Offset(x, size.height / 2 + half), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+                  Offset(x, size.height / 2 + half), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Butt)
               }
             }
             Text(if (recording) "%d:%02d".format(state.elapsedMs / 60000, state.elapsedMs / 1000 % 60)
@@ -123,20 +126,24 @@ fun AssistOverlayScreen(
           value = state.text, onValueChange = onTextChange,
           modifier = Modifier.fillMaxWidth().testTag("overlay_text_input")
             .onFocusChanged { if (it.isFocused) onTextFocus() },
-          placeholder = { Text("Mensaje para ${state.contactName}", color = Color.White.copy(alpha = 0.45f)) },
-          enabled = !busy, maxLines = 4, shape = RoundedCornerShape(18.dp),
+          placeholder = { Text("Mensaje para ${state.contactName}", color = secondary) },
+          enabled = !busy, maxLines = 4, shape = controlShape,
           keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
           keyboardActions = KeyboardActions(onSend = { if (canSend && !busy) onSend() }),
           colors = OutlinedTextFieldDefaults.colors(
             focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+            focusedContainerColor = Color(0xFF191919), unfocusedContainerColor = Color(0xFF191919),
+            disabledContainerColor = Color(0xFF191919), disabledTextColor = secondary,
+            disabledBorderColor = edge, selectionColors = androidx.compose.foundation.text.selection.TextSelectionColors(
+              handleColor = Color.White, backgroundColor = Color(0xFF555555)),
             cursorColor = accent, focusedBorderColor = accent,
-            unfocusedBorderColor = Color.White.copy(alpha = 0.18f)),
+            unfocusedBorderColor = edge),
         )
-        state.error?.let { Text(it, color = Color(0xFFFFB4AB), style = MaterialTheme.typography.bodySmall,
+        state.error?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall,
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
         if (!autoSendEnabled) {
           Text("Para enviar sin volver a tocar WhatsApp, activá el servicio de Accesibilidad de PingAssist.",
-            color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+            color = secondary, style = MaterialTheme.typography.labelSmall)
           TextButton(onClick = {
             context.startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
           }, modifier = Modifier.testTag("overlay_enable_auto_send")) {
@@ -148,18 +155,20 @@ fun AssistOverlayScreen(
           IconButton(
             onClick = { focus.clearFocus(); keyboard?.hide(); onMicrophone() },
             enabled = !busy && !recording && !listening,
-            modifier = Modifier.size(48.dp).background(accent.copy(alpha = 0.15f), CircleShape)
+            modifier = Modifier.size(48.dp).background(Color(0xFF292929), controlShape)
               .testTag("overlay_microphone"),
           ) {
-            Icon(Icons.Filled.Mic, "Activar escucha", tint = accent)
+            Icon(Icons.Filled.Mic, "Activar escucha", tint = if (busy || recording || listening) secondary else accent)
           }
           Button(onClick = onSend, enabled = canSend && !busy,
-            colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color(0xFF201C39)),
+            shape = controlShape,
+            colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color.Black,
+              disabledContainerColor = Color(0xFF292929), disabledContentColor = secondary),
             modifier = Modifier.height(48.dp).testTag("overlay_send_button")) {
-            if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = secondary, strokeWidth = 2.dp)
             else Icon(Icons.AutoMirrored.Filled.Send, null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Enviar")
+            Text("ENVIAR", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
           }
         }
       }
