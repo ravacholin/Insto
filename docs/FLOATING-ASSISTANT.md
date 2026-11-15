@@ -37,9 +37,21 @@ and reports that problem instead of silently opening a manual draft. Timeout
 feedback says which verification failed. No notification is required. No ADB,
 Shizuku, WhatsApp Business account, or notification-listener permission is added.
 
-Audio still requires a matching phone header and unique attachment filename to
-automatically click Send; previews that hide those fields remain manual. A
-timeout hint asks the user to check WhatsApp; uncertain sends are never repeated.
+Recorded audio now starts its own polling immediately after the targeted share
+intent opens successfully, using the same real-touch mechanism as text. The
+WhatsApp dialog `Share with Instinct?` (or `¿Compartir con Instinct?`) is confirmed
+automatically when its complete recipient matches the configured name or phone.
+This dialog does not expose the attachment filename; the successfully launched
+request binds it to the exact recording URI and target JID. An optional media
+preview still requires the matching recipient and recording filename before its
+Send control is touched. Confirmation and preview Send are each touched at most
+once per request. Returning to the matching conversation with an empty composer
+and no remaining preview Send control confirms submission before the return to
+the previous app. Once a preview has appeared (including a loading/disabled Send),
+its Send must have been touched; cancelling that preview never confirms submission.
+A timeout or uncertain gesture never triggers another touch.
+If Accessibility is enabled but disconnected, the floating panel retains the
+recording and reports the connection problem instead of opening a manual dialog.
 If Accessibility is disabled, the panel provides an explicit setup button.
 The handset test is required before claiming fully automatic delivery for its
 installed WhatsApp version. Files handed to WhatsApp remain in private cache
@@ -48,17 +60,24 @@ Audio is an attachment, not guaranteed to display as a native WhatsApp PTT note.
 
 ## Verification
 
-Build: `gradle assembleDebug` with JDK 21, Android SDK 36.1, Gradle 9.3.1 and the
-project's existing signing configuration. This checkout does not include a
-Gradle launcher; the verification environment downloaded Gradle externally.
+Build: `./gradlew assembleDebug` with JDK 21, Android SDK 36.1, Gradle 9.3.1 and the
+project's existing signing configuration.
 A local debug keystore is generated for the APK and must not be committed.
 
-Run `gradle testDebugUnitTest`. Pure tests cover 4 s initial silence, 3 s trailing
+Run `./gradlew testDebugUnitTest`. Pure tests cover 4 s initial silence, 3 s trailing
 silence, manual Send, cancellation, recipient ambiguity, stale audio drafts and
 Unicode message matching. Robolectric tests cover text deep links, panel focus,
 button states and ViewModel capture cancellation. In the current environment,
 Robolectric's Android runtime/native artifact downloads redirect to a blocked
 Maven mirror; those tests can compile but cannot execute here.
+
+`AudioSendAttemptTest` covers the exact English/Spanish confirmation prompt,
+formatted phone numbers, wrong recipients, stale requests, unavailable buttons,
+and duplicate suppression across confirmation and preview. Robolectric audio
+dispatch tests cover the launched stream/JID, disconnected Accessibility, failed
+launches and request invalidation. On the handset, record two consecutive clips
+and let trailing silence submit each: neither should require tapping OK. Verify
+the actual messages in the configured conversation and check the return behavior.
 
 On the Android 16 Motorola: verify assistant role/hotkey, background transparency,
 keyboard insets, 4 s idle behavior, first syllables, pauses below/above 3 s,
@@ -67,7 +86,22 @@ rotation, repeated hotkey, absent WhatsApp, Accessibility disabled, destination,
 attachment appearance and return to the original application. Check the actual
 WhatsApp version's accessibility tree before asserting automatic confirmation.
 
-### Results in this workspace
+### Audio auto-send validation (1.4)
+
+- Based on current `main` at `8017ac0`, including merged PRs #3 and #4.
+- `assembleDebug`: passed; APK metadata is version 1.4, versionCode 5.
+- 20 pure JVM tests: passed, including the confirmation/preview cancellation
+  regression. An external Gradle init script excluded the inaccessible native
+  Robolectric artifact for this filtered execution; project dependencies remain intact.
+- All test sources, including audio dispatch and synthetic dialog/polling tests,
+  compiled. Static review found no remaining critical/important issues.
+- Unfiltered suite: blocked downloading `nativeruntime-dist-compat:1.0.18` with
+  HTTP 403 from the Maven mirror. Even excluding that artifact externally,
+  `AudioDispatchIntegrationTest` cannot initialize its Android runtime because
+  its download is also blocked with HTTP 403. Its test methods did not execute.
+- No handset is connected; actual WhatsApp delivery remains to be verified there.
+
+### Previous floating assistant validation (1.2)
 
 - `assembleDebug`: successful (JDK 21, Gradle 9.3.1, SDK 36.1).
 - 14 pure JVM tests: passed (4 session policy, 4 dispatch guard, 3 text-touch attempt, 3 existing unit tests).

@@ -21,6 +21,8 @@ object AutoSendCoordinator {
 
   @Volatile var textLaunchCommittedRequestId: Long = -1
     private set
+  @Volatile var audioLaunchCommittedRequestId: Long = -1
+    private set
   @Volatile var textWaitReason: String = "Esperando el chat de WhatsApp."
 
   private const val DEFAULT_ARM_WINDOW_MS = 10_000L
@@ -62,6 +64,7 @@ object AutoSendCoordinator {
   ) {
     requestId++
     textLaunchCommittedRequestId = -1
+    audioLaunchCommittedRequestId = -1
     textWaitReason = "Esperando el chat de WhatsApp."
     armedAtUptimeMs = SystemClock.uptimeMillis()
     this.recipientName = recipientName
@@ -78,6 +81,12 @@ object AutoSendCoordinator {
 
   fun markTextLaunchCommitted(request: Long) {
     if (requestId == request && expectedText != null) textLaunchCommittedRequestId = request
+  }
+
+  fun markAudioLaunchCommitted(request: Long) {
+    if (requestId == request && expectedAudioFileName != null && recipientPhone != null) {
+      audioLaunchCommittedRequestId = request
+    }
   }
 
   fun isArmedFor(packageName: String?): Boolean {
@@ -110,6 +119,7 @@ object AutoSendCoordinator {
     expectedAttachmentCaption = null
     expectedText = null
     textLaunchCommittedRequestId = -1
+    audioLaunchCommittedRequestId = -1
     expectedAudioFileName = null
   }
 }

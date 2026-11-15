@@ -66,6 +66,8 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   private var autoSendPoll: Runnable? = null
   private var pollingRequestId = -1L
   private var textAttempt: TextSendAttempt? = null
+  private var audioAttempt: AudioSendAttempt? = null
+  private var audioGesturePending = false
 
 
   private lateinit var repository: AssistantPreferencesRepository
@@ -136,6 +138,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     if (!AutoSendCoordinator.isArmedFor(pkg)) return
 
     if (AutoSendCoordinator.expectedText != null) return // Explicit launch drives text automation.
+    if (AutoSendCoordinator.audioLaunchCommittedRequestId == AutoSendCoordinator.requestId) return
     val root = rootInActiveWindow ?: return
     try {
       if (root.packageName?.toString() != pkg) return
@@ -166,6 +169,147 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     }
     autoSendPoll = poll
     mainHandler.postDelayed(poll, 450L)
+  }
+
+  /** Audio shares may open a confirmation dialog instead of a chat or media preview. */
+  private fun scheduleAudioSendPoll(pkg: String, request: Long) {
+    if (pollingRequestId == request) return
+    val phone = AutoSendCoordinator.recipientPhone ?: return
+    autoSendPoll?.let { mainHandler.removeCallbacks(it) }
+    pollingRequestId = request
+    audioAttempt = AudioSendAttempt(request, AutoSendCoordinator.recipientName, phone)
+    audioGesturePending = false
+    val poll = object : Runnable {
+      override fun run() {
+        if (AutoSendCoordinator.requestId != request || !AutoSendCoordinator.isArmedFor(pkg)) return
+        if (AutoSendCoordinator.audioLaunchCommittedRequestId == request && !audioGesturePending) {
+          if (!withWhatsAppWindow(pkg) { root -> tryAudioTouch(root, pkg, request) }) {
+            AutoSendCoordinator.textWaitReason = "No se pudo acceder al audio compartido en WhatsApp."
+          }
+        }
+        if (AutoSendCoordinator.requestId == request && AutoSendCoordinator.isArmedFor(pkg)) {
+          mainHandler.postDelayed(this, 180L)
+        }
+      }
+    }
+    autoSendPoll = poll
+    mainHandler.postDelayed(poll, 450L)
+  }
+
+  private fun visibleLabels(root: AccessibilityNodeInfo): List<String> {
+    val labels = mutableListOf<String>()
+    var visited = 0
+    fun walk(node: AccessibilityNodeInfo, depth: Int) {
+      if (visited++ >= 800 || depth > 28) return
+      if (node.isVisibleToUser) {
+        node.text?.toString()?.let { labels.add(it) }
+      }
+      for (i in 0 until node.childCount) {
+        val child = node.getChild(i) ?: continue
+        try { walk(child, depth + 1) } finally { child.recycle() }
+      }
+    }
+    walk(root, 0)
+    return labels
+  }
+
+  private fun findAudioConfirmationButton(root: AccessibilityNodeInfo, pkg: String): AccessibilityNodeInfo? {
+    for (id in listOf("android:id/button1", "$pkg:id/button1", "$pkg:id/confirm_button")) {
+      val nodes = root.findAccessibilityNodeInfosByViewId(id)
+      val result = nodes.firstOrNull { it.isVisibleToUser && it.isEnabled }?.let { AccessibilityNodeInfo.obtain(it) }
+      nodes.forEach { it.recycle() }
+      if (result != null) return result
+    }
+    for (label in listOf("OK", "Aceptar")) {
+      val nodes = root.findAccessibilityNodeInfosByText(label)
+      val result = nodes.firstOrNull {
+        it.isVisibleToUser && it.isEnabled && it.text?.toString()?.trim()?.equals(label, true) == true
+      }?.let { AccessibilityNodeInfo.obtain(it) }
+      nodes.forEach { it.recycle() }
+      if (result != null) return result
+    }
+    return null
+  }
+
+  private fun tryAudioTouch(root: AccessibilityNodeInfo, pkg: String, request: Long) {
+    val attempt = audioAttempt?.takeIf { it.requestId == request } ?: return
+    val labels = visibleLabels(root)
+    val confirmation = findAudioConfirmationButton(root, pkg)
+    if (confirmation != null) {
+      val bounds = touchBounds(confirmation)
+      confirmation.recycle()
+      if (attempt.beginConfirmation(request, labels, bounds != null)) {
+        touchAudioControl(bounds!!, pkg, request)
+      }
+      // Never treat an open confirmation dialog as a conversation or retry its OK.
+      return
+    }
+
+    val previewControls = root.findAccessibilityNodeInfosByViewId("$pkg:id/media_caption_send_btn")
+    val previewVisible = previewControls.any { it.isVisibleToUser }
+    previewControls.forEach { it.recycle() }
+    val button = findTextSendTarget(root, pkg)
+    val bounds = button?.let { touchBounds(it) }
+    button?.recycle()
+    if (previewVisible || bounds != null) attempt.observePreview()
+    if (!matchesArmedRecipient(root, pkg)) {
+      AutoSendCoordinator.textWaitReason = "El destinatario del audio no coincide con el contacto configurado."
+      return
+    }
+    val composer = findTextComposer(root, pkg, "")
+    val composerText = composer?.text?.toString()
+    // A real conversation composer after the share/send gesture is evidence of submission.
+    val chatEntries = root.findAccessibilityNodeInfosByViewId("$pkg:id/entry")
+    val emptyChat = chatEntries.any { it.isVisibleToUser && it.isEditable && it.text.isNullOrEmpty() }
+    chatEntries.forEach { it.recycle() }
+    composer?.recycle()
+    if (attempt.canConfirmSubmission() && emptyChat && bounds == null &&
+        AutoSendCoordinator.expectedAudioFileName !in labels) {
+      val boomerang = AutoSendCoordinator.shouldBoomerangReturn()
+      val returnPkg = AutoSendCoordinator.consumeReturnPackage()
+      AutoSendCoordinator.disarm()
+      EyesFreeFeedbackManager.playSentCue(this, cachedPrefs.eyesFreeAudioCues)
+      if (boomerang) scheduleBoomerangReturn(returnPkg)
+      return
+    }
+    val payloadMatches = AutoSendGuard.payloadMatches(null, AutoSendCoordinator.expectedAudioFileName, composerText, labels)
+    if (attempt.beginSend(request, true, payloadMatches, bounds != null)) {
+      touchAudioControl(bounds!!, pkg, request)
+    } else {
+      AutoSendCoordinator.textWaitReason = "Esperando la confirmación o vista previa del audio en WhatsApp."
+    }
+  }
+
+  private fun touchBounds(node: AccessibilityNodeInfo): Rect? {
+    if (!node.isVisibleToUser || !node.isEnabled) return null
+    val bounds = Rect()
+    node.getBoundsInScreen(bounds)
+    return bounds.takeIf {
+      it.intersect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels) &&
+        it.width() >= 8 && it.height() >= 8
+    }
+  }
+
+  private fun touchAudioControl(bounds: Rect, pkg: String, request: Long) {
+    audioGesturePending = true
+    val path = Path().apply { moveTo(bounds.exactCenterX(), bounds.exactCenterY()) }
+    val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 70)).build()
+    fun failed() {
+      if (AutoSendCoordinator.requestId != request) return
+      audioGesturePending = false
+      AutoSendCoordinator.disarm()
+      showUnconfirmedTextHint()
+    }
+    val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
+      override fun onCompleted(gestureDescription: GestureDescription?) {
+        if (AutoSendCoordinator.requestId == request && AutoSendCoordinator.isArmedFor(pkg)) {
+          audioGesturePending = false
+          AutoSendCoordinator.textWaitReason = "Esperando que WhatsApp complete el envío del audio."
+        }
+      }
+      override fun onCancelled(gestureDescription: GestureDescription?) { failed() }
+    }, mainHandler)
+    if (!accepted) failed()
   }
 
   /** The keyboard can own rootInActiveWindow; also inspect the focused application window. */
@@ -212,7 +356,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   }
 
   private fun findTextSendTarget(root: AccessibilityNodeInfo, pkg: String): AccessibilityNodeInfo? {
-    for (id in listOf("send", "send_button", "send_btn")) {
+    for (id in listOf("send", "send_button", "send_btn", "media_caption_send_btn")) {
       val nodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/$id")
       val chosen = nodes.firstOrNull { it.isVisibleToUser && it.isEnabled }
       val result = chosen?.let { AccessibilityNodeInfo.obtain(it) }
@@ -388,8 +532,9 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   private fun matchesArmedRecipient(root: AccessibilityNodeInfo, pkg: String): Boolean {
     val phone = AutoSendCoordinator.recipientPhone ?: return true // Legacy explicit actions.
     return matchesRecipient(root, pkg, phone, AutoSendCoordinator.recipientName,
-      AutoSendCoordinator.expectedText != null &&
-        AutoSendCoordinator.textLaunchCommittedRequestId == AutoSendCoordinator.requestId)
+      (AutoSendCoordinator.expectedText != null &&
+        AutoSendCoordinator.textLaunchCommittedRequestId == AutoSendCoordinator.requestId) ||
+        AutoSendCoordinator.audioLaunchCommittedRequestId == AutoSendCoordinator.requestId)
   }
 
   private fun matchesRecipient(root: AccessibilityNodeInfo, pkg: String, phone: String,
@@ -509,6 +654,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
         isAutoSendServiceEnabled = true,
         boomerangReturn = prefs.boomerangReturnEnabled,
         mimeType = recorded.mimeType,
+        recipientName = contact.displayName,
       )
 
     if (dispatch is DispatchResult.AudioDispatched) {
@@ -801,6 +947,16 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
       service.mainHandler.post {
         if (AutoSendCoordinator.isArmedFor(pkg) && AutoSendCoordinator.requestId == request) {
           service.scheduleTextSendPoll(pkg, request)
+        }
+      }
+    }
+
+    fun requestAudioSend(pkg: String, request: Long) {
+      val service = connectedInstance ?: return
+      service.mainHandler.post {
+        if (AutoSendCoordinator.isArmedFor(pkg) && AutoSendCoordinator.requestId == request &&
+            AutoSendCoordinator.audioLaunchCommittedRequestId == request) {
+          service.scheduleAudioSendPoll(pkg, request)
         }
       }
     }

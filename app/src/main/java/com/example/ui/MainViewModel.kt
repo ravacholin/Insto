@@ -826,6 +826,7 @@ class MainViewModel @JvmOverloads constructor(
             isAutoSendServiceEnabled = autoSendEnabled,
             boomerangReturn = prefs.boomerangReturnEnabled,
             mimeType = recordedAudio.mimeType,
+            recipientName = contact.displayName,
           )
 
         recordingState.value = RecordingUiState.Idle
