@@ -5,6 +5,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AutoSendGuardTest {
+  @Test fun `caption cannot authorize a different attachment`() {
+    assertFalse(AutoSendGuard.payloadMatches("hola", "new.pdf", "hola", listOf("old.pdf")))
+    assertFalse(AutoSendGuard.payloadMatches("hola", "new.pdf", "otro", listOf("new.pdf")))
+    assertTrue(AutoSendGuard.payloadMatches("hola", "new.pdf", "hola", listOf("new.pdf")))
+  }
+
   @Test fun `duplicate display names never authorize sending`() {
     assertFalse(AutoSendGuard.recipientMatches("+447700900123", listOf("Instinct")))
     assertFalse(AutoSendGuard.recipientMatches("+447700900123", listOf("+447700900999")))

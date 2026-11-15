@@ -97,10 +97,13 @@ data class PingAssistUiState(
 
 enum class FloatingMode { IDLE, LISTENING, RECORDING, TYPING, SENDING, AUDIO_READY }
 
+data class FloatingAttachment(val uri: android.net.Uri, val name: String, val mimeType: String)
+
 data class FloatingAssistantState(
   val mode: FloatingMode = FloatingMode.IDLE,
   val text: String = "",
   val contactName: String = "Instinct",
+  val attachment: FloatingAttachment? = null,
   val elapsedMs: Long = 0,
   val amplitude: Float = 0f,
   val error: String? = null,
@@ -134,7 +137,7 @@ class MainViewModel @JvmOverloads constructor(
 
   fun startFloatingListening(onDispatched: () -> Unit) {
     prepareFloatingAssistant()
-    if (floatingState.value.mode == FloatingMode.SENDING) return
+    if (floatingState.value.mode == FloatingMode.SENDING || floatingState.value.attachment != null) return
     floatingGeneration++
     stopFloatingCapture(discard = true)
     pendingFloatingAudio?.file?.delete()
@@ -186,6 +189,43 @@ class MainViewModel @JvmOverloads constructor(
     if (floatingState.value.mode == FloatingMode.SENDING) return
     if (floatingState.value.mode != FloatingMode.TYPING) enterFloatingTextMode()
     floatingState.value = floatingState.value.copy(text = text)
+  }
+
+  fun selectFloatingAttachment(uri: android.net.Uri) {
+    enterFloatingTextMode()
+    runCatching {
+      val resolver = getApplication<Application>().contentResolver
+      require(uri.scheme == "content")
+      val name = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+        null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
+      } ?: "Adjunto"
+      resolver.openAssetFileDescriptor(uri, "r")?.use { } ?: error("Archivo no disponible")
+      FloatingAttachment(uri, name, resolver.getType(uri) ?: "application/octet-stream")
+    }.onSuccess {
+      floatingState.value = floatingState.value.copy(attachment = it, error = null)
+    }.onFailure {
+      floatingState.value = floatingState.value.copy(error = "No se pudo abrir el archivo. Elegí otro adjunto.")
+    }
+  }
+
+  fun removeFloatingAttachment() {
+    if (floatingState.value.mode != FloatingMode.SENDING)
+      floatingState.value = floatingState.value.copy(attachment = null)
+  }
+
+  fun sendFloatingAttachment(onDispatched: () -> Unit) {
+    if (floatingState.value.mode == FloatingMode.SENDING) return
+    val attachment = floatingState.value.attachment ?: return
+    val contact = floatingContact ?: return
+    val prefs = floatingPrefs ?: return
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null)
+    val result = WhatsAppDispatcher.sendWhatsAppAttachment(getApplication(), contact.phoneNumber,
+      attachment.uri, attachment.name, attachment.mimeType, floatingState.value.text,
+      prefs.preferredFlavor, contact.displayName, floatingReturnPackage)
+    if (result is DispatchResult.Error) {
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, error = result.message)
+    } else onDispatched()
   }
 
   private fun stopFloatingCapture(discard: Boolean) {

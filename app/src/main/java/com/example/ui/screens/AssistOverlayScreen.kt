@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
@@ -47,6 +48,8 @@ fun AssistOverlayScreen(
   onMicrophone: () -> Unit,
   onSend: () -> Unit,
   onDismissOverlay: () -> Unit,
+  onAttach: () -> Unit = {},
+  onRemoveAttachment: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val accent = Color.White
@@ -56,7 +59,7 @@ fun AssistOverlayScreen(
   val busy = state.mode == FloatingMode.SENDING
   val recording = state.mode == FloatingMode.RECORDING
   val listening = state.mode == FloatingMode.LISTENING
-  val canSend = recording || state.mode == FloatingMode.AUDIO_READY ||
+  val canSend = state.attachment != null || recording || state.mode == FloatingMode.AUDIO_READY ||
     (state.mode == FloatingMode.TYPING && state.text.isNotBlank())
   val focus = LocalFocusManager.current
   val keyboard = LocalSoftwareKeyboardController.current
@@ -139,6 +142,15 @@ fun AssistOverlayScreen(
             cursorColor = accent, focusedBorderColor = accent,
             unfocusedBorderColor = edge),
         )
+        state.attachment?.let { attachment ->
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(attachment.name, modifier = Modifier.weight(1f).testTag("overlay_attachment"),
+              maxLines = 2, overflow = TextOverflow.Ellipsis)
+            IconButton(onClick = onRemoveAttachment, enabled = !busy) {
+              Icon(Icons.Filled.Close, "Quitar adjunto")
+            }
+          }
+        }
         state.error?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall,
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
         if (!autoSendEnabled) {
@@ -152,9 +164,13 @@ fun AssistOverlayScreen(
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.SpaceBetween) {
+          IconButton(onClick = { focus.clearFocus(); keyboard?.hide(); onAttach() },
+            enabled = !busy, modifier = Modifier.size(48.dp).testTag("overlay_attach_button")) {
+            Icon(Icons.Filled.Add, "Adjuntar imagen o documento", tint = accent)
+          }
           IconButton(
             onClick = { focus.clearFocus(); keyboard?.hide(); onMicrophone() },
-            enabled = !busy && !recording && !listening,
+            enabled = !busy && !recording && !listening && state.attachment == null,
             modifier = Modifier.size(48.dp).background(Color(0xFF292929), controlShape)
               .testTag("overlay_microphone"),
           ) {
