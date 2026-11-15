@@ -364,7 +364,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
       nodes.forEach { it.recycle() }
       labels
     }
-    if (!AutoSendGuard.payloadMatches(AutoSendCoordinator.expectedText,
+    if (!AutoSendGuard.payloadMatches(AutoSendCoordinator.expectedText ?: AutoSendCoordinator.expectedAttachmentCaption,
         AutoSendCoordinator.expectedAudioFileName, composerText, attachmentLabels)) return
     val sendNode = findSendButtonNode(root, pkg) ?: return
     if (sendNode.isEnabled) {

@@ -39,6 +39,8 @@ object AutoSendCoordinator {
     private set
   @Volatile var expectedAudioFileName: String? = null
     private set
+  @Volatile var expectedAttachmentCaption: String? = null
+    private set
   @Volatile var expectedText: String? = null
     private set
 
@@ -56,6 +58,7 @@ object AutoSendCoordinator {
     expectedText: String? = null,
     expectedAudioFileName: String? = null,
     returnPackage: String? = null,
+    expectedAttachmentCaption: String? = null,
   ) {
     requestId++
     textLaunchCommittedRequestId = -1
@@ -63,6 +66,7 @@ object AutoSendCoordinator {
     armedAtUptimeMs = SystemClock.uptimeMillis()
     this.recipientName = recipientName
     this.recipientPhone = recipientPhone
+    this.expectedAttachmentCaption = expectedAttachmentCaption
     this.expectedText = expectedText
     this.expectedAudioFileName = expectedAudioFileName
     expectedPackage = targetPackage
@@ -103,6 +107,7 @@ object AutoSendCoordinator {
     expectedPackage = null
     recipientName = null
     recipientPhone = null
+    expectedAttachmentCaption = null
     expectedText = null
     textLaunchCommittedRequestId = -1
     expectedAudioFileName = null

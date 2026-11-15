@@ -60,6 +60,9 @@ class AssistActivity : ComponentActivity() {
           }
           startAfterPermission = false
         }
+        val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+          if (uri != null) viewModel.selectFloatingAttachment(uri)
+        }
         LaunchedEffect(Unit) {
           if (savedInstanceState == null && hasMic) viewModel.startFloatingListening { finish() }
         }
@@ -82,8 +85,15 @@ class AssistActivity : ComponentActivity() {
               permission.launch(Manifest.permission.RECORD_AUDIO)
             }
           },
+          onAttach = {
+            startAfterPermission = false
+            viewModel.enterFloatingTextMode()
+            attachmentPicker.launch(arrayOf("*/*"))
+          },
+          onRemoveAttachment = viewModel::removeFloatingAttachment,
           onSend = {
-            if (state.mode == FloatingMode.TYPING) viewModel.sendFloatingText { finish() }
+            if (state.attachment != null) viewModel.sendFloatingAttachment { finish() }
+            else if (state.mode == FloatingMode.TYPING) viewModel.sendFloatingText { finish() }
             else viewModel.sendFloatingAudio { finish() }
           },
           onOpenChat = {

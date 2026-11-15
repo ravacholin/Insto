@@ -324,6 +324,48 @@ object WhatsAppDispatcher {
       }
   }
 
+  fun sendWhatsAppAttachment(
+    context: Context,
+    phoneNumber: String,
+    uri: Uri,
+    name: String,
+    mimeType: String,
+    text: String,
+    preferredFlavor: WhatsAppFlavor,
+    recipientName: String,
+    returnPackage: String?,
+  ): DispatchResult {
+    val jid = PhoneNumberUtils.toWhatsAppJid(phoneNumber)
+      ?: return DispatchResult.Error("El número de contacto no es válido.")
+    val pkg = resolveTargetPackage(context, preferredFlavor)
+      ?: return DispatchResult.Error("Instalá WhatsApp para enviar. El borrador se conserva.")
+    if (uri.scheme != "content") return DispatchResult.Error("Elegí un archivo válido.")
+    val intent = Intent(Intent.ACTION_SEND).apply {
+      type = mimeType
+      setPackage(pkg)
+      putExtra("jid", jid)
+      putExtra(Intent.EXTRA_STREAM, uri)
+      if (text.isNotBlank()) putExtra(Intent.EXTRA_TEXT, text)
+      clipData = ClipData.newUri(context.contentResolver, name, uri)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+    }
+    val autoSend = PingAutoSendAccessibilityService.isEnabled(context) &&
+      PingAutoSendAccessibilityService.isConnected()
+    if (autoSend) {
+      AutoSendCoordinator.arm(pkg, boomerangReturn = true, recipientName = recipientName,
+        recipientPhone = phoneNumber, expectedAudioFileName = name, returnPackage = returnPackage,
+        expectedAttachmentCaption = text.takeIf { it.isNotBlank() })
+    }
+    return runCatching {
+      context.startActivity(intent)
+      if (autoSend) scheduleManualSendHint(context, pkg)
+      DispatchResult.AudioDispatched(pkg, autoSend, false)
+    }.getOrElse {
+      if (autoSend) AutoSendCoordinator.disarm()
+      DispatchResult.Error("No se pudo compartir el archivo. El borrador se conserva.")
+    }
+  }
+
   private fun isPackageInstalled(pm: PackageManager, packageName: String): Boolean {
     return runCatching {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
