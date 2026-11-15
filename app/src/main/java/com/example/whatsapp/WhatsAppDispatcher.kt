@@ -1,5 +1,6 @@
 package com.example.whatsapp
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -8,6 +9,7 @@ import android.os.Build
 import androidx.core.content.FileProvider
 import com.example.assist.ArmedActionMode
 import com.example.assist.AutoSendCoordinator
+import com.example.assist.PingAutoSendAccessibilityService
 import com.example.data.WhatsAppFlavor
 import java.io.File
 
@@ -22,6 +24,8 @@ sealed class DispatchResult {
     val autoSendArmed: Boolean,
     val usedChooserFallback: Boolean,
   ) : DispatchResult()
+
+  data class TextDispatched(val autoSendArmed: Boolean) : DispatchResult()
 
   data class Error(val message: String) : DispatchResult()
 }
@@ -38,6 +42,18 @@ object WhatsAppDispatcher {
 
   const val PACKAGE_WHATSAPP = "com.whatsapp"
   const val PACKAGE_WHATSAPP_BUSINESS = "com.whatsapp.w4b"
+
+  private fun scheduleManualSendHint(context: Context, pkg: String) {
+    val request = AutoSendCoordinator.requestId
+    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+      if (AutoSendCoordinator.requestId == request && AutoSendCoordinator.isArmedFor(pkg)) {
+        AutoSendCoordinator.disarm()
+        android.widget.Toast.makeText(context,
+          AutoSendCoordinator.textWaitReason + " No se ha confirmado el envío.",
+          android.widget.Toast.LENGTH_LONG).show()
+      }
+    }, 9_000L)
+  }
 
   fun detectInstalledFlavors(context: Context): InstalledWhatsAppInfo {
     val pm = context.packageManager
@@ -92,6 +108,56 @@ object WhatsAppDispatcher {
     }
   }
 
+  fun buildSendTextIntent(
+    context: Context,
+    phoneNumber: String,
+    text: String,
+    preferredFlavor: WhatsAppFlavor,
+  ): Intent? {
+    if (!PhoneNumberUtils.isValidPhoneNumber(phoneNumber) || text.isBlank()) return null
+    val uri = Uri.Builder().scheme("whatsapp").authority("send")
+      .appendQueryParameter("phone", PhoneNumberUtils.normalizeDigits(phoneNumber))
+      .appendQueryParameter("text", text).build()
+    return Intent(Intent.ACTION_VIEW, uri).apply {
+      resolveTargetPackage(context, preferredFlavor)?.let { setPackage(it) }
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+    }
+  }
+
+  fun sendWhatsAppText(
+    context: Context,
+    phoneNumber: String,
+    text: String,
+    preferredFlavor: WhatsAppFlavor,
+    isAutoSendServiceEnabled: Boolean,
+    recipientName: String,
+    returnPackage: String? = null,
+  ): DispatchResult {
+    val intent = buildSendTextIntent(context, phoneNumber, text, preferredFlavor)
+      ?: return DispatchResult.Error("El mensaje está vacío o el número no es válido.")
+    val pkg = intent.`package`
+      ?: return DispatchResult.Error("Instalá WhatsApp para enviar el mensaje. El borrador se conserva.")
+    if (!isAutoSendServiceEnabled || !PingAutoSendAccessibilityService.isConnected()) {
+      return DispatchResult.Error(
+        if (!isAutoSendServiceEnabled) "Activá Accesibilidad de PingAssist para enviar con un solo toque. El texto se conserva."
+        else "Android indica que Accesibilidad está habilitada, pero el servicio de PingAssist no está conectado. Desactivalo y activalo una vez en Ajustes. El texto se conserva.")
+    }
+    AutoSendCoordinator.arm(pkg, boomerangReturn = true, recipientName = recipientName,
+      recipientPhone = phoneNumber, expectedText = text, returnPackage = returnPackage)
+    val request = AutoSendCoordinator.requestId
+    return runCatching {
+      context.startActivity(intent)
+      AutoSendCoordinator.markTextLaunchCommitted(request)
+      // Start polling ourselves. No dependency on WhatsApp Activity/class/text-change events.
+      PingAutoSendAccessibilityService.requestTextSend(pkg, request)
+      scheduleManualSendHint(context, pkg)
+      DispatchResult.TextDispatched(true)
+    }.getOrElse {
+      AutoSendCoordinator.disarm()
+      DispatchResult.Error(it.localizedMessage ?: "No se pudo abrir WhatsApp. El borrador se conserva.")
+    }
+  }
+
   fun buildSendAudioIntent(
     context: Context,
     phoneNumber: String,
@@ -109,6 +175,7 @@ object WhatsAppDispatcher {
     return Intent(Intent.ACTION_SEND).apply {
       type = mimeType
       putExtra(Intent.EXTRA_STREAM, contentUri)
+      clipData = ClipData.newUri(context.contentResolver, audioFile.name, contentUri)
       putExtra("jid", jid)
       if (targetPkg != null) {
         setPackage(targetPkg)
@@ -207,6 +274,8 @@ object WhatsAppDispatcher {
     isAutoSendServiceEnabled: Boolean,
     boomerangReturn: Boolean = false,
     mimeType: String = "audio/mp4",
+    recipientName: String? = null,
+    returnPackage: String? = null,
   ): DispatchResult {
     val sendIntent =
       buildSendAudioIntent(context, phoneNumber, audioFile, preferredFlavor, mimeType)
@@ -220,7 +289,12 @@ object WhatsAppDispatcher {
         targetPackage = targetPkg,
         mode = ArmedActionMode.CLICK_SEND,
         boomerangReturn = boomerangReturn,
+        recipientName = recipientName,
+        recipientPhone = if (recipientName != null) phoneNumber else null,
+        expectedAudioFileName = if (recipientName != null) audioFile.name else null,
+        returnPackage = returnPackage,
       )
+      scheduleManualSendHint(context, targetPkg)
     }
 
     return runCatching {

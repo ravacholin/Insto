@@ -28,6 +28,7 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.ImageView
 import androidx.core.content.ContextCompat
 import com.example.R
@@ -62,6 +63,10 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
 
   private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private val mainHandler = Handler(Looper.getMainLooper())
+  private var autoSendPoll: Runnable? = null
+  private var pollingRequestId = -1L
+  private var textAttempt: TextSendAttempt? = null
+
 
   private lateinit var repository: AssistantPreferencesRepository
   private lateinit var backgroundRecorder: VoiceRecorderManager
@@ -109,6 +114,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
       }
     audioDeviceCallback = callback
     audioManager?.registerAudioDeviceCallback(callback, mainHandler)
+    connectedInstance = this
   }
 
   override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -129,12 +135,158 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     // Strict Zero-Trust gate: never inspect any window unless explicitly armed for WhatsApp
     if (!AutoSendCoordinator.isArmedFor(pkg)) return
 
+    if (AutoSendCoordinator.expectedText != null) return // Explicit launch drives text automation.
     val root = rootInActiveWindow ?: return
+    try {
+      if (root.packageName?.toString() != pkg) return
+      when (AutoSendCoordinator.currentMode()) {
+        ArmedActionMode.CLICK_SEND -> handleAutoClickSend(root, pkg)
+        ArmedActionMode.NATIVE_PTT_LOCK -> handleNativePttLock(root, pkg)
+      }
+    } finally { root.recycle() }
+  }
 
-    when (AutoSendCoordinator.currentMode()) {
-      ArmedActionMode.CLICK_SEND -> handleAutoClickSend(root, pkg)
-      ArmedActionMode.NATIVE_PTT_LOCK -> handleNativePttLock(root, pkg)
+  private fun scheduleTextSendPoll(pkg: String, request: Long) {
+    if (pollingRequestId == request) return
+    autoSendPoll?.let { mainHandler.removeCallbacks(it) }
+    pollingRequestId = request
+    textAttempt = TextSendAttempt(request)
+    val poll = object : Runnable {
+      override fun run() {
+        if (AutoSendCoordinator.requestId != request || !AutoSendCoordinator.isArmedFor(pkg)) return
+        if (AutoSendCoordinator.textLaunchCommittedRequestId == request) {
+          if (!withWhatsAppWindow(pkg) { root -> tryTextTouch(root, pkg, request) }) {
+            AutoSendCoordinator.textWaitReason = "No se pudo acceder al chat visible de WhatsApp."
+          }
+        }
+        if (AutoSendCoordinator.requestId == request && AutoSendCoordinator.isArmedFor(pkg)) {
+          mainHandler.postDelayed(this, 180L)
+        }
+      }
     }
+    autoSendPoll = poll
+    mainHandler.postDelayed(poll, 450L)
+  }
+
+  /** The keyboard can own rootInActiveWindow; also inspect the focused application window. */
+  private fun withWhatsAppWindow(pkg: String, action: (AccessibilityNodeInfo) -> Unit): Boolean {
+    val primary = rootInActiveWindow
+    if (primary != null) {
+      try {
+        if (primary.packageName?.toString() == pkg) { action(primary); return true }
+      } finally { primary.recycle() }
+    }
+    for (window in windows.orEmpty().sortedByDescending { it.layer }) {
+      if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION || (!window.isActive && !window.isFocused)) continue
+      val root = window.root ?: continue
+      try {
+        if (root.packageName?.toString() == pkg) { action(root); return true }
+      } finally { root.recycle() }
+    }
+    return false
+  }
+
+  private fun findTextComposer(root: AccessibilityNodeInfo, pkg: String, expected: String): AccessibilityNodeInfo? {
+    for (id in listOf("entry", "message_input")) {
+      val nodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/$id")
+      val visible = nodes.filter { it.isVisibleToUser && it.isEnabled }
+      val chosen = visible.firstOrNull { it.text?.toString() == expected } ?: visible.singleOrNull()
+      val result = chosen?.let { AccessibilityNodeInfo.obtain(it) }
+      nodes.forEach { it.recycle() }
+      if (result != null) return result
+    }
+    val candidates = mutableListOf<AccessibilityNodeInfo>()
+    var visited = 0
+    fun walk(node: AccessibilityNodeInfo, depth: Int) {
+      if (visited++ >= 800 || depth > 28) return
+      if (node.isEditable && node.isVisibleToUser && node.isEnabled) candidates.add(AccessibilityNodeInfo.obtain(node))
+      for (i in 0 until node.childCount) {
+        val child = node.getChild(i) ?: continue
+        try { walk(child, depth + 1) } finally { child.recycle() }
+      }
+    }
+    walk(root, 0)
+    val chosen = candidates.firstOrNull { it.text?.toString() == expected } ?: candidates.singleOrNull()
+    candidates.filter { it != chosen }.forEach { it.recycle() }
+    return chosen
+  }
+
+  private fun findTextSendTarget(root: AccessibilityNodeInfo, pkg: String): AccessibilityNodeInfo? {
+    for (id in listOf("send", "send_button", "send_btn")) {
+      val nodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/$id")
+      val chosen = nodes.firstOrNull { it.isVisibleToUser && it.isEnabled }
+      val result = chosen?.let { AccessibilityNodeInfo.obtain(it) }
+      nodes.forEach { it.recycle() }
+      if (result != null) return result
+    }
+    return findSendButtonNode(root, pkg)
+  }
+
+  private fun tryTextTouch(root: AccessibilityNodeInfo, pkg: String, request: Long) {
+    if (!matchesArmedRecipient(root, pkg)) {
+      AutoSendCoordinator.textWaitReason = "El nombre o número del chat no coincide con el contacto configurado."
+      return
+    }
+    val text = AutoSendCoordinator.expectedText ?: return
+    val composer = findTextComposer(root, pkg, text)
+    val matches = composer?.text?.toString() == text
+    composer?.recycle()
+    if (!matches) {
+      AutoSendCoordinator.textWaitReason = "No se pudo verificar el mensaje en el cuadro de WhatsApp."
+      return
+    }
+    val button = findTextSendTarget(root, pkg)
+    if (button == null) { AutoSendCoordinator.textWaitReason = "No se encontró el botón Enviar de WhatsApp."; return }
+    val bounds = Rect()
+    button.getBoundsInScreen(bounds)
+    button.recycle()
+    if (!bounds.intersect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels) ||
+        bounds.width() < 8 || bounds.height() < 8) return
+    if (textAttempt?.beginTouch(request, true, true, true) != true) return
+    val phone = AutoSendCoordinator.recipientPhone ?: return
+    val name = AutoSendCoordinator.recipientName
+    val boomerang = AutoSendCoordinator.shouldBoomerangReturn()
+    val returnPkg = AutoSendCoordinator.consumeReturnPackage()
+    AutoSendCoordinator.disarm() // One gesture only; an uncertain outcome must never send twice.
+    val path = Path().apply { moveTo(bounds.exactCenterX(), bounds.exactCenterY()) }
+    val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 70)).build()
+    val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
+      override fun onCompleted(gestureDescription: GestureDescription?) {
+        confirmTextSubmitted(pkg, request, text, phone, name, boomerang, returnPkg)
+      }
+      override fun onCancelled(gestureDescription: GestureDescription?) { showUnconfirmedTextHint() }
+    }, mainHandler)
+    if (!accepted) showUnconfirmedTextHint()
+  }
+
+  private fun confirmTextSubmitted(pkg: String, request: Long, text: String, phone: String,
+    name: String?, boomerang: Boolean, returnPkg: String?) {
+    val deadline = SystemClock.elapsedRealtime() + 3_000
+    val check = object : Runnable {
+      override fun run() {
+        if (AutoSendCoordinator.requestId != request) return
+        var cleared = false
+        withWhatsAppWindow(pkg) { root ->
+          if (matchesRecipient(root, pkg, phone, name, true)) {
+            val composer = findTextComposer(root, pkg, text)
+            cleared = composer != null && composer.text.isNullOrEmpty()
+            composer?.recycle()
+          }
+        }
+        if (cleared) {
+          EyesFreeFeedbackManager.playSentCue(this@PingAutoSendAccessibilityService, cachedPrefs.eyesFreeAudioCues)
+          if (boomerang) scheduleBoomerangReturn(returnPkg)
+        } else if (SystemClock.elapsedRealtime() < deadline) mainHandler.postDelayed(this, 180L)
+        else showUnconfirmedTextHint()
+      }
+    }
+    mainHandler.postDelayed(check, 250L)
+  }
+
+  private fun showUnconfirmedTextHint() {
+    android.widget.Toast.makeText(this,
+      "No se pudo confirmar el envío. No se repetirá el toque para evitar duplicados.",
+      android.widget.Toast.LENGTH_LONG).show()
   }
 
   override fun onKeyEvent(event: KeyEvent?): Boolean {
@@ -181,6 +333,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   }
 
   override fun onInterrupt() {
+    autoSendPoll?.let { mainHandler.removeCallbacks(it) }
     volumeHoldRunnable?.let { mainHandler.removeCallbacks(it) }
     volumeHoldRunnable = null
     HotkeyHoldTracker.reset()
@@ -189,6 +342,8 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   }
 
   override fun onDestroy() {
+    autoSendPoll?.let { mainHandler.removeCallbacks(it) }
+    if (connectedInstance === this) connectedInstance = null
     val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     audioDeviceCallback?.let { audioManager?.unregisterAudioDeviceCallback(it) }
     removeFloatingPill()
@@ -199,20 +354,53 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   }
 
   private fun handleAutoClickSend(root: AccessibilityNodeInfo, pkg: String) {
+    if (!matchesArmedRecipient(root, pkg)) return
+    val fields = root.findAccessibilityNodeInfosByViewId("$pkg:id/entry")
+    val composerText = fields.firstOrNull { it.isVisibleToUser }?.text?.toString()
+    fields.forEach { it.recycle() }
+    val attachmentLabels = listOf("file_name", "filename", "document_name", "audio_title").flatMap { id ->
+      val nodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/$id")
+      val labels = nodes.filter { it.isVisibleToUser }.mapNotNull { it.text?.toString() }
+      nodes.forEach { it.recycle() }
+      labels
+    }
+    if (!AutoSendGuard.payloadMatches(AutoSendCoordinator.expectedText,
+        AutoSendCoordinator.expectedAudioFileName, composerText, attachmentLabels)) return
     val sendNode = findSendButtonNode(root, pkg) ?: return
     if (sendNode.isEnabled) {
+      val boomerang = AutoSendCoordinator.shouldBoomerangReturn()
+      val returnPkg = AutoSendCoordinator.consumeReturnPackage()
+      AutoSendCoordinator.disarm()
       val clicked = sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
       if (clicked) {
-        val boomerang = AutoSendCoordinator.shouldBoomerangReturn()
-        val returnPkg = AutoSendCoordinator.consumeReturnPackage()
-        AutoSendCoordinator.disarm()
         EyesFreeFeedbackManager.playSentCue(this, cachedPrefs.eyesFreeAudioCues)
-        if (boomerang) {
-          scheduleBoomerangReturn(returnPkg)
-        }
+        if (boomerang) scheduleBoomerangReturn(returnPkg)
+      } else {
+        android.widget.Toast.makeText(this,
+          "No se pudo confirmar el envío. Revisá WhatsApp antes de volver a enviar.",
+          android.widget.Toast.LENGTH_LONG).show()
       }
     }
     sendNode.recycle()
+  }
+
+  /** Fail closed: never click Send in a different chat or an unrecognized share screen. */
+  private fun matchesArmedRecipient(root: AccessibilityNodeInfo, pkg: String): Boolean {
+    val phone = AutoSendCoordinator.recipientPhone ?: return true // Legacy explicit actions.
+    return matchesRecipient(root, pkg, phone, AutoSendCoordinator.recipientName,
+      AutoSendCoordinator.expectedText != null &&
+        AutoSendCoordinator.textLaunchCommittedRequestId == AutoSendCoordinator.requestId)
+  }
+
+  private fun matchesRecipient(root: AccessibilityNodeInfo, pkg: String, phone: String,
+    name: String?, launchCommitted: Boolean): Boolean {
+    val headers = listOf("conversation_contact_name", "recipient_name", "toolbar_title", "action_bar_title").flatMap { id ->
+      val nodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/$id")
+      val labels = nodes.filter { it.isVisibleToUser }.mapNotNull { it.text?.toString()?.trim() }
+      nodes.forEach { it.recycle() }
+      labels
+    }
+    return AutoSendGuard.recipientMatches(phone, headers, name, openedConversation = launchCommitted)
   }
 
   private fun handleNativePttLock(root: AccessibilityNodeInfo, pkg: String) {
@@ -604,6 +792,19 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   }
 
   companion object {
+    @Volatile private var connectedInstance: PingAutoSendAccessibilityService? = null
+
+    fun isConnected(): Boolean = connectedInstance != null
+
+    fun requestTextSend(pkg: String, request: Long) {
+      val service = connectedInstance ?: return
+      service.mainHandler.post {
+        if (AutoSendCoordinator.isArmedFor(pkg) && AutoSendCoordinator.requestId == request) {
+          service.scheduleTextSendPoll(pkg, request)
+        }
+      }
+    }
+
     fun isEnabled(context: Context): Boolean {
       val expected = ComponentName(context, PingAutoSendAccessibilityService::class.java)
       val enabledServices =

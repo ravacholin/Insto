@@ -18,6 +18,10 @@ import com.example.assist.PingAssistWidgetProvider
 import com.example.assist.PingAutoSendAccessibilityService
 import com.example.assist.ShortcutHelper
 import com.example.audio.EyesFreeFeedbackManager
+import com.example.audio.FloatingAudioCapture
+import com.example.audio.FloatingVoiceCapture
+import com.example.audio.RecordedAudio
+import com.example.audio.VoiceSessionPolicy
 import com.example.audio.VoiceRecorderManager
 import com.example.context.ContextRoutingEngine
 import com.example.context.EffectiveContextRoute
@@ -42,6 +46,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -89,10 +95,193 @@ data class PingAssistUiState(
   val isBannerError: Boolean = false,
 )
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
+enum class FloatingMode { IDLE, LISTENING, RECORDING, TYPING, SENDING, AUDIO_READY }
+
+data class FloatingAssistantState(
+  val mode: FloatingMode = FloatingMode.IDLE,
+  val text: String = "",
+  val contactName: String = "Instinct",
+  val elapsedMs: Long = 0,
+  val amplitude: Float = 0f,
+  val error: String? = null,
+)
+
+class MainViewModel @JvmOverloads constructor(
+  application: Application,
+  private val floatingCapture: FloatingAudioCapture = FloatingVoiceCapture(application),
+  private val audioDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
+) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
   private val recorder = VoiceRecorderManager(application)
+  private val floatingState = MutableStateFlow(FloatingAssistantState())
+  val floatingAssistant: StateFlow<FloatingAssistantState> = floatingState
+  private var floatingJob: Job? = null
+  private var floatingGeneration = 0L
+  private var floatingReturnPackage: String? = null
+  private var floatingPrefs: AssistantPreferences? = null
+  private var floatingContact: com.example.data.PinnedContact? = null
+  private var pendingFloatingAudio: RecordedAudio? = null
+
+  fun prepareFloatingAssistant() {
+    if (floatingPrefs != null) return
+    val prefs = runBlockingPrefs(getApplication())
+    floatingPrefs = prefs
+    floatingReturnPackage = com.example.assist.AutoSendCoordinator.lastKnownForegroundPackage
+    floatingContact = ContextRoutingEngine.resolveRoute(getApplication(), prefs).contact ?: prefs.pinnedContact
+    floatingState.value = FloatingAssistantState(contactName = floatingContact?.displayName ?: "Instinct")
+  }
+
+  fun startFloatingListening(onDispatched: () -> Unit) {
+    prepareFloatingAssistant()
+    if (floatingState.value.mode == FloatingMode.SENDING) return
+    floatingGeneration++
+    stopFloatingCapture(discard = true)
+    pendingFloatingAudio?.file?.delete()
+    pendingFloatingAudio = null
+    val result = floatingCapture.start()
+    if (result.isFailure) {
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE,
+        error = "Micrófono no disponible. Podés escribir o volver a intentarlo.")
+      return
+    }
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.LISTENING, text = "", elapsedMs = 0, error = null)
+    floatingJob = viewModelScope.launch {
+      while (isActive) {
+        val sample = floatingCapture.snapshot
+        if (sample.error != null) {
+          pauseFloatingAssistant(sample.error)
+          return@launch
+        }
+        when (sample.state) {
+          VoiceSessionPolicy.State.IDLE -> {
+            stopFloatingCapture(discard = true)
+            floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, amplitude = 0f)
+            return@launch
+          }
+          VoiceSessionPolicy.State.SEND -> {
+            sendFloatingAudio(onDispatched)
+            return@launch
+          }
+          else -> floatingState.value = floatingState.value.copy(
+            mode = if (sample.state == VoiceSessionPolicy.State.RECORDING) FloatingMode.RECORDING else FloatingMode.LISTENING,
+            elapsedMs = sample.elapsedMs, amplitude = sample.amplitude)
+        }
+        delay(40)
+      }
+    }
+  }
+
+  /** Called on focus, before the keyboard appears, not just after the first character. */
+  fun enterFloatingTextMode() {
+    if (floatingState.value.mode == FloatingMode.SENDING) return
+    floatingGeneration++
+    stopFloatingCapture(discard = true)
+    pendingFloatingAudio?.file?.delete()
+    pendingFloatingAudio = null
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, amplitude = 0f, error = null)
+  }
+
+  fun updateFloatingText(text: String) {
+    if (floatingState.value.mode == FloatingMode.SENDING) return
+    if (floatingState.value.mode != FloatingMode.TYPING) enterFloatingTextMode()
+    floatingState.value = floatingState.value.copy(text = text)
+  }
+
+  private fun stopFloatingCapture(discard: Boolean) {
+    check(discard) { "Use asynchronous finalization when retaining audio" }
+    floatingJob?.cancel()
+    floatingJob = null
+    floatingCapture.cancel()
+  }
+
+  private suspend fun finishFloatingCapture(): RecordedAudio? {
+    var audio: RecordedAudio? = null
+    try {
+      return withContext(audioDispatcher) { floatingCapture.finish().also { audio = it } }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+      audio?.file?.delete()
+      throw cancelled
+    }
+  }
+
+  fun pauseFloatingAssistant(error: String? = null) {
+    if (floatingState.value.mode != FloatingMode.LISTENING && floatingState.value.mode != FloatingMode.RECORDING) return
+    floatingJob?.cancel()
+    floatingJob = null
+    val generation = ++floatingGeneration
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, amplitude = 0f)
+    viewModelScope.launch {
+      val audio = finishFloatingCapture()
+      if (generation != floatingGeneration) { audio?.file?.delete(); return@launch }
+      pendingFloatingAudio = audio
+      floatingState.value = floatingState.value.copy(
+        mode = if (audio != null) FloatingMode.AUDIO_READY else FloatingMode.IDLE,
+        error = error ?: floatingCapture.snapshot.error)
+    }
+  }
+
+  fun dismissFloatingAssistant() {
+    floatingGeneration++
+    stopFloatingCapture(discard = true)
+    pendingFloatingAudio?.file?.delete()
+    pendingFloatingAudio = null
+  }
+
+  fun sendFloatingAudio(onDispatched: () -> Unit) {
+    if (floatingState.value.mode !in listOf(FloatingMode.RECORDING, FloatingMode.AUDIO_READY)) return
+    floatingJob?.cancel()
+    floatingJob = null
+    val generation = ++floatingGeneration
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null)
+    viewModelScope.launch {
+      val audio = pendingFloatingAudio ?: finishFloatingCapture()
+      if (generation != floatingGeneration) { audio?.file?.delete(); return@launch }
+      if (audio == null) {
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE,
+          error = floatingCapture.snapshot.error ?: "No se pudo finalizar el audio. Activá el micrófono para volver a grabar.")
+        return@launch
+      }
+      pendingFloatingAudio = audio
+      val contact = floatingContact
+      val prefs = floatingPrefs
+      if (contact == null || prefs == null) {
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY,
+          error = "Configurá el contacto de WhatsApp antes de enviar.")
+        return@launch
+      }
+      if (WhatsAppDispatcher.resolveTargetPackage(getApplication(), prefs.preferredFlavor) == null) {
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY,
+          error = "Instalá WhatsApp para enviar. El audio se conserva.")
+        return@launch
+      }
+      val result = WhatsAppDispatcher.sendWhatsAppAudio(
+        getApplication(), contact.phoneNumber, audio.file, prefs.preferredFlavor,
+        PingAutoSendAccessibilityService.isEnabled(getApplication()), boomerangReturn = true,
+        mimeType = audio.mimeType, recipientName = contact.displayName, returnPackage = floatingReturnPackage)
+      if (result is DispatchResult.Error) {
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, error = result.message)
+      } else {
+        pendingFloatingAudio = null // FileProvider/WhatsApp owns the shared file from here.
+        onDispatched()
+      }
+    }
+  }
+
+  fun sendFloatingText(onDispatched: () -> Unit) {
+    if (floatingState.value.mode == FloatingMode.SENDING || floatingState.value.text.isBlank()) return
+    stopFloatingCapture(discard = true)
+    val contact = floatingContact ?: return
+    val prefs = floatingPrefs ?: return
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null)
+    val result = WhatsAppDispatcher.sendWhatsAppText(getApplication(), contact.phoneNumber,
+      floatingState.value.text, prefs.preferredFlavor,
+      PingAutoSendAccessibilityService.isEnabled(getApplication()), contact.displayName, floatingReturnPackage)
+    if (result is DispatchResult.Error) {
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, error = result.message)
+    } else onDispatched()
+  }
+
 
   private val recordingState = MutableStateFlow<RecordingUiState>(RecordingUiState.Idle)
   private val systemState = MutableStateFlow(readSystemState(application))
@@ -674,6 +863,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     stopDispatchJob?.cancel()
     amplitudeJob?.cancel()
     recorder.release()
+    dismissFloatingAssistant()
     super.onCleared()
   }
 
