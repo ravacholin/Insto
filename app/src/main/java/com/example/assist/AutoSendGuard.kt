@@ -31,8 +31,9 @@ object AutoSendGuard {
 
   fun payloadMatches(text: String?, audioFileName: String?, composerText: String?, attachmentLabels: List<String>): Boolean =
     when {
+      audioFileName != null -> attachmentLabels.any { it == audioFileName } &&
+        (if (text != null) composerText == text else composerText.isNullOrBlank())
       text != null -> composerText == text
-      audioFileName != null -> composerText.isNullOrBlank() && attachmentLabels.any { it == audioFileName }
       else -> true // Older explicit, non-floating entrypoints.
     }
 }
