@@ -239,6 +239,18 @@ class ExampleRobolectricTest {
   }
 
   @Test
+  fun `text deep link preserves unicode punctuation and recipient`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val text = "Hola Instinct & café?\nUna línea + otra 😊"
+    val intent = WhatsAppDispatcher.buildSendTextIntent(context, "+44 7700 900123", text, WhatsAppFlavor.AUTO)
+    assertNotNull(intent)
+    assertEquals("447700900123", intent!!.data!!.getQueryParameter("phone"))
+    assertEquals(text, intent.data!!.getQueryParameter("text"))
+    assertNull(WhatsAppDispatcher.buildSendTextIntent(context, "123", text, WhatsAppFlavor.AUTO))
+    assertNull(WhatsAppDispatcher.buildSendTextIntent(context, "+447700900123", "   ", WhatsAppFlavor.AUTO))
+  }
+
+  @Test
   fun `buildSendAudioIntent attaches fileprovider stream and jid`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val voiceDir = File(context.cacheDir, "voice_notes").apply { mkdirs() }
@@ -256,7 +268,10 @@ class ExampleRobolectricTest {
     assertEquals(Intent.ACTION_SEND, intent!!.action)
     assertEquals("audio/mp4", intent.type)
     assertEquals("447700900123@s.whatsapp.net", intent.getStringExtra("jid"))
-    assertNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM, android.net.Uri::class.java))
+    val stream = intent.getParcelableExtra(Intent.EXTRA_STREAM, android.net.Uri::class.java)
+    assertNotNull(stream)
+    assertEquals(stream, intent.clipData?.getItemAt(0)?.uri)
+    assertEquals(1, intent.clipData?.itemCount)
     assertTrue(intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
 
     audioFile.delete()

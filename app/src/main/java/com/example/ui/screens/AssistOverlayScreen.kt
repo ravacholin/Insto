@@ -1,267 +1,166 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.ui.PingAssistUiState
-import com.example.ui.RecordingUiState
-import com.example.ui.theme.CoralPulse
-import java.util.Locale
+import com.example.ui.FloatingAssistantState
+import com.example.ui.FloatingMode
 
-/**
- * Minimal reactive overlay shown for either:
- * 1) Dynamic 2.2s Smart Window (speaks/holds -> auto voice recording; silence -> opens chat directly)
- * 2) Direct voice recording mode (zero intermediate menus).
- */
+/** Assistant input lives here; WhatsApp is only brought forward at dispatch time. */
 @Composable
 fun AssistOverlayScreen(
-  uiState: PingAssistUiState,
+  state: FloatingAssistantState,
   hasAudioPermission: Boolean,
-  onStartRecording: () -> Unit,
-  onLockDynamicHold: () -> Unit,
-  onSkipDynamicAndOpenChat: () -> Unit,
-  onStopAndSend: () -> Unit,
-  onRequestAudioPermission: () -> Unit,
+  autoSendEnabled: Boolean,
+  onTextFocus: () -> Unit,
+  onTextChange: (String) -> Unit,
+  onMicrophone: () -> Unit,
+  onSend: () -> Unit,
   onDismissOverlay: () -> Unit,
 ) {
-  // Tap-vs-hold not decided yet: stay invisible so a quick tap jumps to the chat with no flash.
-  if (uiState.recordingState is RecordingUiState.HoldPending) return
+  val context = LocalContext.current
+  val accent = Color(0xFFB9B1FF)
+  val busy = state.mode == FloatingMode.SENDING
+  val recording = state.mode == FloatingMode.RECORDING
+  val listening = state.mode == FloatingMode.LISTENING
+  val canSend = recording || state.mode == FloatingMode.AUDIO_READY ||
+    (state.mode == FloatingMode.TYPING && state.text.isNotBlank())
+  val focus = LocalFocusManager.current
+  val keyboard = LocalSoftwareKeyboardController.current
 
-  val contact = uiState.effectiveRoute.contact ?: uiState.preferences.pinnedContact
-  val listening = uiState.recordingState as? RecordingUiState.ListeningWindow
-  val recording = uiState.recordingState as? RecordingUiState.Recording
-  val isListening = listening != null
-  val isRecording = recording != null
-
-  val pulse = rememberInfiniteTransition(label = "mic_pulse")
-  val scale by
-    pulse.animateFloat(
-      initialValue = 0.94f,
-      targetValue = 1.08f,
-      animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
-      label = "pulse_scale",
-    )
-
-  Box(
-    modifier =
-      Modifier.fillMaxSize()
-        .clickable(
-          interactionSource = remember { MutableInteractionSource() },
-          indication = null,
-          onClick = onDismissOverlay,
-        ),
-    contentAlignment = Alignment.BottomCenter,
-  ) {
+  Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+    Box(Modifier.matchParentSize().clickable(
+      interactionSource = remember { MutableInteractionSource() }, indication = null,
+      onClick = onDismissOverlay))
     Surface(
+      modifier = Modifier.imePadding().navigationBarsPadding().padding(12.dp)
+        .widthIn(max = 560.dp).fillMaxWidth(),
       shape = RoundedCornerShape(28.dp),
-      color = MaterialTheme.colorScheme.surface,
-      border =
-        BorderStroke(
-          1.5.dp,
-          when {
-            isRecording -> CoralPulse
-            isListening -> MaterialTheme.colorScheme.primary
-            else -> MaterialTheme.colorScheme.outline
+      color = Color(0xFF1B1D29).copy(alpha = 0.94f),
+      contentColor = Color.White,
+      border = BorderStroke(1.dp, accent.copy(alpha = 0.40f)),
+      shadowElevation = 16.dp,
+      onClick = {},
+    ) {
+      Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Box(Modifier.size(34.dp).background(accent.copy(alpha = 0.18f), CircleShape),
+            contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Mic, null, tint = accent, modifier = Modifier.size(19.dp))
+          }
+          Spacer(Modifier.width(10.dp))
+          Column(Modifier.weight(1f)) {
+            Text(state.contactName, fontWeight = FontWeight.SemiBold,
+              style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("Asistente · WhatsApp", color = Color.White.copy(alpha = 0.6f),
+              style = MaterialTheme.typography.labelSmall)
+          }
+          IconButton(onClick = onDismissOverlay, modifier = Modifier.testTag("overlay_close_button")) {
+            Icon(Icons.Filled.Close, "Cerrar asistente", tint = Color.White.copy(alpha = 0.7f))
+          }
+        }
+        Text(
+          text = when (state.mode) {
+            FloatingMode.LISTENING -> "Te escucho… o tocá para escribir"
+            FloatingMode.RECORDING -> "Grabando · se envía tras 3 s de silencio"
+            FloatingMode.TYPING -> "Mensaje de texto · micrófono apagado"
+            FloatingMode.SENDING -> "Preparando envío…"
+            FloatingMode.AUDIO_READY -> "Audio guardado · tocá Enviar para intentarlo"
+            FloatingMode.IDLE -> if (hasAudioPermission) "Escribí o activá el micrófono"
+              else "Podés escribir o permitir el micrófono"
           },
-        ),
-      tonalElevation = 12.dp,
-      shadowElevation = 24.dp,
-      modifier =
-        Modifier.widthIn(max = 520.dp)
-          .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 16.dp)
-          .navigationBarsPadding()
-          .pointerInput(isListening) {
-            awaitEachGesture {
-              awaitFirstDown(requireUnconsumed = false)
-              if (isListening) {
-                onLockDynamicHold()
-                waitForUpOrCancellation()
-                onStopAndSend()
+          color = accent, style = MaterialTheme.typography.bodySmall,
+          modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+        if (recording || listening) {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Canvas(Modifier.weight(1f).height(26.dp)) {
+              repeat(32) { i ->
+                val shape = 0.25f + 0.75f * kotlin.math.abs(kotlin.math.sin(i * 1.7f))
+                val half = 2f + size.height * 0.45f * state.amplitude * shape
+                val x = size.width * (i + 0.5f) / 32f
+                drawLine(accent, Offset(x, size.height / 2 - half),
+                  Offset(x, size.height / 2 + half), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
               }
             }
-          },
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(52.dp)) {
-          if (listening != null) {
-            val progress =
-              (listening.elapsedMs.toFloat() / listening.windowMs.coerceAtLeast(1L).toFloat())
-                .coerceIn(0f, 1f)
-            CircularProgressIndicator(
-              progress = { progress },
-              modifier = Modifier.size(52.dp),
-              color = MaterialTheme.colorScheme.primary,
-              trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-              strokeWidth = 3.dp,
-            )
-          }
-          Surface(
-            shape = CircleShape,
-            color =
-              when {
-                isRecording -> CoralPulse
-                else -> MaterialTheme.colorScheme.primary
-              },
-            modifier =
-              Modifier.size(44.dp)
-                .scale(
-                  when {
-                    isRecording -> scale
-                    listening != null -> 1f + (listening.speechEnergy * 0.14f)
-                    else -> 1f
-                  }
-                ),
-          ) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(
-                imageVector = if (isListening) Icons.Filled.ChatBubble else Icons.Filled.Mic,
-                contentDescription = null,
-                tint = Color.White,
-              )
-            }
+            Text(if (recording) "%d:%02d".format(state.elapsedMs / 60000, state.elapsedMs / 1000 % 60)
+              else "${(4 - state.elapsedMs / 1000).coerceAtLeast(0)} s",
+              style = MaterialTheme.typography.labelSmall, color = accent)
           }
         }
-
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = contact?.displayName ?: "WhatsApp Contact",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            text =
-              when {
-                listening != null -> "Opening chat… Speak or hold to record"
-                recording != null -> {
-                  val secs = (recording.elapsedMs / 1000L).toInt()
-                  val hint = if (recording.isLockedHandsFree) "…" else " · release to send"
-                  String.format(Locale.US, "Recording %02d:%02d%s", secs / 60, secs % 60, hint)
-                }
-                !hasAudioPermission -> "Microphone permission needed"
-                uiState.statusBanner != null -> uiState.statusBanner
-                else -> "Starting microphone…"
-              },
-            style = MaterialTheme.typography.bodyMedium,
-            color =
-              when {
-                isRecording -> CoralPulse
-                isListening -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
-              },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-
-        if (isRecording) {
-          Button(
-            onClick = onStopAndSend,
-            shape = RoundedCornerShape(20.dp),
-            colors =
-              ButtonDefaults.buttonColors(
-                containerColor = CoralPulse,
-                contentColor = Color.White,
-              ),
-            modifier = Modifier.height(48.dp).testTag("overlay_send_button"),
-          ) {
-            Icon(
-              Icons.AutoMirrored.Filled.Send,
-              contentDescription = null,
-              modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Send")
-          }
-        } else if (isListening) {
-          Button(
-            onClick = onSkipDynamicAndOpenChat,
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.height(48.dp).testTag("overlay_open_now_button"),
-          ) {
-            Text("Open")
-          }
-        } else if (!hasAudioPermission) {
-          Button(
-            onClick = onRequestAudioPermission,
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.height(48.dp),
-          ) {
-            Text("Allow")
-          }
-        } else {
-          Button(
-            onClick = onStartRecording,
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.height(48.dp),
-          ) {
-            Text("Record")
+        OutlinedTextField(
+          value = state.text, onValueChange = onTextChange,
+          modifier = Modifier.fillMaxWidth().testTag("overlay_text_input")
+            .onFocusChanged { if (it.isFocused) onTextFocus() },
+          placeholder = { Text("Mensaje para ${state.contactName}", color = Color.White.copy(alpha = 0.45f)) },
+          enabled = !busy, maxLines = 4, shape = RoundedCornerShape(18.dp),
+          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+          keyboardActions = KeyboardActions(onSend = { if (canSend && !busy) onSend() }),
+          colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+            cursorColor = accent, focusedBorderColor = accent,
+            unfocusedBorderColor = Color.White.copy(alpha = 0.18f)),
+        )
+        state.error?.let { Text(it, color = Color(0xFFFFB4AB), style = MaterialTheme.typography.bodySmall,
+          modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
+        if (!autoSendEnabled) {
+          Text("Para enviar sin volver a tocar WhatsApp, activá el servicio de Accesibilidad de PingAssist.",
+            color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+          TextButton(onClick = {
+            context.startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+          }, modifier = Modifier.testTag("overlay_enable_auto_send")) {
+            Text("Activar envío automático", color = accent)
           }
         }
-
-        IconButton(
-          onClick = onDismissOverlay,
-          modifier = Modifier.size(48.dp).testTag("overlay_close_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Filled.Close,
-            contentDescription = "Cancel",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween) {
+          IconButton(
+            onClick = { focus.clearFocus(); keyboard?.hide(); onMicrophone() },
+            enabled = !busy && !recording && !listening,
+            modifier = Modifier.size(48.dp).background(accent.copy(alpha = 0.15f), CircleShape)
+              .testTag("overlay_microphone"),
+          ) {
+            Icon(Icons.Filled.Mic, "Activar escucha", tint = accent)
+          }
+          Button(onClick = onSend, enabled = canSend && !busy,
+            colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color(0xFF201C39)),
+            modifier = Modifier.height(48.dp).testTag("overlay_send_button")) {
+            if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            else Icon(Icons.AutoMirrored.Filled.Send, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Enviar")
+          }
         }
       }
     }

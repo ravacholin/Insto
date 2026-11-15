@@ -472,7 +472,7 @@ private fun AssistantSetupSheet(
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
       // 2. Voice Recording Strategy (Native WhatsApp PTT vs Audio File)
-      Text(text = "2. Voice Note Mode", style = MaterialTheme.typography.titleMedium)
+      Text(text = "Modo de audio de accesos anteriores", style = MaterialTheme.typography.titleMedium)
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         VoiceRecordingMode.entries.forEach { mode ->
           val selected = prefs.voiceRecordingMode == mode
@@ -511,52 +511,13 @@ private fun AssistantSetupSheet(
       // 2. System & Physical Triggers
       Text(text = "2. System & Physical Triggers", style = MaterialTheme.typography.titleMedium)
 
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        AssistantActivationMode.entries.forEach { mode ->
-          val selected = prefs.activationMode == mode
-          Surface(
-            shape = RoundedCornerShape(16.dp),
-            color =
-              if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-              else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            border =
-              BorderStroke(
-                width = if (selected) 1.5.dp else 1.dp,
-                color =
-                  if (selected) MaterialTheme.colorScheme.primary
-                  else MaterialTheme.colorScheme.outlineVariant,
-              ),
-            modifier =
-              Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .clickable { onSelectActivationMode(mode) }
-                .testTag("mode_${mode.name.lowercase()}"),
-          ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-              Text(text = mode.title, style = MaterialTheme.typography.titleMedium)
-              Text(
-                text = mode.subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-        }
-      }
-
-      if (
-        prefs.activationMode == AssistantActivationMode.TAP_CHAT_HOLD_AUDIO &&
-          !system.isAutoSendEnabled
-      ) {
-        Text(
-          text =
-            "Hold-to-record needs the Accessibility Helper (section below) to see the hotkey. " +
-              "Until it is on, the hotkey always opens the chat.",
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.error,
-          modifier = Modifier.testTag("hold_mode_accessibility_hint"),
-        )
-      }
+      Text(
+        text = "El atajo del asistente abre el panel flotante para escribir o hablar. " +
+          "Escucha inicial: 4 s. Envío de audio: 3 s de silencio o botón Enviar. " +
+          "No hace falta mantener pulsada ninguna tecla.",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.testTag("floating_assistant_hint"),
+      )
 
       Button(
         onClick = onSetDefaultAssistantClick,
