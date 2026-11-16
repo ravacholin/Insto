@@ -24,7 +24,7 @@ sealed interface PhoneCommand {
 sealed interface PhoneRoute {
   data class Local(val command: PhoneCommand) : PhoneRoute
   data class Clarify(val prompt: String, val context: String) : PhoneRoute
-  data class Unsupported(val message: String) : PhoneRoute
+  data class Unsupported(val message: String, val recoverable: Boolean = false) : PhoneRoute
   data object Instinct : PhoneRoute
   data object Cancel : PhoneRoute
 }
