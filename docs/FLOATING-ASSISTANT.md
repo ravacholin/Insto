@@ -166,3 +166,47 @@ No hay dispositivo conectado en el entorno de implementación; la compatibilidad
 - Se ejecutó también `testDebugUnitTest` sin exclusiones después de los cambios: bloqueado por `nativeruntime-dist-compat:1.0.18` (HTTP 403 del mirror de Maven), antes de ejecutar las pruebas.
 - Revisión independiente: detectó la posibilidad de dejar el panel detrás del Reloj al detenerse Compose. La finalización ahora se observa desde `Activity.lifecycleScope` hasta destrucción, se consume una sola vez y no depende de un frame. Se agregó una prueba de regresión de ciclo de vida; su ejecución Android sigue bloqueada como se indica arriba.
 - Diagnóstico ADB: sintaxis de script verificada. No hay dispositivos conectados; no se afirma validación física ni compatibilidad comprobada de una versión específica del Reloj de Google.
+
+## Pedidos cotidianos nativos (1.5.0)
+
+La ampliación usa apps instaladas y conserva el flujo de audio original hacia Instinct para consultas generales. Se puede consultar «Ejemplos de pedidos» desde el floating. No requiere ADB ni Shizuku.
+
+| Ejemplo | Qué entrega Insto |
+|---|---|
+| `Llevame a Plaza de Mayo` | Ruta en Maps, por defecto en auto. |
+| `Llevame a pie a Retiro` / `Llevame a Retiro en bicicleta` | Ruta con el modo indicado. También admite `en transporte público` / `en colectivo` como modo general de transporte público. |
+| `Buscá farmacias cerca` / `Buscá en Maps café de especialidad` | Búsqueda en Maps. Puede abrir el navegador si Maps no está instalado. |
+| `Guardá mi casa en Av. Córdoba 1234, Buenos Aires` | Guarda esa dirección en preferencias privadas de Insto. `Guardá mi trabajo en …` hace lo mismo para trabajo; repetirlo reemplaza la dirección guardada. |
+| `Llevame a casa` / `Llevame al trabajo` | Usa la dirección guardada explícitamente. No consulta ni supone las direcciones de la cuenta Google. |
+| `Llamá a Ana María` / `Llamá al +54 11 5555 0100` | Abre el marcador con el número; hay que tocar Llamar allí. |
+| `Agendá Reunión con María mañana a las 17:30 durante cuarenta y cinco minutos` | Borrador en Calendario con título, inicio y fin; hay que revisarlo y guardarlo allí. |
+| `Agendá clase el 20/11/2026 a las siete de la tarde` | Fecha explícita. También acepta hoy, mañana, pasado mañana y dd/MM del año actual. |
+| `Abrí la cámara` / `Abrí la cámara para grabar` | Abre modo foto/video. No toma la foto ni empieza a grabar automáticamente. |
+| `Buscá jazz en YouTube` | Abre una búsqueda, no afirma reproducción. |
+| `Poné música de Soda Stereo` / `Reproducí la canción De Música Ligera` | Entrega una búsqueda de música a una app que implemente el intent público de reproducción desde búsqueda. Su disponibilidad y reproducción dependen de esa app. |
+
+Los nombres, títulos, direcciones y búsquedas conservan acentos, mayúsculas y signos. Los parámetros se codifican para no convertirse en otros parámetros del enlace. Las rutas no admiten restricciones de peajes, paradas ni subtipos de transporte: se conserva el pedido y se explica qué debe completarse en Maps. Las órdenes múltiples se rechazan; deben pedirse por separado.
+
+Para nombres de contactos se solicita `READ_CONTACTS` en tiempo de ejecución, solo al necesitarlo. Un número explícito no requiere ese permiso. La búsqueda es local; no se envían contactos a Groq ni a Instinct. Cuando hay varios números exactos o coincidencias aproximadas, el usuario debe elegir la opción y número visibles. Una búsqueda truncada no permite una selección implícita. Se puede responder con el índice de la opción o tocarla; cancelar cierra esa selección. Denegar permiso conserva el pedido y permite indicar un número.
+
+Los eventos usan la zona horaria del teléfono y validan fechas y horas estrictamente, incluyendo horas inexistentes o repetidas por cambios de horario. Sin duración explícita, el borrador dura una hora, revisable en Calendario. Una hora como «cinco» sin período exige repetir el evento con la hora completa; las solicitudes pasadas, fechas inválidas, repeticiones o detalles no admitidos no se convierten en otro evento. No se piden permisos de lectura/escritura de calendario y no se afirma que el evento quedó guardado.
+
+Si falta una app receptora, el permiso o un dato, se conserva el pedido/audio y el floating permanece abierto. Una entrega exitosa cierra el floating mediante el observador de ciclo de vida existente. Se conservan los comandos previos, el envío a Instinct, el descarte de transcripciones tardías y una sola captura de micrófono.
+
+### Comprobación manual en el Motorola
+
+- Probar rutas con los cuatro modos y direcciones guardadas/no guardadas. Comprobar direcciones con acentos, símbolos y signos.
+- Llamar por número sin permiso de contactos; luego denegar/conceder el permiso para nombres. Usar dos contactos homónimos o varios números, y comprobar elección, cancelación y retorno.
+- Preparar eventos por voz/texto en hoy/mañana/fecha explícita. Verificar título, zona, inicio, fin y duración; cancelar en Calendario no debe presentarse como evento guardado.
+- Abrir los dos modos de cámara y las búsquedas de Maps, YouTube y música; comprobar el comportamiento cuando falta una app compatible.
+- Pedir una explicación general y verificar envío del M4A original a Instinct; las negaciones, condiciones y órdenes múltiples no deben activar parcialmente acciones nativas.
+- Mantener comprobaciones de linterna, volumen, Reloj, cierre/rotación del panel y adjuntos de versiones anteriores.
+
+### Resultado de verificación 1.5.0
+
+- `assembleDebug`: correcto con versión 1.5.0 / versionCode 9; firma v2 y alineación de 16 KiB verificadas. El certificado coincide con el APK 1.4.4 entregado en esta conversación, sin regenerar ni publicar claves.
+- 76 pruebas JVM aprobadas (0 fallas), incluyendo interpretación nueva/anterior, contratos de intents, preservación de acentos Unicode, fechas y zona horaria, selección de contactos, negaciones, condiciones y órdenes encadenadas. El init script externo excluye únicamente el artefacto nativo inaccesible de Robolectric; las dependencias del proyecto no cambiaron.
+- Todos los fuentes de pruebas Android compilan. Se intentaron las nuevas pruebas de integración de permisos, número/contacto, ausencia de app y navegación por voz; el runner quedó bloqueado por `android-all-instrumented:9-robolectric-4913185-2-i7` (HTTP 403), antes de ejecutar sus assertions.
+- Suite completa `testDebugUnitTest`, sin exclusiones, intentada después de los cambios: bloqueada por `nativeruntime-dist-compat:1.0.18` (HTTP 403 del mirror de Maven), antes de ejecutar las pruebas.
+- Revisión independiente realizada. Se observaron fallar y luego pasar las regresiones de órdenes encadenadas, modo/restricción de ruta, deduplicación de nombres/números, duración de eventos con cláusulas no soportadas y respuestas negativas/condicionales a aclaraciones. Las búsquedas de contactos truncadas no permiten elegir implícitamente un número.
+- No hay dispositivo Android conectado: la ejecución y disponibilidad de apps nativas, diálogos de permiso y regreso real al floating requieren comprobación en el Motorola. No se afirma que la suite Android ni la validación física hayan pasado.

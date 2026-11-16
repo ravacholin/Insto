@@ -22,6 +22,9 @@ class PhoneActionExecutor(
     if (context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return PhoneActionResult("Desbloqueá el teléfono para ejecutar este pedido.", outcome = PhoneActionOutcome.REJECTED)
     return try {
       when (command) {
+        is PhoneCommand.Navigate, is PhoneCommand.MapSearch, is PhoneCommand.SavePlace,
+        is PhoneCommand.Dial, is PhoneCommand.CalendarEvent, is PhoneCommand.Camera,
+        is PhoneCommand.YouTubeSearch, is PhoneCommand.MusicSearch -> EverydayActionExecutor(context).execute(command)
         is PhoneCommand.Timer, is PhoneCommand.Alarm, is PhoneCommand.ClockList -> {
           if (command is PhoneCommand.Alarm && command.days.isEmpty() && !confirmed) {
             val (hour, minute) = nowHourMinute()

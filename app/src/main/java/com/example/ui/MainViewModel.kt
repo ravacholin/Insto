@@ -116,6 +116,8 @@ data class FloatingAssistantState(
   val transcript: String? = null,
   val needsGroqKey: Boolean = false,
   val needsCamera: Boolean = false,
+  val needsContacts: Boolean = false,
+  val contactOptions: List<ContactOption> = emptyList(),
   val needsConfirmation: Boolean = false,
   val needsWhatsAppAccessibility: Boolean = false,
   val appOptions: List<AppOption> = emptyList(),
@@ -149,6 +151,7 @@ class MainViewModel @JvmOverloads constructor(
   private var clarification: String? = null
   private var confirmation: PhoneCommand? = null
   private var cameraCommand: PhoneCommand? = null
+  private var contactsCommand: PhoneCommand? = null
   private var retainLocalAudio = false
   private var routedRequestText = ""
   private var retryLocalCommand: Pair<PhoneCommand, Boolean>? = null
@@ -182,13 +185,29 @@ class MainViewModel @JvmOverloads constructor(
     else floatingState.value = floatingState.value.copy(error = "No se habilitó la cámara. El pedido se conserva; la linterna no se cambió.", status = null)
   }
 
+  fun onFloatingContactsPermission(granted: Boolean) {
+    val command = contactsCommand ?: return
+    contactsCommand = null
+    floatingState.value = floatingState.value.copy(needsContacts = false)
+    if (granted) runPhoneCommand(command)
+    else floatingState.value = floatingState.value.copy(error = "No se habilitaron los contactos. El pedido se conserva; podés indicar el número.", status = null)
+  }
+
+  fun chooseFloatingContact(option: ContactOption) {
+    if (option !in floatingState.value.contactOptions || floatingState.value.mode == FloatingMode.SENDING) return
+    floatingState.value = floatingState.value.copy(contactOptions = emptyList())
+    runPhoneCommand(PhoneCommand.Dial(option.number))
+  }
+
   private fun runPhoneCommand(command: PhoneCommand, confirmed: Boolean = false) {
     clarification = null
     confirmation = null
     cameraCommand = null
+    contactsCommand = null
     val result = phoneExecutor.execute(command, confirmed)
     confirmation = result.confirmation
     if (result.needsCamera) cameraCommand = command
+    if (result.needsContacts) contactsCommand = command
     retainLocalAudio = result.retainRequest
     retryLocalCommand = if (result.retainRequest) command to confirmed else null
     retryLocalText = if (result.retainRequest) routedRequestText else null
@@ -199,6 +218,7 @@ class MainViewModel @JvmOverloads constructor(
       error = if (result.outcome == PhoneActionOutcome.REJECTED) result.message else null,
       status = if (result.outcome == PhoneActionOutcome.REJECTED) null else result.message, needsWhatsAppAccessibility = false, needsConfirmation = result.confirmation != null,
       appOptions = result.appOptions, needsCamera = result.needsCamera, needsGroqKey = false,
+      needsContacts = result.needsContacts, contactOptions = result.contactOptions,
       phoneActionCompletion = result.message.takeIf {
         result.outcome == PhoneActionOutcome.COMPLETED || result.outcome == PhoneActionOutcome.HANDOFF
       })
@@ -225,20 +245,38 @@ class MainViewModel @JvmOverloads constructor(
       confirmFloatingAction(normalized !in listOf("no", "cancelar"))
       return true
     }
+    val contacts = floatingState.value.contactOptions
+    if (contacts.isNotEmpty()) {
+      val index = PhoneCommandParser.number(normalized)?.minus(1)
+      val selected = if (index != null) contacts.getOrNull(index) else contacts.singleOrNull {
+        PhoneCommandParser.normalize(it.name) == normalized ||
+          PhoneNumbers.canonical(text)?.let { number -> number == PhoneNumbers.canonical(it.number) } == true
+      }
+      if (selected != null) { chooseFloatingContact(selected); return true }
+      if (normalized != "no" && phoneParser.parse(text) == PhoneRoute.Instinct) {
+        retainLocalAudio = true
+        floatingState.value = floatingState.value.copy(
+          mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING,
+          error = "Elegí una opción por su número, o decí cancelar.", status = null)
+        return true
+      }
+    }
     val options = floatingState.value.appOptions
     if (options.isNotEmpty()) {
       val index = PhoneCommandParser.number(normalized)?.minus(1)
       val selected = if (index != null) options.getOrNull(index) else options.singleOrNull { PhoneCommandParser.normalize(it.label) == normalized }
       if (selected != null) { runPhoneCommand(PhoneCommand.OpenApp(selected.packageName)); return true }
     }
-    val route = clarification?.let { phoneParser.parseReply(it, text) } ?: phoneParser.parse(text)
+    val route = if (contacts.isNotEmpty() && normalized == "no") PhoneRoute.Cancel
+      else clarification?.let { phoneParser.parseReply(it, text) } ?: phoneParser.parse(text)
     // A new complete request replaces any earlier clarification/confirmation.
     clarification = null
     confirmation = null
     cameraCommand = null
+    contactsCommand = null
     retryLocalCommand = null
     retryLocalText = null
-    floatingState.value = floatingState.value.copy(needsConfirmation = false, appOptions = emptyList(), needsCamera = false)
+    floatingState.value = floatingState.value.copy(needsConfirmation = false, appOptions = emptyList(), needsCamera = false, needsContacts = false, contactOptions = emptyList())
     when (route) {
       is PhoneRoute.Local -> runPhoneCommand(route.command)
       is PhoneRoute.Clarify -> {
@@ -417,7 +455,8 @@ class MainViewModel @JvmOverloads constructor(
     clarification = null
     confirmation = null
     cameraCommand = null
-    floatingState.value = floatingState.value.copy(needsConfirmation = false, needsCamera = false, appOptions = emptyList(), phoneActionCompletion = null)
+    contactsCommand = null
+    floatingState.value = floatingState.value.copy(needsConfirmation = false, needsCamera = false, appOptions = emptyList(), needsContacts = false, contactOptions = emptyList(), phoneActionCompletion = null)
   }
 
   fun sendFloatingAudio(onDispatched: () -> Unit) {
