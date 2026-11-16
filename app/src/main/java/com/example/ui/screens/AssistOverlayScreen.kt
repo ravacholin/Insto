@@ -104,7 +104,7 @@ fun AssistOverlayScreen(
             Text("DESTINO AUTOMÁTICO · ${com.example.BuildConfig.VERSION_NAME}", color = secondary,
               style = MaterialTheme.typography.labelSmall)
           }
-          TextButton(onClick = onConfigureGroq, enabled = !busy) { Text("Groq", color = secondary) }
+          TextButton(onClick = onConfigureGroq, enabled = !busy) { Text("IA", color = secondary) }
           IconButton(onClick = onDismissOverlay, modifier = Modifier.testTag("overlay_close_button")) {
             Icon(Icons.Filled.Close, "Cerrar asistente", tint = secondary)
           }
@@ -162,7 +162,7 @@ fun AssistOverlayScreen(
           modifier = Modifier.fillMaxWidth().testTag("overlay_text_input")
             .onFocusChanged { if (it.isFocused) onTextFocus() },
           placeholder = { Text("Pedime algo del teléfono o consultá a ${state.contactName}", color = secondary) },
-          enabled = !busy, maxLines = 4, shape = controlShape,
+          enabled = !busy || state.deciding, maxLines = 4, shape = controlShape,
           keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
           keyboardActions = KeyboardActions(onSend = { if (canSend && !busy) onSend() }),
           colors = OutlinedTextFieldDefaults.colors(

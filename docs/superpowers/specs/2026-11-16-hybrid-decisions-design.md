@@ -1,6 +1,6 @@
 # Insto: enrutamiento híbrido con Gemini Decisions
 
-Estado: propuesta pendiente de aprobación. Fecha: 2026-11-16.
+Estado: aprobado por el usuario el 2026-11-16. Fecha: 2026-11-16.
 
 ## Intención y alcance
 

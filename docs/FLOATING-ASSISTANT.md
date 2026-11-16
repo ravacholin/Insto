@@ -6,11 +6,54 @@ El floating distingue automáticamente pedidos del teléfono y consultas general
 
 ### Configuración personal de Groq
 
-Abrir **Groq** en la cabecera del floating y cargar una clave propia. Si el primer pedido de voz no tiene clave, se conserva la grabación y aparece el acceso a configuración. Al guardar una clave, ese pedido vuelve a intentarse sin tener que grabarlo de nuevo. Guardar un reemplazo, volver sin cambios o borrar la clave son operaciones diferentes; solo guardar tras un error de clave dispara ese reintento.
+Abrir **IA** en la cabecera del floating y cargar una clave propia de Groq. Si el primer pedido de voz no tiene clave, se conserva la grabación y aparece el acceso a configuración. Al guardar una clave, ese pedido vuelve a intentarse sin tener que grabarlo de nuevo. Guardar un reemplazo, volver sin cambios o borrar la clave son operaciones diferentes; solo guardar tras un error de clave dispara ese reintento.
 
 La clave se cifra con AES/GCM y Android Keystore en `noBackupFilesDir`: no va en BuildConfig, APK, Git, logs ni backups. El campo está enmascarado y la pantalla bloquea capturas. No hace falta un backend para este uso personal. La configuración explica que cada grabación se transcribe en Groq antes de decidir destino. Requiere internet y está sujeto a las cuotas/precios de la cuenta; no se promete uso gratuito ilimitado.
 
 El upload usa HTTPS sin seguir redirecciones, un máximo conservador de 24 MiB por grabación, respuesta limitada a 256 KiB, timeout total de 60 s y ningún reintento automático de red. Claves rechazadas, cuotas, respuestas vacías y errores de conexión conservan el audio para reintentar. Cerrar el panel cancela la petición y descarta datos no enviados; pasar a segundo plano durante la interpretación la cancela y conserva el audio. Las respuestas tardías no ejecutan órdenes.
+
+### Gemini Decisions opcional (1.6.0)
+
+En **IA**, la sección **Gemini Decisions · híbrido** permite guardar una clave
+personal de Google AI Studio. Guardarla activa el híbrido; el interruptor permite
+desactivarlo y también se puede borrar la clave. La clave se cifra por separado
+con Android Keystore en `noBackupFilesDir`; no se incluye en APK, Git o backups.
+Sin clave o con el híbrido desactivado se conserva el comportamiento anterior.
+
+Los comandos locales completos, las aclaraciones, las confirmaciones y las
+opciones de contactos/apps siguen resolviéndose localmente. Las consultas
+explícitas reconocidas para Instinct tampoco necesitan Gemini. El resultado
+desconocido del parser y ciertos rechazos por redacción no comprendida consultan
+`gemini-decision-1`, usando el texto escrito o la transcripción original. Nunca
+se envían a Gemini el audio, los adjuntos ni la libreta de contactos; el texto
+puede contener el nombre o número que el usuario haya dicho.
+
+Decisions elige una capacidad y evalúa si el pedido es único, incondicional y
+sin negaciones. Se exige probabilidad y confianza de al menos 0,95 en ambas
+evaluaciones. Es un umbral inicial conservador, sin calibración con uso real.
+Solo se ejecutan candidatos tipados completos: linterna, pasos de volumen,
+apertura de cámara y operaciones/listas del Reloj. Se conservan los permisos,
+comprobaciones de handlers y confirmaciones de los ejecutores existentes.
+Las horas, porcentajes, títulos y destinos no reconocidos requieren aclaración;
+Decisions no genera parámetros, URIs ni intents. Los rechazos explícitos del
+parser por detalles no admitidos no se reinterpretan para eludir restricciones.
+
+Una consulta identificada va a Instinct por el envío existente, con el M4A
+original si se habló. Baja confianza o un pedido no admitido conservan la
+solicitud y muestran el problema. HTTP inválido, JSON/esquema inválido, clave
+rechazada, cuota o timeout conservan texto/audio para reintentar. Reintentar
+audio reutiliza la transcripción y el archivo original. Pausar cancela la
+clasificación y conserva el pedido; cerrar descarta los datos no enviados.
+Editar durante una interpretación cancela ese trabajo y comienza el nuevo
+borrador. Ninguna respuesta de una sesión obsoleta ejecuta ni envía.
+
+La petición REST a `https://generativelanguage.googleapis.com/v1beta/decisions`
+tiene timeout total de 10 s, respuesta máxima de 64 KiB, no sigue redirecciones
+y no reintenta automáticamente. El nivel gratuito está sujeto a cuotas del
+proyecto y a términos sobre uso de contenido para mejorar productos de Google:
+[precios y condiciones](https://aistudio.google.com/docs/pricing#gemini-decision).
+La rapidez de las rutas locales se conserva; el fallback agrega una llamada de
+red. No se ha medido precisión ni latencia con el servicio real sin una clave.
 
 ### Pedidos disponibles
 
@@ -23,7 +66,7 @@ El upload usa HTTPS sin seguir redirecciones, un máximo conservador de 24 MiB p
 - `Prendé la linterna` / `apagá la linterna`: pide permiso de cámara cuando corresponda.
 - `Activá el wifi`, `abrí Bluetooth`, `abrí conectividad`: abre los ajustes que Android permite gestionar al usuario; no afirma haber cambiado un interruptor que no controla.
 
-La interpretación inicial usa una gramática explícita en español, sin un segundo LLM. No es control arbitrario de cualquier aplicación. Consultas como `explicame cómo funciona un cronómetro` van a Instinct. Los pedidos locales incompletos piden aclaración dentro del panel; se responden por el mismo micrófono o por texto. Los rechazos de Android conservan el pedido para un reintento explícito, sin repetir un despacho incierto. Las acciones locales funcionan sin contacto, WhatsApp ni Accesibilidad. Un teléfono bloqueado requiere desbloqueo.
+La interpretación inicial usa una gramática explícita en español; el híbrido opcional consulta Gemini Decisions en los casos no resueltos. No es control arbitrario de cualquier aplicación. Consultas como `explicame cómo funciona un cronómetro` van a Instinct. Los pedidos locales incompletos piden aclaración dentro del panel; se responden por el mismo micrófono o por texto. Los rechazos de Android conservan el pedido para un reintento explícito, sin repetir un despacho incierto. Las acciones locales funcionan sin contacto, WhatsApp ni Accesibilidad. Un teléfono bloqueado requiere desbloqueo.
 
 The normal assistant entrypoint always uses this panel, independent of legacy
 activation-mode preferences. Existing explicit Open Chat shortcuts and optional
@@ -210,3 +253,25 @@ Si falta una app receptora, el permiso o un dato, se conserva el pedido/audio y 
 - Suite completa `testDebugUnitTest`, sin exclusiones, intentada después de los cambios: bloqueada por `nativeruntime-dist-compat:1.0.18` (HTTP 403 del mirror de Maven), antes de ejecutar las pruebas.
 - Revisión independiente realizada. Se observaron fallar y luego pasar las regresiones de órdenes encadenadas, modo/restricción de ruta, deduplicación de nombres/números, duración de eventos con cláusulas no soportadas y respuestas negativas/condicionales a aclaraciones. Las búsquedas de contactos truncadas no permiten elegir implícitamente un número.
 - No hay dispositivo Android conectado: la ejecución y disponibilidad de apps nativas, diálogos de permiso y regreso real al floating requieren comprobación en el Motorola. No se afirma que la suite Android ni la validación física hayan pasado.
+
+
+### Verificación de la entrega 1.6.0
+
+- `assembleDebug`: correcto; versión 1.6.0, versionCode 10. Firma v2 y alineación
+  de 16 KiB verificadas. APK de prueba firmado con una clave local nueva, excluida
+  de Git. Para actualizar una instalación con otra firma hay que volver a firmar
+  con su clave original; no se verificó compatibilidad con el certificado previo.
+- Todos los fuentes de pruebas Android y JVM compilan, incluidas seis pruebas
+  nuevas de sesiones híbridas y la edición del floating durante una decisión.
+- 87 pruebas JVM en 14 clases: cero fallos. Se ejecutaron en Gradle con un init
+  script externo que configura proxy/CA y excluye únicamente
+  `org.robolectric:nativeruntime-dist-compat:1.0.18`, inaccesible. No se cambiaron
+  las dependencias del proyecto. Incluye 11 pruebas nuevas de política/HTTP,
+  cancelación del cliente y regresiones existentes de acciones, voz y WhatsApp.
+- Suite completa intentada sin exclusiones: bloqueada al descargar ese artefacto
+  nativo por HTTP 403. `FloatingHybridRoutingTest` (SDK 28) y `FloatingOverlayTest`
+  (SDK 36) también se intentaron: sus runtimes `android-all-instrumented` dieron
+  HTTP 403 durante inicialización. Sus assertions **no se ejecutaron**.
+- Revisión independiente de código y del ajuste de edición: sin hallazgos
+  materiales. No hay teléfono conectado ni clave Gemini en este entorno:
+  comportamiento/latencia del proveedor y flujos físicos siguen pendientes.
