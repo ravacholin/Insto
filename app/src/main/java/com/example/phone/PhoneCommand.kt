@@ -2,8 +2,13 @@ package com.example.phone
 
 enum class StopwatchOp { START, PAUSE, RESUME, RESET, STATUS }
 enum class TravelMode { DRIVING, WALKING, BICYCLING, TRANSIT }
+enum class MediaOp { PLAY, PAUSE, NEXT, PREVIOUS, STATUS }
+enum class ModeKind { MEDIA_VOLUME, SILENT, DND }
 enum class VolumeOp { UP, DOWN, SET }
 sealed interface PhoneCommand {
+  data class Media(val operation: MediaOp, val packageName: String? = null) : PhoneCommand
+  data class TemporaryMode(val kind: ModeKind, val seconds: Int, val percent: Int = 0, val approximate: Boolean = false) : PhoneCommand
+  data object EndMode : PhoneCommand
   data class Navigate(val destination: String, val mode: TravelMode = TravelMode.DRIVING) : PhoneCommand
   data class MapSearch(val query: String) : PhoneCommand
   data class SavePlace(val alias: String, val address: String) : PhoneCommand

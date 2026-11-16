@@ -1,0 +1,134 @@
+package com.example.phone
+
+import java.util.Calendar
+
+sealed interface ConversationResult {
+  data object Pass : ConversationResult
+  data class Prompt(val message: String) : ConversationResult
+  data class Plan(val commands: List<PhoneCommand>) : ConversationResult
+}
+
+/** Session-only drafts. Nothing here performs Android side effects. */
+class ConversationSession(private val now: () -> Calendar = { Calendar.getInstance() }) {
+  private val parser = PhoneCommandParser(now)
+  private var calendarDraft: CalendarDraft? = null
+  private var pending: String? = null
+  private var lastPlan: List<PhoneCommand>? = null
+  fun clear() { calendarDraft = null; pending = null; lastPlan = null }
+
+  fun accept(text: String): ConversationResult {
+    val normalized = PhoneCommandParser.normalize(text)
+    if (normalized in listOf("cancelar", "cancela", "no", "dejalo", "olvidalo")) {
+      val active = calendarDraft != null || pending != null || lastPlan != null
+      clear()
+      return if (active) ConversationResult.Prompt("Pedido cancelado.") else ConversationResult.Pass
+    }
+    if (Regex("\\b(?:si|cuando|hasta que|a menos que)\\b").containsMatchIn(normalized) && looksLikeRequest(normalized)) {
+      return ConversationResult.Prompt("Todavía no ejecuto condiciones. Pedime los pasos para hacer ahora.")
+    }
+    val parts = splitSteps(text)
+    if (parts.size > 1) {
+      clear()
+      if (parts.size > 10) return ConversationResult.Prompt("Podés pedir hasta diez pasos por vez.")
+      val commands = parts.map { part -> (parser.parse(part) as? PhoneRoute.Local)?.command }
+      if (commands.any { it == null }) return ConversationResult.Prompt("No entendí todos los pasos. Completá cada acción; todavía no ejecuté ninguna.")
+      val plan = commands.filterNotNull()
+      lastPlan = plan
+      return ConversationResult.Plan(plan)
+    }
+    val isCalendar = Regex("^(?:agenda|agendar|agendame|programa|crea (?:un )?evento)\\b").containsMatchIn(normalized)
+    val correcting = Regex("^(?:mejor|cambia|cambialo|que dure|durante|a las?|de la|en vez|para |el |hoy|manana|pasado manana)").containsMatchIn(normalized)
+    if (isCalendar || calendarDraft != null && correcting) return calendar(text, isCalendar)
+    if (normalized.startsWith("mejor ") && lastPlan?.size == 1) {
+      val command = lastPlan!!.single()
+      val reply = normalized.removePrefix("mejor ")
+      val context = when (command) {
+        is PhoneCommand.Navigate -> "navigate"
+        is PhoneCommand.Volume -> "volume"
+        is PhoneCommand.Timer -> "timer"
+        else -> null
+      }
+      if (context != null) {
+        val route = if (command is PhoneCommand.Navigate && reply in listOf("a pie", "en auto", "en bici", "en transporte publico"))
+          parser.parse("llevame a ${command.destination} $reply") else parser.parseReply(context, reply)
+        if (route is PhoneRoute.Local) return ConversationResult.Plan(listOf(route.command)).also { lastPlan = it.commands }
+        return ConversationResult.Prompt("Indicá la corrección completa de ese paso.")
+      }
+    }
+    pending?.let { context ->
+      when (val route = parser.parseReply(context, text)) {
+        is PhoneRoute.Local -> { pending = null; return ConversationResult.Plan(listOf(route.command)).also { lastPlan = it.commands } }
+        is PhoneRoute.Clarify -> return ConversationResult.Prompt(route.prompt)
+        is PhoneRoute.Unsupported -> return ConversationResult.Prompt(route.message)
+        else -> Unit
+      }
+    }
+    when (val route = parser.parse(text)) {
+      is PhoneRoute.Clarify -> { pending = route.context; return ConversationResult.Prompt(route.prompt) }
+      is PhoneRoute.Local -> { clear(); return ConversationResult.Pass }
+      else -> Unit
+    }
+    return ConversationResult.Pass
+  }
+
+  private data class CalendarDraft(var title: String = "", var date: String = "", var time: String = "", var duration: String = "una hora")
+  private fun calendar(input: String, fresh: Boolean): ConversationResult {
+    val raw = input.trim().trimEnd('.', '!', '?')
+    val folded = FoldedRequest.of(raw)
+    if (fresh) { clear(); calendarDraft = CalendarDraft() }
+    val draft = calendarDraft ?: return ConversationResult.Pass
+    val date = Regex("\\b(pasado manana|manana|hoy|(?:el )?[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?)\\b").find(folded.text)
+    if (date != null) draft.date = date.value
+    if (fresh) {
+      val head = Regex("^(?:agenda|agendar|agendame|programa|crea (?:un )?evento)\\s+").find(folded.text)
+      if (head != null) {
+        val end = date?.range?.first ?: folded.text.length
+        draft.title = raw.substring(head.range.last + 1, end).trim().trim('"', '“', '”')
+      }
+    }
+    val duration = Regex("(?:que dure |durante |y (?:que dure )?)(media hora|[a-z0-9]+(?: y [a-z]+)? (?:horas?|minutos?))$").find(folded.text)
+    if (duration != null) draft.duration = if (duration.groupValues[1] == "media hora") "treinta minutos" else duration.groupValues[1]
+    val time = Regex("(?:a las? |^mejor (?:a las? )?)([a-z0-9]+(?::[0-9]{2}| y (?:media|cuarto|[a-z]+))?(?: de la (?:manana|tarde|noche)| am| pm| horas)?)").find(folded.text)
+    if (time != null) draft.time = time.groupValues[1]
+    if (time == null && Regex("^de la (?:manana|tarde|noche)$").matches(folded.text) && draft.time.isNotBlank()) {
+      draft.time = draft.time.substringBefore(" de la ") + " " + folded.text
+    }
+    if (draft.title.isBlank()) return ConversationResult.Prompt("¿Qué título le pongo al evento?")
+    if (draft.date.isBlank()) return ConversationResult.Prompt("¿Qué día? Podés decir mañana o una fecha completa.")
+    if (draft.time.isBlank()) return ConversationResult.Prompt("¿A qué hora? Conservé el título y la fecha.")
+    // CalendarRequestParser validates the full date/time, DST and duration before a plan is offered.
+    val route = parser.parse("agendá \"${draft.title}\" ${draft.date} a las ${draft.time} durante ${draft.duration}")
+    return when (route) {
+      is PhoneRoute.Local -> ConversationResult.Plan(listOf((route.command as PhoneCommand.CalendarEvent).copy(title = draft.title))).also { lastPlan = it.commands }
+      is PhoneRoute.Clarify -> ConversationResult.Prompt("¿De la mañana o de la tarde? Conservé los demás datos.")
+      is PhoneRoute.Unsupported -> ConversationResult.Prompt(route.message)
+      else -> ConversationResult.Prompt("Completá la fecha y hora del evento.")
+    }
+  }
+
+  companion object {
+    private fun looksLikeRequest(s: String) = Regex("\\b(?:prende|apaga|pone|baja|subi|abri|agenda|llama|lleva|inicia)").containsMatchIn(s)
+    /** Split only structural separators outside quotes. An unknown second step remains visible and rejects the plan. */
+    fun splitSteps(input: String): List<String> {
+      val masked = StringBuilder(input)
+      var quoted = false
+      input.forEachIndexed { i, c ->
+        if (c in "\"“”") quoted = !quoted
+        if (quoted || c in "\"“”") masked.setCharAt(i, '_')
+      }
+      val syntax = masked.toString()
+      val separators = Regex("\\s*[,;]\\s*|\\s+(?:y después|y despues|y luego|después|despues|luego|y)\\s+", RegexOption.IGNORE_CASE)
+      // 'y' within quantities, titles and a time is not a separator unless followed by a command-like verb.
+      val verbs = Regex("^(?:pone|poneme|pon|baja|subi|abri|prende|enciende|encende|apaga|inicia|pausa|continua|reinicia|lleva|llevame|llama|agenda|busca|reproduci|compra|envia|borra|activa|desactiva|silencia|mostra|cancela)\\b")
+      val boundaries = separators.findAll(input).filter { m ->
+        ';' in m.value || verbs.containsMatchIn(PhoneCommandParser.normalize(input.substring(m.range.last + 1)))
+      }.filter { m -> syntax.getOrNull(m.range.first) != '_' }.toList()
+      if (boundaries.isEmpty()) return listOf(input)
+      val result = mutableListOf<String>()
+      var start = 0
+      for (m in boundaries) { result += input.substring(start, m.range.first).trim(); start = m.range.last + 1 }
+      result += input.substring(start).trim()
+      return result
+    }
+  }
+}
