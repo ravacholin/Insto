@@ -45,6 +45,13 @@ class PhoneCommandParserTest {
     assertTrue(parser.parse("cancelá el timer de fideos") is PhoneRoute.Unsupported)
     assertEquals(PhoneRoute.Local(PhoneCommand.Settings("wifi")), parser.parse("activá el wifi"))
   }
+  @Test fun naturalFlashlightCommandsStayLocal() {
+    for (text in listOf("encender la linterna", "enciende la linterna", "encendé la linterna", "encendeme la linterna", "¿Podés encender la linterna?", "Por favor, enciende la linterna.")) {
+      assertEquals(text, PhoneRoute.Local(PhoneCommand.Torch(true)), parser.parse(text))
+    }
+    assertEquals(PhoneRoute.Local(PhoneCommand.Torch(false)), parser.parse("¿Podés apagar la linterna?"))
+    assertFalse(parser.parse("necesito que enciendas la linterna") == PhoneRoute.Instinct)
+  }
   @Test fun clarificationAndCancellation() {
     assertEquals(PhoneRoute.Local(PhoneCommand.Timer(180, "")), parser.parseReply("timer", "tres minutos"))
     assertEquals(PhoneRoute.Local(PhoneCommand.Torch(false)), parser.parseReply("alarm", "apagá la linterna"))

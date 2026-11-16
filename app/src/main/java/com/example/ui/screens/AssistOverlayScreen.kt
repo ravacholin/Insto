@@ -104,7 +104,7 @@ fun AssistOverlayScreen(
           Column(Modifier.weight(1f)) {
             Text("Teléfono + ${state.contactName}", fontWeight = FontWeight.Bold,
               style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("DESTINO AUTOMÁTICO", color = secondary,
+            Text("DESTINO AUTOMÁTICO · ${com.example.BuildConfig.VERSION_NAME}", color = secondary,
               style = MaterialTheme.typography.labelSmall)
           }
           TextButton(onClick = onConfigureGroq, enabled = !busy) { Text("Groq", color = secondary) }

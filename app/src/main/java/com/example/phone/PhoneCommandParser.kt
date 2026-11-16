@@ -23,6 +23,7 @@ class PhoneCommandParser {
 
   fun parse(text: String): PhoneRoute {
     val s = normalize(text).removePrefix("por favor ").removeSuffix(" por favor").trim()
+      .replace(Regex("^(?:podes|puedes|podrias) (?:por favor )?"), "")
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel
     if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |explica|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
     val commandPrefix = "(?:(?:me pones|poneme|ponme|pone|pon|poner|quiero|necesito|configura|crea|crear|programa|programar|inicia|iniciar|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"
@@ -59,8 +60,8 @@ class PhoneCommandParser {
       "ver", "mostra", "consulta", "" -> StopwatchOp.STATUS
       else -> StopwatchOp.START
     }))
-    val torch = Regex("^(prende|prender|encende|encender|activa|activar|apaga|apagar|desactiva) (?:la )?linterna$").matchEntire(s)
-    if (torch != null) return PhoneRoute.Local(PhoneCommand.Torch(torch.groupValues[1] !in listOf("apaga", "apagar", "desactiva")))
+    val torch = Regex("^(prende|prender|prendeme|enciende|encende|encender|encendeme|activa|activar|apaga|apagar|apagame|desactiva|desactivar) (?:la )?linterna$").matchEntire(s)
+    if (torch != null) return PhoneRoute.Local(PhoneCommand.Torch(torch.groupValues[1] !in listOf("apaga", "apagar", "apagame", "desactiva", "desactivar")))
     if (Regex("^(subi|subir|sube|aumenta) (?:el )?volumen$").matches(s)) return PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.UP))
     if (Regex("^(baja|bajar) (?:el )?volumen$").matches(s)) return PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.DOWN))
     val volume = Regex("^(?:pone|pon|fija|ajusta) (?:el )?volumen (?:al? )?(.+?)(?: por ciento|%)?$").matchEntire(s)
@@ -76,6 +77,9 @@ class PhoneCommandParser {
     // Recognized requests outside our executor must never silently become a message to Instinct.
     if (Regex("^(?:cancela|cancelar|elimina|borra|pausa|pausar|reinicia|desactiva|cambia|modifica|apaga|pone|pon|activa|prende|enciende|inicia|crea|programa)\\b.*\\b(?:alarmas?|timers?|temporizador(?:es)?|cronometro|linterna|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
       return PhoneRoute.Unsupported("Ese pedido del teléfono todavía no está disponible. Podés abrir el Reloj o los ajustes para completarlo.")
+    }
+    if (Regex("^(?:necesito|quiero|me|pone|pon|encende|encender|enciende|prende|prender|apaga|apagar|activa|activar|inicia|iniciar|configura)\\b.*\\b(?:linterna|alarma|timer|temporizador|cronometro|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
+      return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.")
     }
     return PhoneRoute.Instinct
   }

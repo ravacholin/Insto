@@ -27,7 +27,7 @@ La interpretación inicial usa una gramática explícita en español, sin un seg
 
 The normal assistant entrypoint always uses this panel, independent of legacy
 activation-mode preferences. Existing explicit Open Chat shortcuts and optional
-volume-key/legacy home-screen recording controls remain available.
+volume-key and floating-pill activations now open the same interpreting panel. Legacy home-screen recording controls remain available.
 
 ## WhatsApp integration limits
 
@@ -52,8 +52,7 @@ and reports that problem instead of silently opening a manual draft. Timeout
 feedback says which verification failed. No notification is required. No ADB,
 Shizuku, WhatsApp Business account, or notification-listener permission is added.
 
-Audio still requires a matching phone header and unique attachment filename to
-automatically click Send; previews that hide those fields remain manual. A
+Audio accepts the configured saved contact name only after this request’s successful targeted share launch. It verifies the unique recording filename when exposed. When WhatsApp hides it, only a fresh `.AudioPreviewActivity` window observed after that committed share can authorize the generated `instinct_*.m4a`, with a matching recipient and no caption/draft; old or other windows cannot authorize it. Send uses the same one-touch gesture as text and checks return to the empty chat composer. An unavailable/disconnected Accessibility service retains the floating recording instead of opening a manual share. A
 timeout hint asks the user to check WhatsApp; uncertain sends are never repeated.
 If Accessibility is disabled, the panel provides an explicit setup button.
 The handset test is required before claiming fully automatic delivery for its
@@ -108,3 +107,11 @@ WhatsApp version's accessibility tree before asserting automatic confirmation.
 - Pruebas de Robolectric de las acciones nuevas y enrutamiento: fuentes compiladas; ejecución bloqueada también al descargar `android-all-instrumented:9-robolectric-4913185-2-i7`. No se presentan como aprobadas.
 - La ejecución de pruebas JVM puras usa un init script temporal que excluye solo el runtime nativo inaccesible; no se elimina ninguna dependencia del proyecto. Resultado: 30 pruebas aprobadas (6 intérprete, 5 Groq, 4 cronómetro y 15 regresiones existentes).
 - Falta validación real con clave Groq y dispositivo Android: grabación → transcripción → acción local o WhatsApp original, permisos de linterna, Reloj instalado, bloqueo, interrupciones y retorno de configuración. No se usaron credenciales del usuario ni se hicieron llamadas reales a Groq.
+
+## Corrección 1.4.1: burbuja y envío de audio
+
+El usuario confirmó que grababa desde la burbuja. Se encontró que ese disparador conservaba una captura/envío directo a WhatsApp, fuera del flujo de interpretación. Ahora tocar o mantener la burbuja, y mantener la tecla de volumen configurada, abren `AssistActivity`; ese servicio ya no captura ni despacha archivos por su cuenta. La burbuja también puede aparecer sin contacto configurado para acciones locales.
+
+El audio tenía otra diferencia con el texto: no registraba un lanzamiento dirigido exitoso, rechazaba el nombre guardado del destinatario y dependía de ACTION_CLICK. Ahora registra el lanzamiento de la solicitud actual, verifica destinatario/archivo o nueva ventana AudioPreview de esa misma solicitud, sondea la ventana correcta y utiliza un único gesto real. No reintenta un toque incierto. Se agregaron variantes naturales de linterna (`enciende`, `encendeme`, `podés encender`) y se evita mandar a Instinct pedidos locales incompletamente entendidos.
+
+Versión visible 1.4.1, versionCode 5. APK y fuentes de pruebas Android compiladas; 33 pruebas JVM aprobadas. Las pruebas Android de entrada por burbuja, servicio desconectado y lanzamiento de audio están escritas pero su ejecución sigue bloqueada por dependencias de Robolectric. El comportamiento en WhatsApp real no se afirma como validado sin el dispositivo.

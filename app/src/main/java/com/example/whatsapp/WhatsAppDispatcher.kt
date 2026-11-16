@@ -282,7 +282,10 @@ object WhatsAppDispatcher {
         ?: return DispatchResult.Error("Audio file is empty or phone number is invalid.")
 
     val targetPkg = sendIntent.`package`
-    val shouldArm = targetPkg != null && isAutoSendServiceEnabled
+    val shouldArm = targetPkg != null && isAutoSendServiceEnabled && PingAutoSendAccessibilityService.isConnected()
+    if (recipientName != null && !shouldArm) {
+      return DispatchResult.Error("Activá y conectá Accesibilidad de PingAssist para enviar el audio automáticamente. La grabación se conserva.")
+    }
 
     if (shouldArm && targetPkg != null) {
       AutoSendCoordinator.arm(
@@ -297,9 +300,14 @@ object WhatsAppDispatcher {
       scheduleManualSendHint(context, targetPkg)
     }
 
+    val request = AutoSendCoordinator.requestId
     return runCatching {
         if (targetPkg != null) {
           context.startActivity(sendIntent)
+          if (shouldArm && recipientName != null) {
+            AutoSendCoordinator.markShareLaunchCommitted(request)
+            PingAutoSendAccessibilityService.requestShareSend(targetPkg, request)
+          }
           DispatchResult.AudioDispatched(
             usedPackage = targetPkg,
             autoSendArmed = shouldArm,
@@ -358,7 +366,12 @@ object WhatsAppDispatcher {
     }
     return runCatching {
       context.startActivity(intent)
-      if (autoSend) scheduleManualSendHint(context, pkg)
+      if (autoSend) {
+        val request = AutoSendCoordinator.requestId
+        AutoSendCoordinator.markShareLaunchCommitted(request)
+        PingAutoSendAccessibilityService.requestShareSend(pkg, request)
+        scheduleManualSendHint(context, pkg)
+      }
       DispatchResult.AudioDispatched(pkg, autoSend, false)
     }.getOrElse {
       if (autoSend) AutoSendCoordinator.disarm()

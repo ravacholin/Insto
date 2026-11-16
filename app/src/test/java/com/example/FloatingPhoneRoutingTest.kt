@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.net.Uri
+import com.example.testsupport.ConnectedAccessibility
 import com.example.data.AssistantPreferencesRepository
 import org.robolectric.Shadows.shadowOf
 import org.junit.Before
@@ -35,6 +36,7 @@ class FloatingPhoneRoutingTest {
     val app = ApplicationProvider.getApplicationContext<Application>()
     val dir = File(app.cacheDir, "voice_notes").apply { mkdirs() }
     val audio = File.createTempFile("route-audio", ".m4a", dir).apply { writeText("original-audio-bytes") }
+    val disconnect = ConnectedAccessibility.start(app)
     try {
       withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
       shadowOf(app.packageManager).installPackage(PackageInfo().apply {
@@ -57,7 +59,7 @@ class FloatingPhoneRoutingTest {
       runCurrent()
       assertEquals(1, dispatched)
       vm.dismissFloatingAssistant()
-    } finally { audio.delete(); Dispatchers.resetMain() }
+    } finally { disconnect(); audio.delete(); Dispatchers.resetMain() }
   }
 
   private class Capture(val file: File) : FloatingAudioCapture {

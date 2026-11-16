@@ -494,7 +494,7 @@ class MainViewModel @JvmOverloads constructor(
         PingAutoSendAccessibilityService.isEnabled(getApplication()), boomerangReturn = true,
         mimeType = audio.mimeType, recipientName = contact.displayName, returnPackage = floatingReturnPackage)
       if (result is DispatchResult.Error) {
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, error = result.message)
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, error = result.message, needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
       } else {
         pendingFloatingAudio = null // FileProvider/WhatsApp owns the shared file from here.
         onDispatched()

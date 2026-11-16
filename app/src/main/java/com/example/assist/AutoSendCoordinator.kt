@@ -21,6 +21,12 @@ object AutoSendCoordinator {
 
   @Volatile var textLaunchCommittedRequestId: Long = -1
     private set
+  @Volatile var shareLaunchCommittedRequestId: Long = -1
+    private set
+  @Volatile var audioPreviewRequestId: Long = -1
+    private set
+  @Volatile var audioPreviewWindowId: Int = -1
+    private set
   @Volatile var textWaitReason: String = "Esperando el chat de WhatsApp."
 
   private const val DEFAULT_ARM_WINDOW_MS = 10_000L
@@ -62,6 +68,9 @@ object AutoSendCoordinator {
   ) {
     requestId++
     textLaunchCommittedRequestId = -1
+    shareLaunchCommittedRequestId = -1
+    audioPreviewRequestId = -1
+    audioPreviewWindowId = -1
     textWaitReason = "Esperando el chat de WhatsApp."
     armedAtUptimeMs = SystemClock.uptimeMillis()
     this.recipientName = recipientName
@@ -78,6 +87,18 @@ object AutoSendCoordinator {
 
   fun markTextLaunchCommitted(request: Long) {
     if (requestId == request && expectedText != null) textLaunchCommittedRequestId = request
+  }
+
+  fun markShareLaunchCommitted(request: Long) {
+    if (requestId == request && expectedAudioFileName != null) shareLaunchCommittedRequestId = request
+  }
+
+  fun observeAudioPreview(packageName: String, className: String?, eventTime: Long, windowId: Int) {
+    if (!isArmedFor(packageName) || shareLaunchCommittedRequestId != requestId ||
+      eventTime < armedAtUptimeMs || windowId < 0 ||
+      className?.endsWith(".AudioPreviewActivity") != true) return
+    audioPreviewRequestId = requestId
+    audioPreviewWindowId = windowId
   }
 
   fun isArmedFor(packageName: String?): Boolean {
@@ -110,6 +131,9 @@ object AutoSendCoordinator {
     expectedAttachmentCaption = null
     expectedText = null
     textLaunchCommittedRequestId = -1
+    shareLaunchCommittedRequestId = -1
+    audioPreviewRequestId = -1
+    audioPreviewWindowId = -1
     expectedAudioFileName = null
   }
 }
