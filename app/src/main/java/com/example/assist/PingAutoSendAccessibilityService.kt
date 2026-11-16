@@ -62,7 +62,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   private var autoSendPoll: Runnable? = null
   private var pollingRequestId = -1L
   private var textAttempt: TextSendAttempt? = null
-  private var shareAttempt: TextSendAttempt? = null
+  private var shareAttempt: ShareSendAttempt? = null
 
 
   private lateinit var repository: AssistantPreferencesRepository
@@ -129,7 +129,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     if (!AutoSendCoordinator.isArmedFor(pkg)) return
 
     if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && AutoSendCoordinator.expectedAudioFileName != null) {
-      AutoSendCoordinator.observeAudioPreview(pkg, event.className?.toString(), event.eventTime, event.windowId)
+      AutoSendCoordinator.observeShareWindow(pkg, event.className?.toString(), event.eventTime, event.windowId)
     }
     if (AutoSendCoordinator.expectedText != null || AutoSendCoordinator.expectedAudioFileName != null) return // Explicit successful launches drive polling.
     val root = rootInActiveWindow ?: return
@@ -168,7 +168,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     if (pollingRequestId == request) return
     autoSendPoll?.let { mainHandler.removeCallbacks(it) }
     pollingRequestId = request
-    shareAttempt = TextSendAttempt(request)
+    shareAttempt = ShareSendAttempt(request)
     val poll = object : Runnable {
       override fun run() {
         if (AutoSendCoordinator.requestId != request || !AutoSendCoordinator.isArmedFor(pkg)) return
@@ -368,6 +368,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
 
   private fun handleAutoClickSend(root: AccessibilityNodeInfo, pkg: String) {
     val request = AutoSendCoordinator.requestId
+    if (trySharePositiveStep(root, pkg, request)) return
     if (!matchesArmedRecipient(root, pkg)) {
       AutoSendCoordinator.textWaitReason = "El nombre o número del destinatario del audio no coincide con Instinct."
       return
@@ -410,28 +411,154 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     if (sendNode == null) { AutoSendCoordinator.textWaitReason = "No se encontró el botón Enviar del audio."; return }
     val bounds = Rect()
     sendNode.getBoundsInScreen(bounds)
+    val surface = "${sendNode.viewIdResourceName}|${sendNode.text?.toString()?.takeIf { it.isNotBlank() } ?: sendNode.contentDescription?.toString()}"
     sendNode.recycle()
     if (!bounds.intersect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels) || bounds.width() < 8 || bounds.height() < 8) return
-    if (fileName != null && shareAttempt?.beginTouch(request, true, true, true) != true) return
+    touchFinalShareSend(bounds, pkg, request, root.windowId, surface)
+  }
+
+  private fun touchFinalShareSend(bounds: Rect, pkg: String, request: Long, window: Int, surface: String) {
+    if (AutoSendCoordinator.expectedAudioFileName != null) {
+      val attempt = shareAttempt?.takeIf { it.requestId == request } ?: return
+      if (attempt.hasConfirmed && !attempt.isPostConfirmationSurface(window, surface)) return
+      if (!attempt.beginSend(request, true, true, true, window, surface)) return
+    }
+    val fileName = AutoSendCoordinator.expectedAudioFileName
+    val keepUntilSubmitted = fileName?.startsWith("instinct_") == true && fileName.endsWith(".m4a")
     val phone = AutoSendCoordinator.recipientPhone
     val name = AutoSendCoordinator.recipientName
-    val boomerang = AutoSendCoordinator.shouldBoomerangReturn()
-    val returnPkg = AutoSendCoordinator.consumeReturnPackage()
-    AutoSendCoordinator.disarm()
-    // Match the working text path: real touch, including controls without ACTION_CLICK.
+    val boomerang = if (!keepUntilSubmitted) AutoSendCoordinator.shouldBoomerangReturn() else false
+    val returnPkg = if (!keepUntilSubmitted) AutoSendCoordinator.consumeReturnPackage() else null
+    if (!keepUntilSubmitted) AutoSendCoordinator.disarm()
     val path = Path().apply { moveTo(bounds.exactCenterX(), bounds.exactCenterY()) }
     val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 70)).build()
     val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
       override fun onCompleted(gestureDescription: GestureDescription?) {
-        if (phone != null) confirmShareSubmitted(pkg, request, phone, name, boomerang, returnPkg)
+        if (keepUntilSubmitted) {
+          if (AutoSendCoordinator.requestId == request && AutoSendCoordinator.isArmedFor(pkg)) shareAttempt?.sendCompleted(request)
+        } else if (phone != null) confirmShareSubmitted(pkg, request, phone, name, boomerang, returnPkg)
         else {
           EyesFreeFeedbackManager.playSentCue(this@PingAutoSendAccessibilityService, cachedPrefs.eyesFreeAudioCues)
           if (boomerang) scheduleBoomerangReturn(returnPkg)
         }
       }
-      override fun onCancelled(gestureDescription: GestureDescription?) { showUnconfirmedTextHint() }
+      override fun onCancelled(gestureDescription: GestureDescription?) {
+        if (AutoSendCoordinator.requestId != request) return
+        AutoSendCoordinator.disarm()
+        showUnconfirmedTextHint()
+      }
     }, mainHandler)
-    if (!accepted) showUnconfirmedTextHint()
+    if (!accepted && AutoSendCoordinator.requestId == request) { AutoSendCoordinator.disarm(); showUnconfirmedTextHint() }
+  }
+
+  private data class ShareUiEvidence(val labels: List<String>, val hasAudioControls: Boolean)
+
+  private fun collectShareUi(root: AccessibilityNodeInfo): ShareUiEvidence {
+    val labels = mutableListOf<String>()
+    var audioControls = false
+    var visited = 0
+    fun walk(node: AccessibilityNodeInfo, depth: Int) {
+      if (visited++ >= 800 || depth > 28) return
+      if (node.isVisibleToUser) {
+        node.text?.toString()?.take(512)?.let { labels.add(it) }
+        node.contentDescription?.toString()?.take(512)?.let { labels.add(it) }
+        val id = node.viewIdResourceName.orEmpty().lowercase(java.util.Locale.ROOT)
+        if (listOf("audio", "waveform", "seekbar", "play_button", "play_btn").any { id.contains(it) }) audioControls = true
+        val controlLabel = (node.contentDescription?.toString() ?: node.text?.toString()).orEmpty().lowercase(java.util.Locale.ROOT).trim()
+        if ((node.isClickable || node.className?.toString()?.endsWith("Button") == true) && controlLabel in
+          listOf("reproducir", "play", "pausar", "pause", "reproducir audio", "play audio")) audioControls = true
+      }
+      for (i in 0 until node.childCount) {
+        val child = node.getChild(i) ?: continue
+        try { walk(child, depth + 1) } finally { child.recycle() }
+      }
+    }
+    walk(root, 0)
+    return ShareUiEvidence(labels, audioControls)
+  }
+
+  private fun findSharePositiveButton(root: AccessibilityNodeInfo, pkg: String): AccessibilityNodeInfo? {
+    val ids = listOf("android:id/button1", "$pkg:id/confirm", "$pkg:id/confirm_button", "$pkg:id/ok",
+      "$pkg:id/ok_button", "$pkg:id/positive_button", "$pkg:id/dialog_positive_button",
+      "$pkg:id/send", "$pkg:id/send_button", "$pkg:id/send_btn", "$pkg:id/media_caption_send_btn")
+    for (id in ids) {
+      val nodes = root.findAccessibilityNodeInfosByViewId(id)
+      val node = nodes.firstOrNull { it.isVisibleToUser && it.isEnabled }
+      val result = node?.let { AccessibilityNodeInfo.obtain(it) }
+      nodes.forEach { it.recycle() }
+      if (result != null) return result
+    }
+    return null
+  }
+
+  /** OK/Accept is part of this share, not a reason to disarm before WhatsApp's final Send. */
+  private fun trySharePositiveStep(root: AccessibilityNodeInfo, pkg: String, request: Long): Boolean {
+    val attempt = shareAttempt ?: return false
+    val file = AutoSendCoordinator.expectedAudioFileName ?: return false
+    if (!file.startsWith("instinct_") || !file.endsWith(".m4a")) return false
+    if (attempt.stepInFlight) return true
+    val chatCandidate = attempt.hasCompletedStep && shareSubmittedInChat(root, pkg)
+    if (attempt.observeSubmittedChat(root.windowId, SystemClock.elapsedRealtime(), chatCandidate)) {
+      val boomerang = AutoSendCoordinator.shouldBoomerangReturn()
+      val returnPkg = AutoSendCoordinator.consumeReturnPackage()
+      AutoSendCoordinator.disarm()
+      EyesFreeFeedbackManager.playSentCue(this, cachedPrefs.eyesFreeAudioCues)
+      if (boomerang) scheduleBoomerangReturn(returnPkg)
+      return true
+    }
+    if (chatCandidate) return true // Let the chat settle; inline chat buttons are not share confirmations.
+    val positive = findSharePositiveButton(root, pkg) ?: return false
+    val label = positive.text?.toString()?.takeIf { it.isNotBlank() } ?: positive.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+      ?: if (positive.viewIdResourceName?.contains("send") == true) "Enviar" else null
+    val surface = "${positive.viewIdResourceName}|$label"
+    val postConfirmation = attempt.isPostConfirmationSurface(root.windowId, surface)
+    val postSend = attempt.isPostSendSurface(root.windowId, surface)
+    val evidence = collectShareUi(root)
+    val composer = findTextComposer(root, pkg, "")
+    val composerText = composer?.text?.toString()
+    composer?.recycle()
+    val allowed = ShareConfirmationPolicy.canConfirm(request, AutoSendCoordinator.shareLaunchCommittedRequestId,
+      AutoSendCoordinator.isFreshShareWindow(request, root.windowId) || evidence.labels.any { it == file } || postConfirmation || postSend,
+      file, AutoSendCoordinator.expectedAttachmentCaption, composerText, AutoSendCoordinator.recipientName,
+      AutoSendCoordinator.recipientPhone.orEmpty(), evidence.labels, label, evidence.hasAudioControls,
+      recipientPreviouslyVerified = postConfirmation || postSend)
+    val bounds = Rect()
+    positive.getBoundsInScreen(bounds)
+    positive.recycle()
+    if (!allowed) return false
+    if (!bounds.intersect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels) || bounds.width() < 8 || bounds.height() < 8) return true
+    if (attempt.hasConfirmed && !postConfirmation) return true // Same old confirmation still on screen.
+    if (!ShareConfirmationPolicy.isConfirmationLabel(label)) {
+      touchFinalShareSend(bounds, pkg, request, root.windowId, surface)
+      return true
+    }
+    if (!attempt.beginConfirmation(request, root.windowId, true, surface)) return true
+    val path = Path().apply { moveTo(bounds.exactCenterX(), bounds.exactCenterY()) }
+    val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 70)).build()
+    val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
+      override fun onCompleted(gestureDescription: GestureDescription?) {
+        if (AutoSendCoordinator.requestId == request && AutoSendCoordinator.isArmedFor(pkg)) attempt.confirmationCompleted(request)
+      }
+      override fun onCancelled(gestureDescription: GestureDescription?) {
+        if (AutoSendCoordinator.requestId == request) AutoSendCoordinator.disarm()
+        showUnconfirmedTextHint()
+      }
+    }, mainHandler)
+    if (!accepted) { AutoSendCoordinator.disarm(); showUnconfirmedTextHint() }
+    return true
+  }
+
+  private fun shareSubmittedInChat(root: AccessibilityNodeInfo, pkg: String): Boolean {
+    val phone = AutoSendCoordinator.recipientPhone ?: return false
+    if (!matchesRecipient(root, pkg, phone, AutoSendCoordinator.recipientName, true)) return false
+    val composer = findTextComposer(root, pkg, "")
+    val send = findTextSendTarget(root, pkg)
+    val chatMic = findNativeVoiceMicNode(root, pkg)
+    val submitted = composer != null && composer.text.isNullOrEmpty() && send == null && chatMic != null
+    composer?.recycle()
+    send?.recycle()
+    chatMic?.recycle()
+    return submitted
   }
 
   private fun confirmShareSubmitted(pkg: String, request: Long, phone: String, name: String?, boomerang: Boolean, returnPkg: String?) {

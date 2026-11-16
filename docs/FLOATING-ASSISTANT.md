@@ -117,3 +117,15 @@ El audio tenía otra diferencia con el texto: no registraba un lanzamiento dirig
 Versión visible 1.4.1, versionCode 5. APK y fuentes de pruebas Android compiladas; 34 pruebas JVM aprobadas. Las pruebas Android de entrada por burbuja, servicio desconectado y lanzamiento de audio están escritas pero su ejecución sigue bloqueada por dependencias de Robolectric. El comportamiento en WhatsApp real no se afirma como validado sin el dispositivo.
 
 La revisión de 1.4.1 exigió guardar las ventanas anteriores al lanzamiento y su hora de finalización: eventos encolados anteriores o ventanas preexistentes no autorizan la alternativa sin nombre de archivo. Si no hay evidencia suficiente se conserva la verificación exacta del archivo.
+
+## Corrección 1.4.2: confirmación de WhatsApp dentro del mismo envío
+
+El paso positivo de audio admite OK/Aceptar/Listo además de Enviar, con evidencia de la solicitud propia, destinatario y propósito de envío. El destinatario se reconoce también en el texto de confirmación o reproductor, sin depender únicamente de los IDs de la cabecera o del nombre AudioPreviewActivity. No autoriza diálogos ajenos, errores, listas de contactos ni otro destinatario.
+
+La operación conserva su estado después del primer toque: contempla OK → Enviar, Enviar → OK y envío directo. Cada paso se puede tocar como máximo una vez; se declara terminado solo al observar el chat del destinatario con compositor vacío, el micrófono de notas de voz del chat visible y sin botón de envío habilitado, estable durante 500 ms. Una vista previa cuyo botón se deshabilita no cuenta como chat final. Una transición puede reutilizar la misma ventana si cambia el control; el control anterior no se vuelve a tocar. Los flujos de texto no se modifican.
+
+Pruebas de la lógica de confirmación cubren esos órdenes, ventanas antiguas, borradores, destinatarios distintos, diálogos de permisos/error y selección de contactos. La ejecución con WhatsApp real sigue pendiente porque no hay dispositivo conectado. La suite Android sigue bloqueada por las dependencias externas documentadas. Esta corrección no se presenta como una prueba de ejecución real en el teléfono.
+
+Validación de destinatario de 1.4.2: una lista «Enviar a» no queda autorizada por un paso anterior; el nombre del archivo de audio tampoco puede servir como nombre del contacto. Los controles de confirmación se buscan por sus IDs positivos de Android/WhatsApp, sin pulsar botones genéricos dentro de mensajes del chat.
+
+Resultado 1.4.2: assembleDebug y fuentes de pruebas compilados; 48 pruebas JVM aprobadas, incluidas 14 de la secuencia de confirmación. Firma APK y alineación de 16 KiB verificadas. Suite completa bloqueada antes de ejecución por nativeruntime-dist-compat (redirección HTTP 403). Sigue pendiente la verificación real en WhatsApp.

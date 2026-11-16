@@ -25,6 +25,7 @@ object AutoSendCoordinator {
     private set
   @Volatile private var shareLaunchCommittedAtUptimeMs: Long = -1
   @Volatile private var sharePrelaunchWindows: Set<Int> = emptySet()
+  @Volatile private var freshShareWindows: Set<Int> = emptySet()
   @Volatile var audioPreviewRequestId: Long = -1
     private set
   @Volatile var audioPreviewWindowId: Int = -1
@@ -73,6 +74,7 @@ object AutoSendCoordinator {
     shareLaunchCommittedRequestId = -1
     shareLaunchCommittedAtUptimeMs = -1
     sharePrelaunchWindows = emptySet()
+    freshShareWindows = emptySet()
     audioPreviewRequestId = -1
     audioPreviewWindowId = -1
     textWaitReason = "Esperando el chat de WhatsApp."
@@ -104,13 +106,19 @@ object AutoSendCoordinator {
     if (requestId == request && shareLaunchCommittedRequestId != request) sharePrelaunchWindows = windowIds.toSet()
   }
 
-  fun observeAudioPreview(packageName: String, className: String?, eventTime: Long, windowId: Int) {
-    if (!isArmedFor(packageName) || !AutoSendGuard.freshAudioPreviewMatches(requestId,
+  fun observeShareWindow(packageName: String, className: String?, eventTime: Long, windowId: Int) {
+    if (!isArmedFor(packageName) || !AutoSendGuard.freshShareWindowMatches(requestId,
         shareLaunchCommittedRequestId, shareLaunchCommittedAtUptimeMs, eventTime, windowId,
-        sharePrelaunchWindows, className)) return
-    audioPreviewRequestId = requestId
-    audioPreviewWindowId = windowId
+        sharePrelaunchWindows)) return
+    freshShareWindows = freshShareWindows + windowId
+    if (className?.endsWith(".AudioPreviewActivity") == true) {
+      audioPreviewRequestId = requestId
+      audioPreviewWindowId = windowId
+    }
   }
+
+  fun isFreshShareWindow(request: Long, windowId: Int): Boolean =
+    requestId == request && shareLaunchCommittedRequestId == request && windowId in freshShareWindows
 
   fun isArmedFor(packageName: String?): Boolean {
     if (packageName == null) return false
@@ -145,6 +153,7 @@ object AutoSendCoordinator {
     shareLaunchCommittedRequestId = -1
     shareLaunchCommittedAtUptimeMs = -1
     sharePrelaunchWindows = emptySet()
+    freshShareWindows = emptySet()
     audioPreviewRequestId = -1
     audioPreviewWindowId = -1
     expectedAudioFileName = null
