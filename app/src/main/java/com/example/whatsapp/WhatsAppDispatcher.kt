@@ -303,6 +303,7 @@ object WhatsAppDispatcher {
     val request = AutoSendCoordinator.requestId
     return runCatching {
         if (targetPkg != null) {
+          if (shouldArm && recipientName != null) PingAutoSendAccessibilityService.prepareShareSend(targetPkg, request)
           context.startActivity(sendIntent)
           if (shouldArm && recipientName != null) {
             AutoSendCoordinator.markShareLaunchCommitted(request)
@@ -364,10 +365,11 @@ object WhatsAppDispatcher {
         recipientPhone = phoneNumber, expectedAudioFileName = name, returnPackage = returnPackage,
         expectedAttachmentCaption = text.takeIf { it.isNotBlank() })
     }
+    val request = AutoSendCoordinator.requestId
     return runCatching {
+      if (autoSend) PingAutoSendAccessibilityService.prepareShareSend(pkg, request)
       context.startActivity(intent)
       if (autoSend) {
-        val request = AutoSendCoordinator.requestId
         AutoSendCoordinator.markShareLaunchCommitted(request)
         PingAutoSendAccessibilityService.requestShareSend(pkg, request)
         scheduleManualSendHint(context, pkg)

@@ -51,6 +51,9 @@ class PhoneCommandParserTest {
     }
     assertEquals(PhoneRoute.Local(PhoneCommand.Torch(false)), parser.parse("¿Podés apagar la linterna?"))
     assertFalse(parser.parse("necesito que enciendas la linterna") == PhoneRoute.Instinct)
+    for (text in listOf("encendeme la linterna durante diez minutos", "prendeme la linterna durante diez minutos", "apagame la linterna durante diez minutos")) {
+      assertTrue(text, parser.parse(text) is PhoneRoute.Unsupported)
+    }
   }
   @Test fun clarificationAndCancellation() {
     assertEquals(PhoneRoute.Local(PhoneCommand.Timer(180, "")), parser.parseReply("timer", "tres minutos"))

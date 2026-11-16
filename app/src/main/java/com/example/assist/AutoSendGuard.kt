@@ -39,6 +39,12 @@ object AutoSendGuard {
       fileName?.startsWith("instinct_") == true && fileName.endsWith(".m4a") &&
       composer.isNullOrBlank() && caption == null
 
+  fun freshAudioPreviewMatches(request: Long, shareLaunch: Long, committedAt: Long, eventAt: Long,
+    windowId: Int, prelaunchWindows: Set<Int>, className: String?): Boolean =
+    request == shareLaunch && committedAt >= 0 && eventAt > committedAt && windowId >= 0 &&
+      prelaunchWindows.isNotEmpty() && windowId !in prelaunchWindows &&
+      className?.endsWith(".AudioPreviewActivity") == true
+
   private fun cleanHeader(value: String): String = value
     .filterNot { it in '\u200e'..'\u200f' || it in '\u202a'..'\u202e' || it in '\u2066'..'\u2069' }
     .trim()

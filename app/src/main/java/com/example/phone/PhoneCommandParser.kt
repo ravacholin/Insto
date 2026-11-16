@@ -78,7 +78,7 @@ class PhoneCommandParser {
     if (Regex("^(?:cancela|cancelar|elimina|borra|pausa|pausar|reinicia|desactiva|cambia|modifica|apaga|pone|pon|activa|prende|enciende|inicia|crea|programa)\\b.*\\b(?:alarmas?|timers?|temporizador(?:es)?|cronometro|linterna|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
       return PhoneRoute.Unsupported("Ese pedido del teléfono todavía no está disponible. Podés abrir el Reloj o los ajustes para completarlo.")
     }
-    if (Regex("^(?:necesito|quiero|me|pone|pon|encende|encender|enciende|prende|prender|apaga|apagar|activa|activar|inicia|iniciar|configura)\\b.*\\b(?:linterna|alarma|timer|temporizador|cronometro|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
+    if (Regex("^(?:necesito|quiero|me|pone|pon|encende|encender|encendeme|enciende|prende|prender|prendeme|apaga|apagar|apagame|activa|activar|inicia|iniciar|configura)\\b.*\\b(?:linterna|alarma|timer|temporizador|cronometro|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
       return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.")
     }
     return PhoneRoute.Instinct

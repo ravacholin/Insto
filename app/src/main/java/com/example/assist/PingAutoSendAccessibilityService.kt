@@ -805,6 +805,20 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
       }
     }
 
+    fun prepareShareSend(pkg: String, request: Long) {
+      val service = connectedInstance ?: return
+      if (!AutoSendCoordinator.isArmedFor(pkg) || AutoSendCoordinator.requestId != request) return
+      // Record existing window identities before startActivity, never infer freshness from a later event alone.
+      val ids = runCatching {
+        val current = service.windows.map { it.id }.toMutableSet()
+        service.rootInActiveWindow?.let { root ->
+          try { current.add(root.windowId) } finally { root.recycle() }
+        }
+        current.filter { it >= 0 }.toSet()
+      }.getOrDefault(emptySet())
+      AutoSendCoordinator.prepareShareLaunch(request, ids)
+    }
+
     fun requestShareSend(pkg: String, request: Long) {
       val service = connectedInstance ?: return
       service.mainHandler.post {
