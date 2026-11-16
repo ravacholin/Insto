@@ -21,6 +21,15 @@ object AutoSendCoordinator {
 
   @Volatile var textLaunchCommittedRequestId: Long = -1
     private set
+  @Volatile var shareLaunchCommittedRequestId: Long = -1
+    private set
+  @Volatile private var shareLaunchCommittedAtUptimeMs: Long = -1
+  @Volatile private var sharePrelaunchWindows: Set<Int> = emptySet()
+  @Volatile private var freshShareWindows: Set<Int> = emptySet()
+  @Volatile var audioPreviewRequestId: Long = -1
+    private set
+  @Volatile var audioPreviewWindowId: Int = -1
+    private set
   @Volatile var textWaitReason: String = "Esperando el chat de WhatsApp."
 
   private const val DEFAULT_ARM_WINDOW_MS = 10_000L
@@ -62,6 +71,12 @@ object AutoSendCoordinator {
   ) {
     requestId++
     textLaunchCommittedRequestId = -1
+    shareLaunchCommittedRequestId = -1
+    shareLaunchCommittedAtUptimeMs = -1
+    sharePrelaunchWindows = emptySet()
+    freshShareWindows = emptySet()
+    audioPreviewRequestId = -1
+    audioPreviewWindowId = -1
     textWaitReason = "Esperando el chat de WhatsApp."
     armedAtUptimeMs = SystemClock.uptimeMillis()
     this.recipientName = recipientName
@@ -79,6 +94,31 @@ object AutoSendCoordinator {
   fun markTextLaunchCommitted(request: Long) {
     if (requestId == request && expectedText != null) textLaunchCommittedRequestId = request
   }
+
+  fun markShareLaunchCommitted(request: Long) {
+    if (requestId == request && expectedAudioFileName != null) {
+      shareLaunchCommittedAtUptimeMs = SystemClock.uptimeMillis()
+      shareLaunchCommittedRequestId = request
+    }
+  }
+
+  fun prepareShareLaunch(request: Long, windowIds: Set<Int>) {
+    if (requestId == request && shareLaunchCommittedRequestId != request) sharePrelaunchWindows = windowIds.toSet()
+  }
+
+  fun observeShareWindow(packageName: String, className: String?, eventTime: Long, windowId: Int) {
+    if (!isArmedFor(packageName) || !AutoSendGuard.freshShareWindowMatches(requestId,
+        shareLaunchCommittedRequestId, shareLaunchCommittedAtUptimeMs, eventTime, windowId,
+        sharePrelaunchWindows)) return
+    freshShareWindows = freshShareWindows + windowId
+    if (className?.endsWith(".AudioPreviewActivity") == true) {
+      audioPreviewRequestId = requestId
+      audioPreviewWindowId = windowId
+    }
+  }
+
+  fun isFreshShareWindow(request: Long, windowId: Int): Boolean =
+    requestId == request && shareLaunchCommittedRequestId == request && windowId in freshShareWindows
 
   fun isArmedFor(packageName: String?): Boolean {
     if (packageName == null) return false
@@ -110,6 +150,12 @@ object AutoSendCoordinator {
     expectedAttachmentCaption = null
     expectedText = null
     textLaunchCommittedRequestId = -1
+    shareLaunchCommittedRequestId = -1
+    shareLaunchCommittedAtUptimeMs = -1
+    sharePrelaunchWindows = emptySet()
+    freshShareWindows = emptySet()
+    audioPreviewRequestId = -1
+    audioPreviewWindowId = -1
     expectedAudioFileName = null
   }
 }

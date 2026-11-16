@@ -29,6 +29,31 @@ class AutoSendGuardTest {
     assertFalse(AutoSendGuard.payloadMatches(null, "instinct_new.wav", "old draft", listOf("instinct_new.wav")))
     assertTrue(AutoSendGuard.payloadMatches(null, "instinct_new.wav", null, listOf("instinct_new.wav")))
   }
+  @Test fun `saved recipient is trusted after this audio share launch only`() {
+    assertTrue(AutoSendGuard.launchMatches(7, null, "voice.m4a", -1, 7))
+    assertFalse(AutoSendGuard.launchMatches(8, null, "voice.m4a", -1, 7))
+    assertFalse(AutoSendGuard.launchMatches(7, null, "voice.m4a", -1, -1))
+    assertFalse(AutoSendGuard.launchMatches(7, "hola", null, -1, 7))
+    assertTrue(AutoSendGuard.launchMatches(7, "hola", null, 7, -1))
+  }
+  @Test fun `fresh owned audio preview can send when WhatsApp hides the filename`() {
+    assertTrue(AutoSendGuard.ownedAudioPreviewMatches(8, 8, 8, 42, 42, "instinct_123456789.m4a", null, null))
+    assertFalse(AutoSendGuard.ownedAudioPreviewMatches(8, 7, 8, 42, 42, "instinct_123456789.m4a", null, null))
+    assertFalse(AutoSendGuard.ownedAudioPreviewMatches(8, 8, 7, 42, 42, "instinct_123456789.m4a", null, null))
+    assertFalse(AutoSendGuard.ownedAudioPreviewMatches(8, 8, 8, 41, 42, "instinct_123456789.m4a", null, null))
+    assertFalse(AutoSendGuard.ownedAudioPreviewMatches(8, 8, 8, 42, 42, "report.pdf", null, null))
+    assertFalse(AutoSendGuard.ownedAudioPreviewMatches(8, 8, 8, 42, 42, "instinct_123456789.m4a", "old draft", null))
+    assertFalse(AutoSendGuard.ownedAudioPreviewMatches(8, 8, 8, 42, 42, "instinct_123456789.m4a", null, "caption"))
+  }
+  @Test fun `preview must be newer than successful launch and not a preexisting window`() {
+    assertTrue(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 43, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
+    assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 299, 43, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
+    assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 300, 43, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
+    assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 42, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
+    assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 7, 300, 301, 43, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
+    assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 43, emptySet(), "com.whatsapp.audiopicker.AudioPreviewActivity"))
+    assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 43, setOf(41, 42), "com.whatsapp.HomeActivity"))
+  }
   @Test fun `text must exactly match including unicode and newlines`() {
     val text = "Hola 😊\n& café"
     assertFalse(AutoSendGuard.payloadMatches(text, null, "previous message", emptyList()))

@@ -12,6 +12,11 @@ import android.os.Looper
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.phone.*
+import com.example.speech.AudioTranscriber
+import com.example.speech.GroqTranscriber
+import com.example.speech.GroqKeyStore
+import com.example.speech.TranscriptionException
 import com.example.assist.AssistantRoleHelper
 import com.example.assist.HotkeyHoldTracker
 import com.example.assist.PingAssistWidgetProvider
@@ -107,12 +112,22 @@ data class FloatingAssistantState(
   val elapsedMs: Long = 0,
   val amplitude: Float = 0f,
   val error: String? = null,
+  val status: String? = null,
+  val transcript: String? = null,
+  val needsGroqKey: Boolean = false,
+  val needsCamera: Boolean = false,
+  val needsConfirmation: Boolean = false,
+  val needsWhatsAppAccessibility: Boolean = false,
+  val appOptions: List<AppOption> = emptyList(),
+  val stopwatchMs: Long? = null,
+  val stopwatchRunning: Boolean = false,
 )
 
 class MainViewModel @JvmOverloads constructor(
   application: Application,
   private val floatingCapture: FloatingAudioCapture = FloatingVoiceCapture(application),
   private val audioDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
+  private val audioTranscriber: AudioTranscriber = GroqTranscriber({ GroqKeyStore(application).read() }),
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
@@ -125,14 +140,137 @@ class MainViewModel @JvmOverloads constructor(
   private var floatingPrefs: AssistantPreferences? = null
   private var floatingContact: com.example.data.PinnedContact? = null
   private var pendingFloatingAudio: RecordedAudio? = null
+  private var pendingTranscript: String? = null
+  private var transcribingAudio = false
+  private var floatingPaused = false
+
+  fun resumeFloatingAssistant() { floatingPaused = false }
+  private val phoneParser = PhoneCommandParser()
+  private val stopwatchRepository = StopwatchRepository(application)
+  private val phoneExecutor = PhoneActionExecutor(application, stopwatchRepository)
+  private var clarification: String? = null
+  private var confirmation: PhoneCommand? = null
+  private var cameraCommand: PhoneCommand? = null
+  private var retainLocalAudio = false
+  private var routedRequestText = ""
+  private var retryLocalCommand: Pair<PhoneCommand, Boolean>? = null
+  private var retryLocalText: String? = null
+
+  fun refreshFloatingStopwatch() {
+    if (floatingState.value.stopwatchMs == null) return
+    val (elapsed, running) = stopwatchRepository.snapshot()
+    floatingState.value = floatingState.value.copy(stopwatchMs = elapsed, stopwatchRunning = running)
+  }
+
+  fun runFloatingStopwatch(operation: StopwatchOp) {
+    if (floatingState.value.mode !in listOf(FloatingMode.IDLE, FloatingMode.TYPING) || floatingState.value.text.isNotBlank()) return
+    runPhoneCommand(PhoneCommand.Stopwatch(operation))
+  }
+
+  fun confirmFloatingAction(accept: Boolean) {
+    val command = confirmation ?: return
+    confirmation = null
+    floatingState.value = floatingState.value.copy(needsConfirmation = false)
+    if (accept) runPhoneCommand(command, confirmed = true)
+    else floatingState.value = floatingState.value.copy(status = "Pedido cancelado.")
+  }
+
+  fun chooseFloatingApp(option: AppOption) {
+    if (option !in floatingState.value.appOptions || floatingState.value.mode == FloatingMode.SENDING) return
+    floatingState.value = floatingState.value.copy(appOptions = emptyList())
+    runPhoneCommand(PhoneCommand.OpenApp(option.packageName))
+  }
+
+  fun onFloatingCameraPermission(granted: Boolean) {
+    val command = cameraCommand ?: return
+    cameraCommand = null
+    floatingState.value = floatingState.value.copy(needsCamera = false)
+    if (granted) runPhoneCommand(command)
+    else floatingState.value = floatingState.value.copy(error = "No se habilitó la cámara. El pedido se conserva; la linterna no se cambió.", status = null)
+  }
+
+  private fun runPhoneCommand(command: PhoneCommand, confirmed: Boolean = false) {
+    clarification = null
+    confirmation = null
+    cameraCommand = null
+    val result = phoneExecutor.execute(command, confirmed)
+    confirmation = result.confirmation
+    if (result.needsCamera) cameraCommand = command
+    retainLocalAudio = result.retainRequest
+    retryLocalCommand = if (result.retainRequest) command to confirmed else null
+    retryLocalText = if (result.retainRequest) routedRequestText else null
+    val nextMode = if (result.retainRequest && pendingFloatingAudio != null) FloatingMode.AUDIO_READY
+      else if (result.retainRequest && floatingState.value.text.isNotBlank()) FloatingMode.TYPING else FloatingMode.IDLE
+    floatingState.value = floatingState.value.copy(mode = nextMode,
+      text = if (result.retainRequest) floatingState.value.text else "",
+      error = if (result.outcome == PhoneActionOutcome.REJECTED) result.message else null,
+      status = if (result.outcome == PhoneActionOutcome.REJECTED) null else result.message, needsWhatsAppAccessibility = false, needsConfirmation = result.confirmation != null,
+      appOptions = result.appOptions, needsCamera = result.needsCamera, needsGroqKey = false)
+    if (!result.retainRequest) {
+      pendingFloatingAudio?.file?.delete()
+      pendingFloatingAudio = null
+      pendingTranscript = null
+    }
+    if (command is PhoneCommand.Stopwatch) {
+      val (elapsed, running) = stopwatchRepository.snapshot()
+      floatingState.value = floatingState.value.copy(stopwatchMs = elapsed, stopwatchRunning = running)
+    }
+  }
+
+  /** Returns false only when this is a general query for Instinct. */
+  private fun routeFloatingRequest(text: String): Boolean {
+    retainLocalAudio = false
+    val normalized = PhoneCommandParser.normalize(text)
+    val retry = retryLocalCommand
+    if (retry != null && retryLocalText?.let(PhoneCommandParser::normalize) == normalized) {
+      runPhoneCommand(retry.first, retry.second)
+      return true
+    }
+    retryLocalCommand = null
+    retryLocalText = null
+    routedRequestText = text
+    if (confirmation != null && normalized in listOf("si", "si confirmo", "confirmo", "dale", "acepto", "no", "cancelar")) {
+      confirmFloatingAction(normalized !in listOf("no", "cancelar"))
+      return true
+    }
+    val options = floatingState.value.appOptions
+    if (options.isNotEmpty()) {
+      val index = PhoneCommandParser.number(normalized)?.minus(1)
+      val selected = if (index != null) options.getOrNull(index) else options.singleOrNull { PhoneCommandParser.normalize(it.label) == normalized }
+      if (selected != null) { runPhoneCommand(PhoneCommand.OpenApp(selected.packageName)); return true }
+    }
+    val route = clarification?.let { phoneParser.parseReply(it, text) } ?: phoneParser.parse(text)
+    // A new complete request replaces any earlier clarification/confirmation.
+    clarification = null
+    confirmation = null
+    cameraCommand = null
+    retryLocalCommand = null
+    retryLocalText = null
+    floatingState.value = floatingState.value.copy(needsConfirmation = false, appOptions = emptyList(), needsCamera = false)
+    when (route) {
+      is PhoneRoute.Local -> runPhoneCommand(route.command)
+      is PhoneRoute.Clarify -> {
+        clarification = route.context
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = route.prompt, error = null)
+      }
+      is PhoneRoute.Unsupported -> {
+        retainLocalAudio = true
+        floatingState.value = floatingState.value.copy(mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING, status = null, error = route.message)
+      }
+      PhoneRoute.Cancel -> floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = "Pedido cancelado.", error = null)
+      PhoneRoute.Instinct -> return false
+    }
+    return true
+  }
 
   fun prepareFloatingAssistant() {
-    if (floatingPrefs != null) return
+    val initialized = floatingPrefs != null
     val prefs = runBlockingPrefs(getApplication())
     floatingPrefs = prefs
     floatingReturnPackage = com.example.assist.AutoSendCoordinator.lastKnownForegroundPackage
     floatingContact = ContextRoutingEngine.resolveRoute(getApplication(), prefs).contact ?: prefs.pinnedContact
-    floatingState.value = FloatingAssistantState(contactName = floatingContact?.displayName ?: "Instinct")
+    floatingState.value = if (initialized) floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct")
+      else FloatingAssistantState(contactName = floatingContact?.displayName ?: "Instinct")
   }
 
   fun startFloatingListening(onDispatched: () -> Unit) {
@@ -142,13 +280,14 @@ class MainViewModel @JvmOverloads constructor(
     stopFloatingCapture(discard = true)
     pendingFloatingAudio?.file?.delete()
     pendingFloatingAudio = null
+    pendingTranscript = null
     val result = floatingCapture.start()
     if (result.isFailure) {
       floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE,
         error = "Micrófono no disponible. Podés escribir o volver a intentarlo.")
       return
     }
-    floatingState.value = floatingState.value.copy(mode = FloatingMode.LISTENING, text = "", elapsedMs = 0, error = null)
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.LISTENING, text = "", elapsedMs = 0, error = null, needsGroqKey = false, transcript = null, needsWhatsAppAccessibility = false)
     floatingJob = viewModelScope.launch {
       while (isActive) {
         val sample = floatingCapture.snapshot
@@ -182,7 +321,8 @@ class MainViewModel @JvmOverloads constructor(
     stopFloatingCapture(discard = true)
     pendingFloatingAudio?.file?.delete()
     pendingFloatingAudio = null
-    floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, amplitude = 0f, error = null)
+    pendingTranscript = null
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, amplitude = 0f, error = null, needsWhatsAppAccessibility = false)
   }
 
   fun updateFloatingText(text: String) {
@@ -217,14 +357,19 @@ class MainViewModel @JvmOverloads constructor(
   fun sendFloatingAttachment(onDispatched: () -> Unit) {
     if (floatingState.value.mode == FloatingMode.SENDING) return
     val attachment = floatingState.value.attachment ?: return
-    val contact = floatingContact ?: return
-    val prefs = floatingPrefs ?: return
+    prepareFloatingAssistant()
+    val contact = floatingContact
+    val prefs = floatingPrefs
+    if (contact == null || prefs == null) {
+      floatingState.value = floatingState.value.copy(error = "Configurá el contacto de Instinct para enviar el adjunto.")
+      return
+    }
     floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null)
     val result = WhatsAppDispatcher.sendWhatsAppAttachment(getApplication(), contact.phoneNumber,
       attachment.uri, attachment.name, attachment.mimeType, floatingState.value.text,
       prefs.preferredFlavor, contact.displayName, floatingReturnPackage)
     if (result is DispatchResult.Error) {
-      floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, error = result.message)
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, error = result.message, needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
     } else onDispatched()
   }
 
@@ -246,6 +391,15 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun pauseFloatingAssistant(error: String? = null) {
+    floatingPaused = true
+    if (transcribingAudio) {
+      floatingGeneration++
+      floatingJob?.cancel()
+      floatingJob = null
+      transcribingAudio = false
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, status = "Audio guardado. Podés reintentar cuando vuelvas.")
+      return
+    }
     if (floatingState.value.mode != FloatingMode.LISTENING && floatingState.value.mode != FloatingMode.RECORDING) return
     floatingJob?.cancel()
     floatingJob = null
@@ -263,9 +417,15 @@ class MainViewModel @JvmOverloads constructor(
 
   fun dismissFloatingAssistant() {
     floatingGeneration++
+    transcribingAudio = false
     stopFloatingCapture(discard = true)
     pendingFloatingAudio?.file?.delete()
     pendingFloatingAudio = null
+    pendingTranscript = null
+    clarification = null
+    confirmation = null
+    cameraCommand = null
+    floatingState.value = floatingState.value.copy(needsConfirmation = false, needsCamera = false, appOptions = emptyList())
   }
 
   fun sendFloatingAudio(onDispatched: () -> Unit) {
@@ -273,8 +433,9 @@ class MainViewModel @JvmOverloads constructor(
     floatingJob?.cancel()
     floatingJob = null
     val generation = ++floatingGeneration
-    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null)
-    viewModelScope.launch {
+    floatingPaused = false
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null, status = "Interpretando tu audio…", needsGroqKey = false)
+    floatingJob = viewModelScope.launch {
       val audio = pendingFloatingAudio ?: finishFloatingCapture()
       if (generation != floatingGeneration) { audio?.file?.delete(); return@launch }
       if (audio == null) {
@@ -283,6 +444,38 @@ class MainViewModel @JvmOverloads constructor(
         return@launch
       }
       pendingFloatingAudio = audio
+      if (floatingPaused) {
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, status = "Audio guardado.")
+        return@launch
+      }
+      transcribingAudio = true
+      val transcript = try {
+        pendingTranscript ?: audioTranscriber.transcribe(audio.file)
+      } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        if (generation == floatingGeneration) transcribingAudio = false
+        if (generation == floatingGeneration) floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY,
+          error = "La interpretación se interrumpió. El audio se conserva para reintentar.", status = null)
+        return@launch
+      } catch (failure: Exception) {
+        if (generation == floatingGeneration) transcribingAudio = false
+        if (generation == floatingGeneration) floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY,
+          status = null, error = (failure as? TranscriptionException)?.message ?: "No se pudo interpretar. El audio se conserva.",
+          needsGroqKey = (failure as? TranscriptionException)?.needsKey == true)
+        return@launch
+      }
+      if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
+      transcribingAudio = false
+      pendingTranscript = transcript
+      floatingState.value = floatingState.value.copy(transcript = transcript)
+      if (routeFloatingRequest(transcript)) {
+        if (!retainLocalAudio) {
+          audio.file.delete()
+          pendingFloatingAudio = null
+          pendingTranscript = null
+        }
+        return@launch
+      }
+      prepareFloatingAssistant()
       val contact = floatingContact
       val prefs = floatingPrefs
       if (contact == null || prefs == null) {
@@ -295,12 +488,13 @@ class MainViewModel @JvmOverloads constructor(
           error = "Instalá WhatsApp para enviar. El audio se conserva.")
         return@launch
       }
+      floatingState.value = floatingState.value.copy(status = "Enviando el audio original a Instinct…")
       val result = WhatsAppDispatcher.sendWhatsAppAudio(
         getApplication(), contact.phoneNumber, audio.file, prefs.preferredFlavor,
         PingAutoSendAccessibilityService.isEnabled(getApplication()), boomerangReturn = true,
         mimeType = audio.mimeType, recipientName = contact.displayName, returnPackage = floatingReturnPackage)
       if (result is DispatchResult.Error) {
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, error = result.message)
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, error = result.message, needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
       } else {
         pendingFloatingAudio = null // FileProvider/WhatsApp owns the shared file from here.
         onDispatched()
@@ -311,16 +505,24 @@ class MainViewModel @JvmOverloads constructor(
   fun sendFloatingText(onDispatched: () -> Unit) {
     if (floatingState.value.mode == FloatingMode.SENDING || floatingState.value.text.isBlank()) return
     stopFloatingCapture(discard = true)
-    val contact = floatingContact ?: return
-    val prefs = floatingPrefs ?: return
-    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null)
+    val text = floatingState.value.text
+    if (routeFloatingRequest(text)) return
+    prepareFloatingAssistant()
+    val contact = floatingContact
+    val prefs = floatingPrefs
+    if (contact == null || prefs == null) {
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, error = "Configurá el contacto de Instinct para enviar esta consulta.")
+      return
+    }
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null, status = "Enviando a Instinct…")
     val result = WhatsAppDispatcher.sendWhatsAppText(getApplication(), contact.phoneNumber,
-      floatingState.value.text, prefs.preferredFlavor,
+      text, prefs.preferredFlavor,
       PingAutoSendAccessibilityService.isEnabled(getApplication()), contact.displayName, floatingReturnPackage)
     if (result is DispatchResult.Error) {
-      floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, error = result.message)
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, error = result.message, needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
     } else onDispatched()
   }
+
 
 
   private val recordingState = MutableStateFlow<RecordingUiState>(RecordingUiState.Idle)

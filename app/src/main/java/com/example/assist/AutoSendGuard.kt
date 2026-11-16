@@ -25,6 +25,30 @@ object AutoSendGuard {
     }
   }
 
+  fun launchMatches(request: Long, text: String?, fileName: String?, textLaunch: Long, shareLaunch: Long): Boolean =
+    when {
+      text != null -> textLaunch == request
+      fileName != null -> shareLaunch == request
+      else -> false
+    }
+
+  /** Some WhatsApp audio previews hide filenames. Trust only our current targeted share's new AudioPreview window. */
+  fun ownedAudioPreviewMatches(request: Long, shareLaunch: Long, previewRequest: Long,
+    expectedWindow: Int, actualWindow: Int, fileName: String?, composer: String?, caption: String?): Boolean =
+    request == shareLaunch && request == previewRequest && expectedWindow >= 0 && expectedWindow == actualWindow &&
+      fileName?.startsWith("instinct_") == true && fileName.endsWith(".m4a") &&
+      composer.isNullOrBlank() && caption == null
+
+  fun freshShareWindowMatches(request: Long, shareLaunch: Long, committedAt: Long, eventAt: Long,
+    windowId: Int, prelaunchWindows: Set<Int>): Boolean =
+    request == shareLaunch && committedAt >= 0 && eventAt > committedAt && windowId >= 0 &&
+      prelaunchWindows.isNotEmpty() && windowId !in prelaunchWindows
+
+  fun freshAudioPreviewMatches(request: Long, shareLaunch: Long, committedAt: Long, eventAt: Long,
+    windowId: Int, prelaunchWindows: Set<Int>, className: String?): Boolean =
+    freshShareWindowMatches(request, shareLaunch, committedAt, eventAt, windowId, prelaunchWindows) &&
+      className?.endsWith(".AudioPreviewActivity") == true
+
   private fun cleanHeader(value: String): String = value
     .filterNot { it in '\u200e'..'\u200f' || it in '\u202a'..'\u202e' || it in '\u2066'..'\u2069' }
     .trim()
