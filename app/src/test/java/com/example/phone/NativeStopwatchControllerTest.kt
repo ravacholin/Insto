@@ -37,13 +37,37 @@ class NativeStopwatchControllerTest {
     assertNull(shadowOf(app).nextStartedActivity)
   }
 
-  @Test fun unsupportedOperationKeepsRequestAndOffersTheInstalledClock() {
+  @Test fun unsupportedIntentRequestsAccessibilityAndKeepsTheRequest() {
     installGoogleClock(app)
     val result = executor().execute(PhoneCommand.Stopwatch(StopwatchOp.PAUSE))
     assertEquals(PhoneActionOutcome.REJECTED, result.outcome)
     assertTrue(result.retainRequest)
-    assertEquals("com.google.android.deskclock", result.appOptions.single().packageName)
+    assertTrue(result.needsClockAccessibility)
+    assertTrue(result.appOptions.isEmpty())
     assertNull(shadowOf(app).nextStartedActivity)
+  }
+
+  @Test fun missingIntentUsesConnectedAccessibilityRatherThanRejectingTheOperation() {
+    installGoogleClock(app)
+    val disconnect = com.example.testsupport.ConnectedAccessibility.start(app)
+    try {
+      val result = executor().execute(PhoneCommand.Stopwatch(StopwatchOp.START))
+      assertEquals(StopwatchOp.START, result.stopwatchAutomation)
+      assertEquals(PhoneActionOutcome.NEEDS_INPUT, result.outcome)
+      assertTrue(result.retainRequest)
+      assertNull(shadowOf(app).nextStartedActivity)
+    } finally { disconnect() }
+  }
+
+  @Test fun fallbackResetAlsoRequiresConfirmation() {
+    installGoogleClock(app)
+    val disconnect = com.example.testsupport.ConnectedAccessibility.start(app)
+    try {
+      val command = PhoneCommand.Stopwatch(StopwatchOp.RESET)
+      assertEquals(command, executor().execute(command).confirmation)
+      assertNull(executor().execute(command).stopwatchAutomation)
+      assertEquals(StopwatchOp.RESET, executor().execute(command, confirmed = true).stopwatchAutomation)
+    } finally { disconnect() }
   }
 
   @Test fun absentGoogleClockCannotBecomeASuccessOrAnUnrelatedAppLaunch() {

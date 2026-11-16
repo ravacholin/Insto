@@ -34,22 +34,6 @@ class GroqSettingsActivity : ComponentActivity() {
         var hybridEnabled by remember { mutableStateOf(gemini.isEnabled()) }
         Surface(Modifier.fillMaxSize()) {
           Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("Interpretar voz con Groq", style = MaterialTheme.typography.headlineSmall)
-            Text("Se envía una copia de cada grabación a Groq para transcribirla en español y decidir si es un pedido del teléfono o para Instinct. Si es para Instinct, se manda el audio original por WhatsApp.")
-            Text("Requiere internet. El plan gratuito tiene cuotas; consultá los límites de tu cuenta. Tu clave se guarda cifrada solo en este teléfono.")
-            Text(if (configured) "Hay una clave guardada. Podés reemplazarla o borrarla." else "Cargá tu clave personal una sola vez.")
-            OutlinedTextField(value, { value = it }, label = { Text("Clave de Groq") }, singleLine = true,
-              visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
-            Button(onClick = {
-              runCatching { store.save(value) }.onSuccess { value = ""; setResult(RESULT_OK); finish() }
-                .onFailure { message = "No se pudo guardar la clave. Revisá el valor e intentá otra vez." }
-            }, enabled = value.isNotBlank()) { Text("Guardar y volver") }
-            if (configured) TextButton(onClick = {
-              runCatching { store.clear() }.onSuccess { configured = false; value = ""; message = "Clave borrada." }
-                .onFailure { message = "No se pudo borrar la clave." }
-            }) { Text("Borrar clave") }
-            TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))) } }) { Text("Abrir Groq para obtener una clave") }
-            HorizontalDivider()
             Text("Gemini Decisions · híbrido", style = MaterialTheme.typography.headlineSmall)
             Text("Los pedidos claros se resuelven localmente. Para pedidos no comprendidos, se envía a Google el texto escrito o transcrito. Gemini ayuda a elegir una acción o Instinct; el audio original sigue destinado a Instinct cuando corresponde. No se comparte tu libreta de contactos con Gemini.")
             Text("Es opcional y requiere internet. El nivel gratuito tiene cuotas y puede usar el contenido para mejorar productos de Google según sus términos. Si falla, se conserva el pedido para reintentar.")
@@ -58,7 +42,7 @@ class GroqSettingsActivity : ComponentActivity() {
               visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
             Button(onClick = {
               runCatching { gemini.saveKey(geminiValue) }.onSuccess {
-                geminiValue = ""; geminiConfigured = true; hybridEnabled = true; message = "Híbrido activado."; setResult(RESULT_OK)
+                geminiValue = ""; geminiConfigured = true; hybridEnabled = true; message = "Híbrido activado."; setResult(RESULT_OK); finish()
               }.onFailure { message = "No se pudo guardar la clave de Gemini." }
             }, enabled = geminiValue.isNotBlank()) { Text("Guardar Gemini y activar") }
             if (geminiConfigured) {
@@ -76,6 +60,22 @@ class GroqSettingsActivity : ComponentActivity() {
             }
             TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/api-keys"))) } }) { Text("Obtener clave de Gemini") }
             TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/docs/pricing#gemini-decision"))) } }) { Text("Cuotas, precios y uso de datos de Gemini") }
+            HorizontalDivider()
+            Text("Interpretar voz con Groq", style = MaterialTheme.typography.headlineSmall)
+            Text("Se envía una copia de cada grabación a Groq para transcribirla en español y decidir si es un pedido del teléfono o para Instinct. Si es para Instinct, se manda el audio original por WhatsApp.")
+            Text("Requiere internet. El plan gratuito tiene cuotas; consultá los límites de tu cuenta. Tu clave se guarda cifrada solo en este teléfono.")
+            Text(if (configured) "Hay una clave guardada. Podés reemplazarla o borrarla." else "Cargá tu clave personal una sola vez.")
+            OutlinedTextField(value, { value = it }, label = { Text("Clave de Groq") }, singleLine = true,
+              visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
+            Button(onClick = {
+              runCatching { store.save(value) }.onSuccess { value = ""; setResult(RESULT_OK); finish() }
+                .onFailure { message = "No se pudo guardar la clave. Revisá el valor e intentá otra vez." }
+            }, enabled = value.isNotBlank()) { Text("Guardar y volver") }
+            if (configured) TextButton(onClick = {
+              runCatching { store.clear() }.onSuccess { configured = false; value = ""; message = "Clave borrada." }
+                .onFailure { message = "No se pudo borrar la clave." }
+            }) { Text("Borrar clave") }
+            TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))) } }) { Text("Abrir Groq para obtener una clave") }
             message?.let { Text(it) }
             TextButton(onClick = { finish() }) { Text("Volver") }
           }

@@ -52,7 +52,7 @@ class FloatingPhoneRoutingTest {
     } finally { Dispatchers.resetMain() }
   }
 
-  @Test fun unsupportedNativePausePreservesDraftAndCanOpenGoogleClockExplicitly() = runTest {
+  @Test fun unsupportedNativePausePreservesDraftAndRequestsAccessibility() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     try {
@@ -64,10 +64,8 @@ class FloatingPhoneRoutingTest {
       assertNotNull(vm.floatingAssistant.value.error)
       assertNull(vm.consumePhoneActionCompletion())
       assertNull(shadowOf(app).nextStartedActivity)
-      vm.chooseFloatingApp(vm.floatingAssistant.value.appOptions.single())
-      assertEquals("com.google.android.deskclock", shadowOf(app).nextStartedActivity.component!!.packageName)
-      assertNotNull(vm.consumePhoneActionCompletion())
-      assertNull(shadowOf(app).nextStartedActivity)
+      assertTrue(vm.floatingAssistant.value.needsClockAccessibility)
+      assertTrue(vm.floatingAssistant.value.appOptions.isEmpty())
       vm.dismissFloatingAssistant()
     } finally { Dispatchers.resetMain() }
   }

@@ -8,8 +8,10 @@ data class PhoneActionResult(
   val appOptions: List<AppOption> = emptyList(),
   val needsCamera: Boolean = false,
   val needsContacts: Boolean = false,
+  val needsClockAccessibility: Boolean = false,
+  val stopwatchAutomation: StopwatchOp? = null,
   val contactOptions: List<ContactOption> = emptyList(),
   val outcome: PhoneActionOutcome = PhoneActionOutcome.COMPLETED,
 ) {
-  val retainRequest: Boolean get() = outcome == PhoneActionOutcome.REJECTED || needsCamera || needsContacts || contactOptions.isNotEmpty()
+  val retainRequest: Boolean get() = outcome == PhoneActionOutcome.REJECTED || stopwatchAutomation != null || needsCamera || needsContacts || contactOptions.isNotEmpty()
 }
