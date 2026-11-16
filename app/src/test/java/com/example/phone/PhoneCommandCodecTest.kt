@@ -12,4 +12,9 @@ class PhoneCommandCodecTest {
    assertThrows(IllegalArgumentException::class.java) { PhoneCommandCodec.decode(JSONObject(input)) }
   }
  }
+ @Test fun setVolumeWithoutPercentageMustNotBecomeSilence() {
+  assertThrows(IllegalArgumentException::class.java){PhoneCommandCodec.decode(JSONObject("""{"type":"volume","operation":"SET"}"""))}
+  assertThrows(IllegalArgumentException::class.java){PhoneCommandCodec.decode(JSONObject("""{"type":"temporary_mode","kind":"MEDIA_VOLUME","seconds":60}"""))}
+ }
+
 }

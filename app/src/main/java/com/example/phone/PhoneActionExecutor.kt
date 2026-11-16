@@ -22,6 +22,9 @@ class PhoneActionExecutor(
     if (context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return PhoneActionResult("Desbloqueá el teléfono para ejecutar este pedido.", outcome = PhoneActionOutcome.REJECTED)
     return try {
       when (command) {
+        is PhoneCommand.Media -> MediaControllerAdapter(context).execute(command)
+        is PhoneCommand.TemporaryMode -> TemporaryModeManager(context).execute(command, confirmed)
+        PhoneCommand.EndMode -> TemporaryModeManager(context).end(force = true)
         is PhoneCommand.Navigate, is PhoneCommand.MapSearch, is PhoneCommand.SavePlace,
         is PhoneCommand.Dial, is PhoneCommand.CalendarEvent, is PhoneCommand.Camera,
         is PhoneCommand.YouTubeSearch, is PhoneCommand.MusicSearch -> EverydayActionExecutor(context).execute(command)

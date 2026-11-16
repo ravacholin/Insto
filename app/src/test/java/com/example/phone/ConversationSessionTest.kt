@@ -42,4 +42,50 @@ class ConversationSessionTest {
     assertTrue(s.accept("cancelar") is ConversationResult.Prompt)
     assertEquals(ConversationResult.Pass, s.accept("a las cinco de la tarde"))
   }
+  @Test fun correctionInheritsPeriodAndNeverDropsExtraDetails() {
+    val s=session()
+    s.accept("agendá reunión mañana a las cinco de la tarde")
+    val corrected=s.accept("mejor a las seis") as ConversationResult.Plan
+    val event=corrected.commands.single() as PhoneCommand.CalendarEvent
+    assertEquals(18,Calendar.getInstance().apply {timeInMillis=event.beginMillis}.get(Calendar.HOUR_OF_DAY))
+    assertTrue(session().accept("agendá reunión mañana a las 17:00 con repetición semanal") is ConversationResult.Prompt)
+  }
+
+  @Test fun shortCorrectionWithDurationRetainsAfternoon() {
+    val s=session();s.accept("agendá reunión mañana a las cinco de la tarde")
+    val revised=s.accept("mejor a las seis y que dure media hora") as ConversationResult.Plan
+    val event=revised.commands.single() as PhoneCommand.CalendarEvent
+    assertEquals(1800000L,event.endMillis-event.beginMillis)
+    assertEquals(18,Calendar.getInstance().apply{timeInMillis=event.beginMillis}.get(Calendar.HOUR_OF_DAY))
+  }
+
+  @Test fun quotedTitleCannotBecomeDateOrCondition() {
+    for(title in listOf("Hoy y mañana","Informe mañana","Si vuelve")) {
+      val result=session().accept("agendá \"$title\" pasado mañana a las 17:00") as ConversationResult.Plan
+      val event=result.commands.single() as PhoneCommand.CalendarEvent
+      assertEquals(title,event.title)
+      assertEquals(18,Calendar.getInstance().apply{timeInMillis=event.beginMillis}.get(Calendar.DAY_OF_MONTH))
+    }
+  }
+
+  @Test fun ordinalChoiceRefersToVisibleOption() {
+    assertEquals(1,PhoneCommandParser.choiceIndex("el segundo"))
+    assertEquals(0,PhoneCommandParser.choiceIndex("la primera"))
+    assertNull(PhoneCommandParser.choiceIndex("cero"))
+  }
+
+  @Test fun affirmationCannotEscapeAnIncompleteCalendarDraft() {
+    val s=session();s.accept("agendá reunión mañana a las 17:00")
+    assertTrue(s.accept("mejor a las 99:00") is ConversationResult.Prompt)
+    assertTrue(s.accept("dale") is ConversationResult.Prompt)
+  }
+
+  @Test fun morningAnswerDoesNotReplaceExplicitDate() {
+    val s=session();s.accept("agendá reunión el 20/11/2026")
+    assertTrue(s.accept("a las cinco") is ConversationResult.Prompt)
+    val result=s.accept("de la mañana") as ConversationResult.Plan
+    val date=Calendar.getInstance().apply{timeInMillis=(result.commands.single() as PhoneCommand.CalendarEvent).beginMillis}
+    assertEquals(20,date.get(Calendar.DAY_OF_MONTH));assertEquals(5,date.get(Calendar.HOUR_OF_DAY))
+  }
+
 }

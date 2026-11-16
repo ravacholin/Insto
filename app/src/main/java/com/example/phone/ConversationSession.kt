@@ -23,7 +23,9 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       clear()
       return if (active) ConversationResult.Prompt("Pedido cancelado.") else ConversationResult.Pass
     }
-    if (Regex("\\b(?:si|cuando|hasta que|a menos que)\\b").containsMatchIn(normalized) && looksLikeRequest(normalized)) {
+    if (normalized in listOf("si", "dale", "ok", "confirmo", "confirmar") && (calendarDraft != null || pending != null))
+      return ConversationResult.Prompt("Todavía hay datos pendientes. Completá o corregí el pedido antes de confirmarlo.")
+    if (Regex("\\b(?:si|cuando|hasta que|a menos que)\\b").containsMatchIn(PhoneCommandParser.normalize(maskQuotes(text))) && looksLikeRequest(normalized)) {
       return ConversationResult.Prompt("Todavía no ejecuto condiciones. Pedime los pasos para hacer ahora.")
     }
     val parts = splitSteps(text)
@@ -65,7 +67,16 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
     }
     when (val route = parser.parse(text)) {
       is PhoneRoute.Clarify -> { pending = route.context; return ConversationResult.Prompt(route.prompt) }
-      is PhoneRoute.Local -> { clear(); return ConversationResult.Pass }
+      is PhoneRoute.Local -> {
+        clear()
+        val event=route.command as? PhoneCommand.CalendarEvent
+        if(event!=null) {
+          val begin=Calendar.getInstance().apply {timeInMillis=event.beginMillis}
+          calendarDraft=CalendarDraft(event.title,"%02d/%02d/%04d".format(begin.get(Calendar.DAY_OF_MONTH),begin.get(Calendar.MONTH)+1,begin.get(Calendar.YEAR)),"%02d:%02d".format(begin.get(Calendar.HOUR_OF_DAY),begin.get(Calendar.MINUTE)),"${(event.endMillis-event.beginMillis)/1000} segundos")
+          return ConversationResult.Plan(listOf(event)).also {lastPlan=it.commands}
+        }
+        return ConversationResult.Pass
+      }
       else -> Unit
     }
     return ConversationResult.Pass
@@ -73,26 +84,45 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
 
   private data class CalendarDraft(var title: String = "", var date: String = "", var time: String = "", var duration: String = "una hora")
   private fun calendar(input: String, fresh: Boolean): ConversationResult {
-    val raw = input.trim().trimEnd('.', '!', '?')
+    val raw = input.trim().trimStart('¿', '¡').trim().trimEnd('.', '!', '?')
     val folded = FoldedRequest.of(raw)
     if (fresh) { clear(); calendarDraft = CalendarDraft() }
     val draft = calendarDraft ?: return ConversationResult.Pass
-    val date = Regex("\\b(pasado manana|manana|hoy|(?:el )?[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?)\\b").find(folded.text)
+    val syntax = if(fresh) FoldedRequest.of(maskQuotes(raw)).text else folded.text
+    val date = Regex("\\b(pasado manana|manana|hoy|(?:el )?[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?)\\b").findAll(syntax).firstOrNull { !syntax.substring(0,it.range.first).endsWith("de la ") }
     if (date != null) draft.date = date.value
     if (fresh) {
       val head = Regex("^(?:agenda|agendar|agendame|programa|crea (?:un )?evento)\\s+").find(folded.text)
       if (head != null) {
-        val end = date?.range?.first ?: folded.text.length
+        val timeStart=Regex("\\ba las?\\b").find(syntax)?.range?.first
+        val end = listOfNotNull(date?.range?.first,timeStart).minOrNull() ?: folded.text.length
         draft.title = raw.substring(head.range.last + 1, end).trim().trim('"', '“', '”')
       }
     }
-    val duration = Regex("(?:que dure |durante |y (?:que dure )?)(media hora|[a-z0-9]+(?: y [a-z]+)? (?:horas?|minutos?))$").find(folded.text)
+    val duration = Regex("(?:que dure |durante |y (?:que dure )?)(media hora|[a-z0-9]+(?: y [a-z]+)? (?:horas?|minutos?))$").find(syntax)
     if (duration != null) draft.duration = if (duration.groupValues[1] == "media hora") "treinta minutos" else duration.groupValues[1]
-    val time = Regex("(?:a las? |^mejor (?:a las? )?)([a-z0-9]+(?::[0-9]{2}| y (?:media|cuarto|[a-z]+))?(?: de la (?:manana|tarde|noche)| am| pm| horas)?)").find(folded.text)
-    if (time != null) draft.time = time.groupValues[1]
+    val time = Regex("(?:a las? |^mejor (?:a las? )?)([a-z0-9]+(?::[0-9]{2}| y (?:media|cuarto|(?!que\\b)[a-z]+))?(?: de la (?:manana|tarde|noche)| am| pm| horas)?)").find(syntax)
+    if (time != null) {
+      val replacement=time.groupValues[1]
+      val oldPeriod=Regex("(?:de la (?:manana|tarde|noche)|am|pm)$").find(draft.time)?.value
+      draft.time=if(!fresh && oldPeriod!=null && !Regex(":|de la| am| pm|horas").containsMatchIn(replacement)) "$replacement $oldPeriod" else replacement
+    }
     if (time == null && Regex("^de la (?:manana|tarde|noche)$").matches(folded.text) && draft.time.isNotBlank()) {
       draft.time = draft.time.substringBefore(" de la ") + " " + folded.text
     }
+    val consumed=BooleanArray(folded.text.length)
+    fun consume(range:IntRange) {range.forEach {if(it in consumed.indices)consumed[it]=true}}
+    if(fresh && date!=null)consume(0 until date.range.first)
+    date?.let {consume(it.range)}
+    time?.let {consume(it.range)}
+    duration?.let {consume(it.range)}
+    val residue=folded.text.filterIndexed {index,_ -> !consumed[index]}
+      .replace(Regex("^(?:mejor|cambia|cambialo)\\s+"), "")
+      .replace(Regex("^[,\\s]*(?:y\\s+)?(?:que dure|durante)\\s*$"), "")
+      .trim(' ', ',', '.', '!', '?')
+    val periodOnly=time==null && Regex("^de la (?:manana|tarde|noche)$").matches(folded.text)
+    if(residue.isNotBlank() && !periodOnly && !(fresh && date==null))
+      return ConversationResult.Prompt("Hay detalles del evento que todavía no puedo representar. Conservé el borrador; indicá fecha, hora y duración sin condiciones adicionales.")
     if (draft.title.isBlank()) return ConversationResult.Prompt("¿Qué título le pongo al evento?")
     if (draft.date.isBlank()) return ConversationResult.Prompt("¿Qué día? Podés decir mañana o una fecha completa.")
     if (draft.time.isBlank()) return ConversationResult.Prompt("¿A qué hora? Conservé el título y la fecha.")
@@ -107,6 +137,13 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
   }
 
   companion object {
+    private fun maskQuotes(input:String):String {
+      var quoted=false
+      return input.map {c ->
+        if(c in "\"“”") quoted=!quoted
+        if(quoted || c in "\"“”") '_' else c
+      }.joinToString("")
+    }
     private fun looksLikeRequest(s: String) = Regex("\\b(?:prende|apaga|pone|baja|subi|abri|agenda|llama|lleva|inicia)").containsMatchIn(s)
     /** Split only structural separators outside quotes. An unknown second step remains visible and rejects the plan. */
     fun splitSteps(input: String): List<String> {

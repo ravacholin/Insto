@@ -35,7 +35,7 @@ class GroqSettingsActivity : ComponentActivity() {
         Surface(Modifier.fillMaxSize()) {
           Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Gemini Decisions · híbrido", style = MaterialTheme.typography.headlineSmall)
-            Text("Los pedidos claros se resuelven localmente. Para pedidos no comprendidos, se envía a Google el texto escrito o transcrito. Gemini ayuda a elegir una acción o Instinct; el audio original sigue destinado a Instinct cuando corresponde. No se comparte tu libreta de contactos con Gemini.")
+            Text("Los pedidos claros se resuelven localmente. Para pedidos no comprendidos, se envía a Google el texto escrito o transcrito. Gemini ayuda a elegir una acción o Instinct y puede proponer parámetros estructurados que se revisan antes de ejecutar; el audio original sigue destinado a Instinct cuando corresponde. No se comparte tu libreta de contactos con Gemini.")
             Text("Es opcional y requiere internet. El nivel gratuito tiene cuotas y puede usar el contenido para mejorar productos de Google según sus términos. Si falla, se conserva el pedido para reintentar.")
             Text(if (geminiConfigured) "Hay una clave de Gemini guardada y cifrada en este teléfono." else "Cargá tu clave personal de Google AI Studio para activar el híbrido.")
             OutlinedTextField(geminiValue, { geminiValue = it }, label = { Text("Clave de Gemini") }, singleLine = true,

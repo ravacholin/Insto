@@ -44,15 +44,15 @@ object PhoneCommandCodec {
   }
   fun bool(k: String, default: Boolean? = null): Boolean { val v = if(o.has(k)) o.get(k) else default; require(v is Boolean); return v }
   return when(str("type")) {
-   "timer" -> { fields("seconds","label"); PhoneCommand.Timer(integer("seconds",1..86400), str("label", "")) }
-   "alarm" -> { fields("hour","minute","days","label"); val days = o.optJSONArray("days") ?: JSONArray(); require(days.length() <= 7); val values = (0 until days.length()).map { require(days.get(it) is Number); val n=days.getInt(it); require(n in 1..7 && days.getDouble(it) == n.toDouble()); n }; PhoneCommand.Alarm(integer("hour",0..23),integer("minute",0..59),values.distinct(),str("label", "")) }
-   "volume" -> { fields("operation","percent"); PhoneCommand.Volume(VolumeOp.valueOf(str("operation")),integer("percent",0..100,0)) }
+   "timer" -> { fields("seconds","label"); PhoneCommand.Timer(integer("seconds",1..Int.MAX_VALUE), str("label", "")) }
+   "alarm" -> { fields("hour","minute","days","label"); require(!o.has("days") || o.get("days") is JSONArray); val days = o.optJSONArray("days") ?: JSONArray(); require(days.length() <= 7); val values = (0 until days.length()).map { require(days.get(it) is Number); val n=days.getInt(it); require(n in 1..7 && days.getDouble(it) == n.toDouble()); n }; PhoneCommand.Alarm(integer("hour",0..23),integer("minute",0..59),values.distinct(),str("label", "")) }
+   "volume" -> { fields("operation","percent"); val op=VolumeOp.valueOf(str("operation"));require(op!=VolumeOp.SET || o.has("percent")); PhoneCommand.Volume(op,integer("percent",0..100,0)) }
    "torch" -> { fields("enabled"); PhoneCommand.Torch(bool("enabled")) }
    "open_app" -> { fields("name"); PhoneCommand.OpenApp(str("name")) }
    "navigate" -> { fields("destination","mode"); PhoneCommand.Navigate(str("destination"),TravelMode.valueOf(str("mode","DRIVING"))) }
    "maps" -> { fields("query"); PhoneCommand.MapSearch(str("query")) }
    "dial" -> { fields("target"); PhoneCommand.Dial(str("target")) }
-   "calendar" -> { fields("title","beginMillis","endMillis"); val begin=num("beginMillis"); val end=num("endMillis"); require(begin > 0 && end > begin && end-begin <= 7L*86400000); PhoneCommand.CalendarEvent(str("title"),begin,end) }
+   "calendar" -> { fields("title","beginMillis","endMillis"); val begin=num("beginMillis"); val end=num("endMillis"); require(begin > 0 && end > begin && end-begin <= Int.MAX_VALUE.toLong()*1000); PhoneCommand.CalendarEvent(str("title"),begin,end) }
    "camera" -> { fields("video"); PhoneCommand.Camera(bool("video",false)) }
    "youtube" -> { fields("query"); PhoneCommand.YouTubeSearch(str("query")) }
    "music" -> { fields("query"); PhoneCommand.MusicSearch(str("query")) }
@@ -61,7 +61,7 @@ object PhoneCommandCodec {
    "settings" -> { fields("kind"); val k=str("kind"); require(k in listOf("wifi","bluetooth","internet","conectividad","ajustes")); PhoneCommand.Settings(k) }
    "save_place" -> { fields("alias","address"); val a=str("alias"); require(a in listOf("casa","trabajo")); PhoneCommand.SavePlace(a,str("address")) }
    "media" -> { fields("operation","packageName"); val pkg=if(o.has("packageName")) str("packageName") else null; require(pkg == null || Regex("[a-zA-Z][a-zA-Z0-9_.]+").matches(pkg)); PhoneCommand.Media(MediaOp.valueOf(str("operation")),pkg) }
-   "temporary_mode" -> { fields("kind","seconds","percent","approximate"); PhoneCommand.TemporaryMode(ModeKind.valueOf(str("kind")),integer("seconds",1..86400),integer("percent",0..100,0),bool("approximate",false)) }
+   "temporary_mode" -> { fields("kind","seconds","percent","approximate"); val kind=ModeKind.valueOf(str("kind"));require(kind!=ModeKind.MEDIA_VOLUME || o.has("percent")); PhoneCommand.TemporaryMode(kind,integer("seconds",1..86400),integer("percent",0..100,0),bool("approximate",false)) }
    "end_mode" -> { fields(); PhoneCommand.EndMode }
    else -> throw IllegalArgumentException("Capacidad no admitida")
   }
@@ -72,9 +72,19 @@ object PhoneCommandCodec {
   is PhoneCommand.Media -> "Multimedia: ${when(command.operation) { MediaOp.PLAY -> "continuar"; MediaOp.PAUSE -> "pausar"; MediaOp.NEXT -> "siguiente"; MediaOp.PREVIOUS -> "anterior"; MediaOp.STATUS -> "consultar" }}"
   is PhoneCommand.TemporaryMode -> "${when(command.kind) {ModeKind.MEDIA_VOLUME -> "Volumen multimedia al ${command.percent}%"; ModeKind.SILENT -> "Silenciar llamadas y notificaciones"; ModeKind.DND -> "No molestar"}} durante ${command.seconds / 60} min · restauración ${if(command.approximate) "aproximada" else "programada"}"
   is PhoneCommand.OpenApp -> "Abrir ${command.name}"
-  is PhoneCommand.Navigate -> "Ruta a ${command.destination} · ${command.mode}"
-  is PhoneCommand.Volume -> "Volumen multimedia: ${command.operation} ${if(command.operation == VolumeOp.SET) "${command.percent}%" else ""}"
+  is PhoneCommand.Navigate -> "Ruta a ${command.destination} · ${when(command.mode){TravelMode.DRIVING->"en auto";TravelMode.WALKING->"a pie";TravelMode.BICYCLING->"en bicicleta";TravelMode.TRANSIT->"en transporte público"}}"
+  is PhoneCommand.Volume -> "Volumen multimedia: ${when(command.operation){VolumeOp.UP->"subir un paso";VolumeOp.DOWN->"bajar un paso";VolumeOp.SET->"${command.percent}%"}}"
   is PhoneCommand.Torch -> if(command.enabled) "Encender linterna" else "Apagar linterna"
-  else -> encode(command).toString()
+  is PhoneCommand.Alarm -> "Alarma: %02d:%02d".format(command.hour,command.minute) + if(command.days.isNotEmpty()) " · ${command.days.joinToString {listOf("", "domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado").getOrElse(it){"día inválido"}}}" else ""
+  is PhoneCommand.ClockList -> if(command.alarms) "Mostrar alarmas" else "Mostrar temporizadores"
+  is PhoneCommand.Stopwatch -> "Cronómetro: ${when(command.operation){StopwatchOp.START->"iniciar";StopwatchOp.PAUSE->"pausar";StopwatchOp.RESUME->"continuar";StopwatchOp.RESET->"reiniciar";StopwatchOp.STATUS->"mostrar"}}"
+  is PhoneCommand.MapSearch -> "Buscar en Maps: ${command.query}"
+  is PhoneCommand.SavePlace -> "Guardar ${command.alias}: ${command.address}"
+  is PhoneCommand.Dial -> "Preparar llamada a ${command.target}"
+  is PhoneCommand.Camera -> if(command.video) "Abrir cámara de video" else "Abrir cámara de fotos"
+  is PhoneCommand.YouTubeSearch -> "Buscar en YouTube: ${command.query}"
+  is PhoneCommand.MusicSearch -> "Buscar música: ${command.query}"
+  is PhoneCommand.Settings -> "Abrir ajustes de ${command.kind}"
+  PhoneCommand.EndMode -> "Terminar modo temporal y restaurar ahora"
  }
 }

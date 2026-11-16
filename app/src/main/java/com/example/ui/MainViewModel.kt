@@ -117,6 +117,7 @@ data class FloatingAssistantState(
   val needsGroqKey: Boolean = false,
   val needsCamera: Boolean = false,
   val needsContacts: Boolean = false,
+  val needsNotifications: Boolean = false,
   val needsClockAccessibility: Boolean = false,
   val geminiConfigured: Boolean = false,
   val geminiEnabled: Boolean = false,
@@ -126,6 +127,11 @@ data class FloatingAssistantState(
   val appOptions: List<AppOption> = emptyList(),
   val phoneActionCompletion: String? = null,
   val deciding: Boolean = false,
+  val workflowLines: List<String> = emptyList(),
+  val workflowCanContinue: Boolean = false,
+  val workflowCanRetry: Boolean = false,
+  val workflowActive: Boolean = false,
+  val accessSettingsAction: String? = null,
 )
 
 class MainViewModel @JvmOverloads constructor(
@@ -136,6 +142,7 @@ class MainViewModel @JvmOverloads constructor(
   private val hybridRouter: com.example.phone.HybridPhoneRouter = com.example.phone.HybridPhoneRouter(
     { com.example.phone.GeminiSettings(application).isEnabled() },
     com.example.phone.GeminiDecisionsClient({ com.example.phone.GeminiSettings(application).readKey() })),
+  private val structuredExtractor: StructuredCommandExtractor = StructuredCommandClient({ GeminiSettings(application).readKey() }),
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
@@ -157,10 +164,83 @@ class MainViewModel @JvmOverloads constructor(
   fun resumeFloatingAssistant() { floatingPaused = false }
   private val phoneParser = PhoneCommandParser()
   private val phoneExecutor = PhoneActionExecutor(application)
+  private val conversation = ConversationSession()
+  private val workflowStore = WorkflowStore(application)
+  private var workflowLoadError: String? = null
+  private val workflow = WorkflowRunner(runCatching { workflowStore.read() }.getOrElse {
+    workflowLoadError = it.message; null
+  }, workflowStore::write)
+  private fun activeWorkflow() = workflow.snapshot?.takeUnless { it.finished }
+
+  private fun syncWorkflow() {
+    val snapshot = workflow.snapshot
+    val active = activeWorkflow()
+    val step = active?.steps?.getOrNull(active.cursor)
+    floatingState.value = floatingState.value.copy(
+      workflowLines = snapshot?.steps?.mapIndexed { index, item -> "${index + 1}. ${PhoneCommandCodec.summary(item.command)}${CapabilityRequirements.missing(getApplication(),item.command).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: ""} · ${when(item.status){StepStatus.PENDING->"pendiente";StepStatus.EXECUTING->"en curso";StepStatus.COMPLETED->"completado";StepStatus.HANDED_OFF->"entregado · revisá la app";StepStatus.WAITING_INPUT->"requiere tu respuesta";StepStatus.FAILED->"falló";StepStatus.UNCERTAIN->"resultado incierto · revisá antes de seguir";StepStatus.CANCELLED->"cancelado"}}" } ?: emptyList(),
+      workflowActive = active != null,
+      needsConfirmation = active?.confirmed == false || confirmation != null,
+      workflowCanContinue = step?.status in listOf(StepStatus.HANDED_OFF, StepStatus.UNCERTAIN) || active?.confirmed == true && step?.status == StepStatus.PENDING,
+      workflowCanRetry = step?.status in listOf(StepStatus.FAILED, StepStatus.WAITING_INPUT),
+    )
+  }
+
+  private fun previewWorkflow(commands: List<PhoneCommand>) {
+    try {
+      workflow.prepare(commands)
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
+        status = "Revisá los pasos. Podés corregir el pedido o decir dale para ejecutarlo.", phoneActionCompletion = null)
+      retainLocalAudio = true
+      syncWorkflow()
+    } catch (_: Exception) {
+      retainDecisionRequest("No se pudo guardar el plan. No se ejecutó ninguna acción.")
+    }
+  }
+
+  fun continueFloatingWorkflow() {
+    val active = activeWorkflow() ?: return
+    val step = active.steps[active.cursor]
+    if (step.status == StepStatus.UNCERTAIN) workflow.acknowledgeUncertain() else workflow.resumeHandoff()
+    if (workflow.snapshot?.finished == true) finishWorkflow() else advanceWorkflow()
+  }
+
+  fun retryFloatingWorkflow() {
+    if (activeWorkflow() == null) return
+    workflow.retry(); advanceWorkflow()
+  }
+
+  fun cancelFloatingWorkflow() {
+    floatingGeneration++; floatingJob?.cancel()
+    cancelClockAutomation?.invoke(); cancelClockAutomation = null
+    workflow.cancel(); conversation.clear()
+    confirmation = null; cameraCommand = null; contactsCommand = null; notificationsCommand = null
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, needsConfirmation = false,
+      appOptions = emptyList(), contactOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false,
+      status = "Se detuvieron los pasos pendientes. Los ya realizados no se revierten.", error = null)
+    syncWorkflow()
+  }
+
+  private fun advanceWorkflow() {
+    try {
+      val command = workflow.next()
+      syncWorkflow()
+      if (command != null) runPhoneCommand(command)
+    } catch (_: Exception) { retainDecisionRequest("No se pudo guardar el progreso. Revisá la app antes de continuar.") }
+  }
+
+  private fun finishWorkflow() {
+    conversation.clear()
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
+      status = "Secuencia finalizada. Las entregas a otras apps se revisan allí.",
+      phoneActionCompletion = "Secuencia finalizada.")
+    syncWorkflow()
+  }
   private var clarification: String? = null
   private var confirmation: PhoneCommand? = null
   private var cameraCommand: PhoneCommand? = null
   private var contactsCommand: PhoneCommand? = null
+  private var appChoiceCommand: PhoneCommand? = null
+  private var notificationsCommand: PhoneCommand? = null
   private var retainLocalAudio = false
   private var routedRequestText = ""
   private var retryLocalCommand: Pair<PhoneCommand, Boolean>? = null
@@ -173,17 +253,24 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun confirmFloatingAction(accept: Boolean) {
+    if (activeWorkflow()?.confirmed == false) {
+      if (accept) { workflow.confirm(); advanceWorkflow() } else cancelFloatingWorkflow()
+      return
+    }
     val command = confirmation ?: return
     confirmation = null
     floatingState.value = floatingState.value.copy(needsConfirmation = false)
     if (accept) runPhoneCommand(command, confirmed = true)
+    else if (activeWorkflow() != null) cancelFloatingWorkflow()
     else floatingState.value = floatingState.value.copy(status = "Pedido cancelado.")
   }
 
   fun chooseFloatingApp(option: AppOption) {
     if (option !in floatingState.value.appOptions || floatingState.value.mode == FloatingMode.SENDING) return
     floatingState.value = floatingState.value.copy(appOptions = emptyList())
-    runPhoneCommand(PhoneCommand.OpenApp(option.packageName))
+    val media = appChoiceCommand as? PhoneCommand.Media
+    appChoiceCommand = null
+    runPhoneCommand(media?.copy(packageName = option.packageName) ?: PhoneCommand.OpenApp(option.packageName))
   }
 
   fun onFloatingCameraPermission(granted: Boolean) {
@@ -192,6 +279,14 @@ class MainViewModel @JvmOverloads constructor(
     floatingState.value = floatingState.value.copy(needsCamera = false)
     if (granted) runPhoneCommand(command)
     else floatingState.value = floatingState.value.copy(error = "No se habilitó la cámara. El pedido se conserva; la linterna no se cambió.", status = null)
+  }
+
+  fun onFloatingNotificationsPermission(granted: Boolean) {
+    val command=notificationsCommand?:return
+    notificationsCommand=null
+    floatingState.value=floatingState.value.copy(needsNotifications=false)
+    if(granted)runPhoneCommand(command)
+    else floatingState.value=floatingState.value.copy(error="Sin notificaciones no se aplicó el modo temporal. Podés habilitarlas en Ajustes y reintentar.")
   }
 
   fun onFloatingContactsPermission(granted: Boolean) {
@@ -213,6 +308,10 @@ class MainViewModel @JvmOverloads constructor(
     confirmation = null
     cameraCommand = null
     contactsCommand = null
+    notificationsCommand = null
+    if (activeWorkflow() != null) try {workflow.beginReplacement(command)} catch (_: Exception) {
+      retainDecisionRequest("No se pudo guardar el paso. No se ejecutó la acción."); return
+    }
     val result = phoneExecutor.execute(command, confirmed)
     applyPhoneActionResult(command, confirmed, result)
     result.stopwatchAutomation?.let { operation ->
@@ -228,9 +327,17 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private fun applyPhoneActionResult(command: PhoneCommand, confirmed: Boolean, result: com.example.phone.PhoneActionResult) {
+    val inWorkflow = activeWorkflow() != null
+    if (inWorkflow) try {workflow.accept(result)} catch (_: Exception) {
+      workflow.markUncertainInMemory()
+      retainDecisionRequest("No se pudo guardar el resultado. Revisá la app antes de continuar; no se repetirá el paso.")
+      syncWorkflow(); return
+    }
     confirmation = result.confirmation
     if (result.needsCamera) cameraCommand = command
     if (result.needsContacts) contactsCommand = command
+    if (result.needsNotifications) notificationsCommand = command
+    appChoiceCommand = command.takeIf {result.appOptions.isNotEmpty()}
     retainLocalAudio = result.retainRequest
     retryLocalCommand = if (result.retainRequest) command to confirmed else null
     retryLocalText = if (result.retainRequest) routedRequestText else null
@@ -241,12 +348,18 @@ class MainViewModel @JvmOverloads constructor(
       error = if (result.outcome == PhoneActionOutcome.REJECTED) result.message else null,
       status = if (result.outcome == PhoneActionOutcome.REJECTED) null else result.message, needsWhatsAppAccessibility = false, needsConfirmation = result.confirmation != null,
       needsClockAccessibility = result.needsClockAccessibility,
+      accessSettingsAction = result.accessSettingsAction,
       appOptions = result.appOptions, needsCamera = result.needsCamera, needsGroqKey = false,
-      needsContacts = result.needsContacts, contactOptions = result.contactOptions,
+      needsContacts = result.needsContacts, needsNotifications = result.needsNotifications, contactOptions = result.contactOptions,
       phoneActionCompletion = result.message.takeIf {
-        result.outcome == PhoneActionOutcome.COMPLETED || result.outcome == PhoneActionOutcome.HANDOFF
+        !inWorkflow && (result.outcome == PhoneActionOutcome.COMPLETED || result.outcome == PhoneActionOutcome.HANDOFF)
       })
-    if (!result.retainRequest) {
+    if (inWorkflow) {
+      syncWorkflow()
+      if (workflow.snapshot?.finished == true) finishWorkflow()
+      else if (result.outcome == PhoneActionOutcome.COMPLETED) advanceWorkflow()
+    }
+    if (!result.retainRequest && !inWorkflow) {
       pendingFloatingAudio?.file?.delete()
       pendingFloatingAudio = null
       pendingTranscript = null
@@ -257,6 +370,37 @@ class MainViewModel @JvmOverloads constructor(
   private suspend fun routeFloatingRequest(text: String): Boolean {
     retainLocalAudio = false
     val normalized = PhoneCommandParser.normalize(text)
+    if (workflowLoadError != null) {
+      if (normalized in listOf("cancelar", "descartar")) {workflow.clear(); workflowLoadError = null}
+      else {retainDecisionRequest(workflowLoadError + " Decí cancelar para descartar el registro dañado."); return true}
+    }
+    val active = activeWorkflow()
+    if (active != null) {
+      if (normalized in listOf("cancelar", "cancela", "no", "dejalo")) {cancelFloatingWorkflow(); return true}
+      if (!active.confirmed && normalized in listOf("si", "dale", "ejecutar", "confirmar", "confirmo", "ok")) {confirmFloatingAction(true); return true}
+      if (active.confirmed && normalized in listOf("continua", "continuar", "listo", "ya esta", "verificado", "omiti ese paso")) {continueFloatingWorkflow(); return true}
+      if (normalized in listOf("reintenta", "reintentar", "intenta de nuevo")) {retryFloatingWorkflow(); return true}
+    }
+    val hasChoice = confirmation != null || floatingState.value.appOptions.isNotEmpty() || floatingState.value.contactOptions.isNotEmpty()
+    if (!hasChoice && (active == null || !active.confirmed)) {
+      when (val conversational = conversation.accept(text)) {
+        is ConversationResult.Plan -> { previewWorkflow(conversational.commands); return true }
+        is ConversationResult.Prompt -> {
+          workflow.invalidatePreview()
+          syncWorkflow()
+          retainLocalAudio = true
+          floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = conversational.message, error = null)
+          return true
+        }
+        ConversationResult.Pass -> {
+          workflow.invalidatePreview()
+          syncWorkflow()
+        }
+      }
+    }
+    if (activeWorkflow() != null && !hasChoice) {
+      retainDecisionRequest("Hay una secuencia pendiente. Podés continuar, reintentar el paso o cancelar."); return true
+    }
     val retry = retryLocalCommand
     if (retry != null && retryLocalText?.let(PhoneCommandParser::normalize) == normalized) {
       runPhoneCommand(retry.first, retry.second)
@@ -271,7 +415,7 @@ class MainViewModel @JvmOverloads constructor(
     }
     val contacts = floatingState.value.contactOptions
     if (contacts.isNotEmpty()) {
-      val index = PhoneCommandParser.number(normalized)?.minus(1)
+      val index = PhoneCommandParser.choiceIndex(normalized)
       val selected = if (index != null) contacts.getOrNull(index) else contacts.singleOrNull {
         PhoneCommandParser.normalize(it.name) == normalized ||
           PhoneNumbers.canonical(text)?.let { number -> number == PhoneNumbers.canonical(it.number) } == true
@@ -287,9 +431,9 @@ class MainViewModel @JvmOverloads constructor(
     }
     val options = floatingState.value.appOptions
     if (options.isNotEmpty()) {
-      val index = PhoneCommandParser.number(normalized)?.minus(1)
+      val index = PhoneCommandParser.choiceIndex(normalized)
       val selected = if (index != null) options.getOrNull(index) else options.singleOrNull { PhoneCommandParser.normalize(it.label) == normalized }
-      if (selected != null) { runPhoneCommand(PhoneCommand.OpenApp(selected.packageName)); return true }
+      if (selected != null) { chooseFloatingApp(selected); return true }
     }
     val pendingContext = clarification
     val local = if (contacts.isNotEmpty() && normalized == "no") PhoneRoute.Cancel
@@ -303,6 +447,23 @@ class MainViewModel @JvmOverloads constructor(
       return true
     }
     val generation = floatingGeneration
+    if (pendingContext == null && hybridRouter.needsDecision(text, local)) {
+      decidingRequest = true
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, status = "Interpretando parámetros con Gemini…", error = null)
+      try {
+        val commands = structuredExtractor.extract(text)
+        if (generation != floatingGeneration || !kotlinx.coroutines.currentCoroutineContext().isActive || floatingPaused) return true
+        previewWorkflow(commands)
+        return true
+      } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        if (generation == floatingGeneration) retainDecisionRequest("Interpretación cancelada. El pedido se conserva.")
+        return true
+      } catch (_: Exception) {
+        // Classification can still route a genuine general query to Instinct.
+      } finally {
+        if (generation == floatingGeneration) {decidingRequest = false; floatingState.value = floatingState.value.copy(deciding = false)}
+      }
+    }
     val route = if (pendingContext == null && hybridRouter.needsDecision(text, local)) {
       decidingRequest = true
       floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, status = "Decidiendo con Gemini…", error = null)
@@ -329,9 +490,10 @@ class MainViewModel @JvmOverloads constructor(
     confirmation = null
     cameraCommand = null
     contactsCommand = null
+    notificationsCommand = null
     retryLocalCommand = null
     retryLocalText = null
-    floatingState.value = floatingState.value.copy(needsConfirmation = false, appOptions = emptyList(), needsCamera = false, needsContacts = false, contactOptions = emptyList())
+    floatingState.value = floatingState.value.copy(needsConfirmation = false, appOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false, contactOptions = emptyList())
     when (route) {
       is PhoneRoute.Local -> runPhoneCommand(route.command)
       is PhoneRoute.Clarify -> {
@@ -356,6 +518,7 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun prepareFloatingAssistant() {
+    runCatching {TemporaryModeManager(getApplication()).reconcile()}
     val initialized = floatingPrefs != null
     val prefs = runBlockingPrefs(getApplication())
     floatingPrefs = prefs
@@ -363,6 +526,11 @@ class MainViewModel @JvmOverloads constructor(
     floatingContact = ContextRoutingEngine.resolveRoute(getApplication(), prefs).contact ?: prefs.pinnedContact
     floatingState.value = if (initialized) floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct")
       else FloatingAssistantState(contactName = floatingContact?.displayName ?: "Instinct")
+    if (activeWorkflow() != null) {
+      syncWorkflow()
+      floatingState.value = floatingState.value.copy(status = "Hay una secuencia pendiente. Revisá los pasos antes de continuar.")
+    }
+    workflowLoadError?.let {floatingState.value = floatingState.value.copy(error = it)}
     val gemini = com.example.phone.GeminiSettings(getApplication())
     floatingState.value = floatingState.value.copy(geminiConfigured = gemini.readKey() != null, geminiEnabled = gemini.isEnabled())
   }
@@ -524,11 +692,15 @@ class MainViewModel @JvmOverloads constructor(
     pendingFloatingAudio?.file?.delete()
     pendingFloatingAudio = null
     pendingTranscript = null
+    notificationsCommand=null
+    conversation.clear()
+    // Explicit close cancels future steps; effects already handed off are never replayed.
+    if (activeWorkflow() != null) workflow.cancel()
     clarification = null
     confirmation = null
     cameraCommand = null
     contactsCommand = null
-    floatingState.value = floatingState.value.copy(deciding = false, needsConfirmation = false, needsCamera = false, appOptions = emptyList(), needsContacts = false, contactOptions = emptyList(), phoneActionCompletion = null)
+    floatingState.value = floatingState.value.copy(needsNotifications = false, workflowActive = false, workflowCanContinue = false, workflowCanRetry = false, deciding = false, needsConfirmation = false, needsCamera = false, appOptions = emptyList(), needsContacts = false, contactOptions = emptyList(), phoneActionCompletion = null)
   }
 
   fun sendFloatingAudio(onDispatched: () -> Unit) {

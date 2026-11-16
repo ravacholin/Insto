@@ -36,4 +36,26 @@ class WorkflowRunnerTest {
     recovered.retry()
     assertNull(recovered.next())
   }
+  @Test fun uncertainResultCannotBeRetriedAsARejectedStep() {
+    val r=WorkflowRunner();r.prepare(listOf(PhoneCommand.Media(MediaOp.NEXT)));r.confirm();r.next()
+    r.accept(PhoneActionResult("sin confirmación",outcome=PhoneActionOutcome.UNCERTAIN))
+    r.retry();assertNull(r.next())
+    assertEquals(StepStatus.UNCERTAIN,r.snapshot!!.steps.single().status)
+  }
+
+  @Test fun failingProgressWritePreventsDispatch() {
+    var failWrite=false
+    val r=WorkflowRunner(save={if(failWrite)throw java.io.IOException("disk")})
+    r.prepare(listOf(PhoneCommand.Timer(60)));r.confirm();failWrite=true
+    assertThrows(java.io.IOException::class.java){r.next()}
+    assertEquals(StepStatus.PENDING,r.snapshot!!.steps.single().status)
+  }
+
+  @Test fun invalidatedPreviewCannotBeConfirmed() {
+    val r=WorkflowRunner();r.prepare(listOf(PhoneCommand.Timer(60)))
+    r.invalidatePreview();r.confirm()
+    assertNull(r.next())
+    assertNull(r.snapshot)
+  }
+
 }

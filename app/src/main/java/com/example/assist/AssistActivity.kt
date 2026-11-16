@@ -97,6 +97,12 @@ class AssistActivity : ComponentActivity() {
         LaunchedEffect(state.needsCamera) {
           if (state.needsCamera) cameraPermission.launch(Manifest.permission.CAMERA)
         }
+        val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+          viewModel.onFloatingNotificationsPermission(granted)
+        }
+        LaunchedEffect(state.needsNotifications) {
+          if (state.needsNotifications && android.os.Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         val contactsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
           viewModel.onFloatingContactsPermission(granted)
         }
@@ -107,7 +113,7 @@ class AssistActivity : ComponentActivity() {
           if (uri != null) viewModel.selectFloatingAttachment(uri)
         }
         LaunchedEffect(Unit) {
-          if (savedInstanceState == null && hasMic && !showGeminiSetup) viewModel.startFloatingListening { finish() }
+          if (savedInstanceState == null && hasMic && !showGeminiSetup && !state.workflowActive) viewModel.startFloatingListening { finish() }
         }
         if (showGeminiSetup) {
           AlertDialog(
@@ -179,6 +185,9 @@ class AssistActivity : ComponentActivity() {
           onConfirm = viewModel::confirmFloatingAction,
           onChooseApp = viewModel::chooseFloatingApp,
           onChooseContact = viewModel::chooseFloatingContact,
+          onContinueWorkflow = viewModel::continueFloatingWorkflow,
+          onRetryWorkflow = viewModel::retryFloatingWorkflow,
+          onCancelWorkflow = viewModel::cancelFloatingWorkflow,
           onDismissOverlay = dismiss,
         )
       }

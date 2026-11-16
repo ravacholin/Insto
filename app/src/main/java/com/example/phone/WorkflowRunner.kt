@@ -19,6 +19,7 @@ class WorkflowRunner(initial: WorkflowSnapshot? = null, private val save: (Workf
     require(commands.size in 1..10)
     update(WorkflowSnapshot(steps = commands.map { WorkflowStep(it) }))
   }
+  fun invalidatePreview() {if(snapshot?.confirmed == false) clear()}
   fun confirm() { snapshot?.let { update(it.copy(confirmed = true)) } }
   fun next(): PhoneCommand? {
     val s = snapshot ?: return null
@@ -28,6 +29,10 @@ class WorkflowRunner(initial: WorkflowSnapshot? = null, private val save: (Workf
     replace(step.copy(status = StepStatus.EXECUTING))
     return step.command
   }
+  fun beginReplacement(command: PhoneCommand) {
+    val s = snapshot ?: return
+    if (!s.finished && s.confirmed) replace(s.steps[s.cursor].copy(command = command, status = StepStatus.EXECUTING))
+  }
   fun accept(result: PhoneActionResult) {
     val s = snapshot ?: return
     if (s.finished) return
@@ -35,6 +40,7 @@ class WorkflowRunner(initial: WorkflowSnapshot? = null, private val save: (Workf
     val status = when {
       result.stopwatchAutomation != null -> StepStatus.EXECUTING
       result.outcome == PhoneActionOutcome.NEEDS_INPUT -> StepStatus.WAITING_INPUT
+      result.outcome == PhoneActionOutcome.UNCERTAIN -> StepStatus.UNCERTAIN
       result.outcome == PhoneActionOutcome.REJECTED -> StepStatus.FAILED
       result.outcome == PhoneActionOutcome.HANDOFF -> StepStatus.HANDED_OFF
       else -> StepStatus.COMPLETED
@@ -55,7 +61,17 @@ class WorkflowRunner(initial: WorkflowSnapshot? = null, private val save: (Workf
     val s = snapshot ?: return
     if (!s.finished && s.steps[s.cursor].status == StepStatus.UNCERTAIN) update(s.copy(cursor = s.cursor + 1))
   }
-  fun cancel() { snapshot?.let { update(it.copy(cancelled = true)) } }
+  fun markUncertainInMemory() {
+    val s=snapshot?:return
+    if(!s.finished) snapshot=s.copy(steps=s.steps.mapIndexed {i,step -> if(i==s.cursor)step.copy(status=StepStatus.UNCERTAIN,message="No se pudo guardar el resultado; revisá la app.") else step})
+  }
+  fun cancel() { snapshot?.let { original ->
+    val cancelled=original.copy(cancelled = true,steps=original.steps.map {step ->
+      when(step.status){StepStatus.PENDING,StepStatus.FAILED,StepStatus.WAITING_INPUT -> step.copy(status=StepStatus.CANCELLED);StepStatus.EXECUTING -> step.copy(status=StepStatus.UNCERTAIN);else -> step}
+    })
+    snapshot=cancelled
+    save(cancelled)
+  } }
   fun clear() { update(null) }
   private fun replace(step: WorkflowStep, advance: Boolean = false) {
     val s = snapshot ?: return

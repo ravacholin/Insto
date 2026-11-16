@@ -85,3 +85,12 @@ Files: docs/FLOATING-ASSISTANT.md, this plan, app/build.gradle.kts version.
 - Native inline execution under existing user approval; no additional permission gate.
 - Remote main merged into local work preserving approved design commit.
 - Self-review: each approved subsystem has an implementation task; saved routines are explicitly excluded.
+
+- Implementation: conversation, durable runner, floating integration, media sessions and temporary modes added. Pure Kotlin regression cycles observed; Android verification in progress.
+- Final review: two Important findings (invalid correction left old preview executable; quoted title parsed as date/condition) addressed with pure and integration regressions. Missing SET percent regraded Important and rejected by codec/schema.
+- Ruling: after a process observation gap, automatic mode restoration loses ownership; explicit restore remains available. Cost: interruption may require manual restoration rather than risk overwriting user changes.
+- Verification environment: task-local Gradle/JDK/SDK, proxy/CA setup external to repo. Full suite blocked by Robolectric native runtime HTTP 403; external exclusion only for focused JVM verification.
+
+- Final: implementation complete without saved routines. assembleDebug + all test sources compile; 119/119 selected JVM tests pass in 22 classes. Full suite and three Android integration classes are blocked by external Robolectric downloads (HTTP 403), not reported as passed.
+- Final review fix verification: quoted titles, required percentages, preview invalidation and affirmative replies on incomplete drafts covered by pure RED→GREEN regressions; Android wiring assertions could not initialize.
+- Handset/provider: no connected device or credentials; physical verification remains pending.
