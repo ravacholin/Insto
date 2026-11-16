@@ -1,10 +1,10 @@
 # Insto: conversación, workflows y control multimedia
 
-Fecha: 2026-11-16. Estado: diseño propuesto, pendiente de aprobación.
+Fecha: 2026-11-16. Estado: aprobado el 2026-11-16, con rutinas guardadas excluidas por el usuario.
 
 ## Intención y decisiones del usuario
 
-El usuario eligió el paquete A y las propuestas 1, 2 y 4: interpretación estructurada, memoria del pedido, secuencias/rutinas y control multimedia/modos temporales. La propuesta 1 forma parte de A. El objetivo es completar tareas del teléfono con menos repeticiones y menos intervenciones manuales, sin depender de Instinct para ejecutarlas.
+El usuario eligió el paquete A y las propuestas 1, 2 y 4, y luego excluyó las rutinas guardadas de esta entrega: interpretación estructurada, memoria del pedido, secuencias/rutinas y control multimedia/modos temporales. La propuesta 1 forma parte de A. El objetivo es completar tareas del teléfono con menos repeticiones y menos intervenciones manuales, sin depender de Instinct para ejecutarlas.
 
 El resto de las decisiones de este documento son propuestas del asistente, no preferencias ya confirmadas del usuario. La aprobación pedida es sobre este alcance completo.
 
@@ -92,3 +92,7 @@ Las pruebas deben cubrir reglas de conversación y transiciones con ejecutores s
 ## Estado de aprobación
 
 Las capacidades están elegidas. Este diseño y sus límites todavía requieren aprobación del usuario antes de producir código de producto y el plan de implementación.
+
+## Ajuste de alcance aprobado
+
+El usuario confirmó «la número tres de rutinas no me interesa tanto el resto si, totalmente». Se implementan conversación, secuencias y multimedia/modos temporales. Todas las referencias anteriores a RoutineRepository y gestión de rutinas quedan pospuestas. No hay pantalla, persistencia ni comandos de rutinas guardadas en esta entrega. Las secuencias se ejecutan por pedido explícito. Se continúa con ejecución nativa en esta sesión bajo esa autorización.
