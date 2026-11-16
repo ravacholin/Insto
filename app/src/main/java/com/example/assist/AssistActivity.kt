@@ -86,6 +86,12 @@ class AssistActivity : ComponentActivity() {
         LaunchedEffect(state.needsCamera) {
           if (state.needsCamera) cameraPermission.launch(Manifest.permission.CAMERA)
         }
+        val contactsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+          viewModel.onFloatingContactsPermission(granted)
+        }
+        LaunchedEffect(state.needsContacts) {
+          if (state.needsContacts) contactsPermission.launch(Manifest.permission.READ_CONTACTS)
+        }
         val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
           if (uri != null) viewModel.selectFloatingAttachment(uri)
         }
@@ -132,6 +138,7 @@ class AssistActivity : ComponentActivity() {
           },
           onConfirm = viewModel::confirmFloatingAction,
           onChooseApp = viewModel::chooseFloatingApp,
+          onChooseContact = viewModel::chooseFloatingContact,
           onDismissOverlay = dismiss,
         )
       }
