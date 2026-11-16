@@ -20,7 +20,6 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.speech.GroqSettingsActivity
-import com.example.speech.GroqKeyStore
 import com.example.MainActivity
 import com.example.data.AssistantPreferencesRepository
 import com.example.context.ContextRoutingEngine
@@ -61,6 +60,11 @@ class AssistActivity : ComponentActivity() {
             viewModel.startFloatingListening { finish() }
           }
           startAfterPermission = false
+        }
+        val groqSetup = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+          if (result.resultCode == RESULT_OK && viewModel.floatingAssistant.value.needsGroqKey) {
+            viewModel.sendFloatingAudio { finish() }
+          }
         }
         val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
           viewModel.onFloatingCameraPermission(granted)
@@ -106,7 +110,7 @@ class AssistActivity : ComponentActivity() {
           },
           onConfigureGroq = {
             viewModel.pauseFloatingAssistant()
-            startActivity(Intent(this, GroqSettingsActivity::class.java))
+            groqSetup.launch(Intent(this, GroqSettingsActivity::class.java))
           },
           onConfigureContact = {
             viewModel.pauseFloatingAssistant()
@@ -127,9 +131,6 @@ class AssistActivity : ComponentActivity() {
     viewModel.resumeFloatingAssistant()
     autoSendEnabled = PingAutoSendAccessibilityService.isEnabled(this)
     viewModel.prepareFloatingAssistant()
-    if (viewModel.floatingAssistant.value.needsGroqKey && GroqKeyStore(this).read() != null) {
-      viewModel.sendFloatingAudio { finish() }
-    }
   }
 
   override fun onNewIntent(intent: Intent) {

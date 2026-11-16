@@ -13,13 +13,6 @@ import android.provider.AlarmClock
 import android.provider.Settings
 import java.util.Calendar
 
- data class AppOption(val label: String, val packageName: String)
- data class PhoneActionResult(
-  val message: String,
-  val confirmation: PhoneCommand? = null,
-  val appOptions: List<AppOption> = emptyList(),
-  val needsCamera: Boolean = false,
-)
 
 class PhoneActionExecutor(
   private val context: Context,
@@ -27,23 +20,23 @@ class PhoneActionExecutor(
   private val nowHourMinute: () -> Pair<Int, Int> = { Calendar.getInstance().let { it.get(Calendar.HOUR_OF_DAY) to it.get(Calendar.MINUTE) } },
 ) {
   fun execute(command: PhoneCommand, confirmed: Boolean = false): PhoneActionResult {
-    if (context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return PhoneActionResult("Desbloqueá el teléfono para ejecutar este pedido.")
+    if (context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return PhoneActionResult("Desbloqueá el teléfono para ejecutar este pedido.", outcome = PhoneActionOutcome.REJECTED)
     return try {
       when (command) {
         is PhoneCommand.Timer, is PhoneCommand.Alarm, is PhoneCommand.ClockList -> {
           if (command is PhoneCommand.Alarm && command.days.isEmpty() && !confirmed) {
             val (hour, minute) = nowHourMinute()
             if (command.hour * 60 + command.minute <= hour * 60 + minute) {
-              return PhoneActionResult("Esa hora ya pasó hoy. ¿La preparo para la próxima ocurrencia, mañana?", confirmation = command)
+              return PhoneActionResult("Esa hora ya pasó hoy. ¿La preparo para la próxima ocurrencia, mañana?", confirmation = command, outcome = PhoneActionOutcome.NEEDS_INPUT)
             }
           }
           val intent = checkNotNull(clockIntent(command))
-          if (intent.resolveActivity(context.packageManager) == null) PhoneActionResult("No hay una aplicación Reloj compatible instalada.")
-          else { launch(intent); PhoneActionResult(if (command is PhoneCommand.ClockList) "Abriendo el Reloj." else "Solicitud enviada al Reloj. Revisá allí la alarma o el temporizador.") }
+          if (intent.resolveActivity(context.packageManager) == null) PhoneActionResult("No hay una aplicación Reloj compatible instalada.", outcome = PhoneActionOutcome.REJECTED)
+          else { launch(intent); PhoneActionResult(if (command is PhoneCommand.ClockList) "Abriendo el Reloj." else "Solicitud enviada al Reloj. Revisá allí la alarma o el temporizador.", outcome = PhoneActionOutcome.HANDOFF) }
         }
         is PhoneCommand.Stopwatch -> {
           if (command.operation == StopwatchOp.RESET && !confirmed && stopwatch.snapshot().first > 0) {
-            return PhoneActionResult("¿Borro el tiempo actual y dejo el cronómetro en cero?", confirmation = command)
+            return PhoneActionResult("¿Borro el tiempo actual y dejo el cronómetro en cero?", confirmation = command, outcome = PhoneActionOutcome.NEEDS_INPUT)
           }
           stopwatch.apply(command.operation)
           PhoneActionResult(when (command.operation) {
@@ -56,7 +49,7 @@ class PhoneActionExecutor(
         is PhoneCommand.OpenApp -> openApp(command.name)
         is PhoneCommand.Volume -> {
           val audio = context.getSystemService(AudioManager::class.java)
-          if (audio.isVolumeFixed) PhoneActionResult("Este dispositivo no permite cambiar el volumen.")
+          if (audio.isVolumeFixed) PhoneActionResult("Este dispositivo no permite cambiar el volumen.", outcome = PhoneActionOutcome.REJECTED)
           else {
             if (command.operation == VolumeOp.SET) {
               audio.setStreamVolume(AudioManager.STREAM_MUSIC, (audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * command.percent.coerceIn(0,100) / 100), 0)
@@ -65,10 +58,10 @@ class PhoneActionExecutor(
           }
         }
         is PhoneCommand.Torch -> {
-          if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return PhoneActionResult("Permití el acceso a la cámara para usar la linterna.", needsCamera = true)
+          if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return PhoneActionResult("Permití el acceso a la cámara para usar la linterna.", needsCamera = true, outcome = PhoneActionOutcome.NEEDS_INPUT)
           val manager = context.getSystemService(CameraManager::class.java)
           val id = manager.cameraIdList.firstOrNull { manager.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
-          if (id == null) PhoneActionResult("Este teléfono no tiene una linterna disponible.")
+          if (id == null) PhoneActionResult("Este teléfono no tiene una linterna disponible.", outcome = PhoneActionOutcome.REJECTED)
           else { manager.setTorchMode(id, command.enabled); PhoneActionResult(if (command.enabled) "Linterna encendida." else "Linterna apagada.") }
         }
         is PhoneCommand.Settings -> {
@@ -82,8 +75,8 @@ class PhoneActionExecutor(
           PhoneActionResult("Abrí los ajustes para que completes el cambio.")
         }
       }
-    } catch (_: SecurityException) { PhoneActionResult("Android no permitió esa acción. Revisá los permisos o abrí los ajustes.") }
-      catch (_: Exception) { PhoneActionResult("No se pudo completar el pedido en este teléfono. Podés volver a intentarlo.") }
+    } catch (_: SecurityException) { PhoneActionResult("Android no permitió esa acción. Revisá los permisos o abrí los ajustes.", outcome = PhoneActionOutcome.REJECTED) }
+      catch (_: Exception) { PhoneActionResult("No se pudo completar el pedido en este teléfono. Podés volver a intentarlo.", outcome = PhoneActionOutcome.REJECTED) }
   }
 
   @Suppress("DEPRECATION")
@@ -95,10 +88,10 @@ class PhoneActionExecutor(
     val normalized = PhoneCommandParser.normalize(name)
     val exact = apps.filter { PhoneCommandParser.normalize(it.label) == normalized || it.packageName == name }
     val matches = exact.ifEmpty { apps.filter { PhoneCommandParser.normalize(it.label).contains(normalized) } }
-    if (matches.isEmpty()) return PhoneActionResult("No encontré una aplicación llamada $name.")
-    if (matches.size > 1) return PhoneActionResult("Encontré varias aplicaciones. Elegí una.", appOptions = matches.take(20))
+    if (matches.isEmpty()) return PhoneActionResult("No encontré una aplicación llamada $name.", outcome = PhoneActionOutcome.REJECTED)
+    if (matches.size > 1) return PhoneActionResult("Encontré varias aplicaciones. Elegí una.", appOptions = matches.take(20), outcome = PhoneActionOutcome.NEEDS_INPUT)
     val target = matches.single()
-    val intent = context.packageManager.getLaunchIntentForPackage(target.packageName) ?: return PhoneActionResult("Esa aplicación no se puede abrir.")
+    val intent = context.packageManager.getLaunchIntentForPackage(target.packageName) ?: return PhoneActionResult("Esa aplicación no se puede abrir.", outcome = PhoneActionOutcome.REJECTED)
     launch(intent)
     return PhoneActionResult("Abriendo ${target.label}.")
   }

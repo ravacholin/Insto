@@ -37,7 +37,7 @@ class GroqSettingsActivity : ComponentActivity() {
             OutlinedTextField(value, { value = it }, label = { Text("Clave de Groq") }, singleLine = true,
               visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
             Button(onClick = {
-              runCatching { store.save(value) }.onSuccess { value = ""; finish() }
+              runCatching { store.save(value) }.onSuccess { value = ""; setResult(RESULT_OK); finish() }
                 .onFailure { message = "No se pudo guardar la clave. Revisá el valor e intentá otra vez." }
             }, enabled = value.isNotBlank()) { Text("Guardar y volver") }
             if (configured) TextButton(onClick = {

@@ -43,6 +43,21 @@ class GroqTranscriberTest {
       }
     } finally { file.delete() }
   }
+  @Test fun emptyRecognitionDoesNotBecomeAGeneralQuery() = runBlocking {
+    val file = File.createTempFile("test-audio", ".m4a").apply { writeText("audio") }
+    try {
+      try { GroqTranscriber({ "personal-key" }, { Connection(200, "{\"text\":\"\"}") }).transcribe(file); fail("Must fail") }
+      catch (e: TranscriptionException) { assertEquals("audio", file.readText()) }
+    } finally { file.delete() }
+  }
+  @Test fun oversizedInputDoesNotUpload() = runBlocking {
+    val file = File.createTempFile("test-audio", ".m4a")
+    try {
+      java.io.RandomAccessFile(file, "rw").use { it.setLength(24L * 1024 * 1024 + 1) }
+      try { GroqTranscriber({ "personal-key" }, { error("Must not connect") }).transcribe(file); fail("Must fail") }
+      catch (e: TranscriptionException) { assertFalse(e.needsKey) }
+    } finally { file.delete() }
+  }
   @Test fun missingKeyDoesNotUpload() = runBlocking {
     val file = File.createTempFile("test-audio", ".m4a").apply { writeText("audio") }
     try {

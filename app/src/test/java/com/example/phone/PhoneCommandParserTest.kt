@@ -23,6 +23,15 @@ class PhoneCommandParserTest {
     assertTrue(parser.parse("alarma a las 25:80") is PhoneRoute.Clarify)
     assertEquals(PhoneRoute.Local(PhoneCommand.Alarm(7, 0)), parser.parseReply("alarm", "a las siete de la mañana"))
   }
+  @Test fun alarmMustConsumeEntireRequestAndRespectNegation() {
+    assertFalse(parser.parseReply("alarm", "no pongas ninguna alarma a las siete de la mañana") is PhoneRoute.Local)
+    assertFalse(parser.parseReply("alarm", "explicame una alarma a las siete de la mañana") is PhoneRoute.Local)
+    assertFalse(parser.parse("quiero una alarma que no suene a las siete de la mañana") is PhoneRoute.Local)
+    assertTrue(parser.parse("alarma a las 07:00 para dentro de dos semanas") is PhoneRoute.Unsupported)
+    assertTrue(parser.parse("alarma a las 07:00 todos los días excepto domingo") is PhoneRoute.Unsupported)
+    assertEquals(PhoneRoute.Local(PhoneCommand.Alarm(0, 0)), parser.parse("alarma a las doce de la noche"))
+    assertEquals(PhoneRoute.Local(PhoneCommand.Alarm(7, 0, listOf(2, 5))), parser.parse("alarma a las 07:00 todos los lunes y jueves"))
+  }
   @Test fun generalQueriesNeverExecute() {
     for (text in listOf("explicame cómo funciona un cronómetro", "no prendas la linterna", "qué es una alarma", "Instinct, ayudame a estudiar", "si pongo un timer qué pasa")) {
       assertEquals(text, PhoneRoute.Instinct, parser.parse(text))

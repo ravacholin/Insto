@@ -82,6 +82,60 @@ class FloatingPhoneRoutingTest {
       vm.dismissFloatingAssistant()
     } finally { audio.delete(); Dispatchers.resetMain() }
   }
+  @Test fun rejectedLocalTextKeepsDraft() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    try {
+      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+      vm.updateFloatingText("timer de diez minutos")
+      vm.sendFloatingText { fail("No clock installed") }
+      assertEquals("timer de diez minutos", vm.floatingAssistant.value.text)
+      assertEquals(FloatingMode.TYPING, vm.floatingAssistant.value.mode)
+      assertNotNull(vm.floatingAssistant.value.error)
+      vm.dismissFloatingAssistant()
+    } finally { Dispatchers.resetMain() }
+  }
+  @Test fun rejectedLocalAudioKeepsOriginalForRetry() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val audio = File.createTempFile("route-audio", ".m4a").apply { writeText("original") }
+    try {
+      val capture = Capture(audio)
+      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "timer de diez minutos" })
+      vm.startFloatingListening {}
+      capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
+      runCurrent(); vm.sendFloatingAudio { fail("Must not dispatch") }; advanceUntilIdle()
+      assertEquals(FloatingMode.AUDIO_READY, vm.floatingAssistant.value.mode)
+      assertEquals("original", audio.readText())
+      vm.runFloatingStopwatch(com.example.phone.StopwatchOp.START)
+      assertEquals(FloatingMode.AUDIO_READY, vm.floatingAssistant.value.mode)
+      assertEquals("original", audio.readText())
+      vm.dismissFloatingAssistant()
+    } finally { audio.delete(); Dispatchers.resetMain() }
+  }
+  @Test fun pauseRejectsLateUncooperativeTranscriptionAndRetryReusesAudio() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val audio = File.createTempFile("route-audio", ".m4a").apply { writeText("original") }
+    try {
+      val capture = Capture(audio)
+      val release = CompletableDeferred<Unit>()
+      var calls = 0
+      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber {
+        calls++
+        if (calls == 1) withContext(NonCancellable) { release.await() }
+        "iniciá el cronómetro"
+      })
+      vm.startFloatingListening {}
+      capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
+      runCurrent(); vm.sendFloatingAudio {}; runCurrent()
+      vm.pauseFloatingAssistant(); release.complete(Unit); advanceUntilIdle()
+      assertFalse(vm.floatingAssistant.value.stopwatchRunning)
+      assertEquals(FloatingMode.AUDIO_READY, vm.floatingAssistant.value.mode)
+      assertTrue(audio.exists())
+      vm.resumeFloatingAssistant(); vm.sendFloatingAudio {}; advanceUntilIdle()
+      assertEquals(2, calls)
+      assertTrue(vm.floatingAssistant.value.stopwatchRunning)
+      vm.dismissFloatingAssistant()
+    } finally { audio.delete(); Dispatchers.resetMain() }
+  }
   @Test fun missingKeyRetainsAudioForRetry() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val audio = File.createTempFile("route-audio", ".m4a").apply { writeText("original") }

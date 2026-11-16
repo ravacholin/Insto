@@ -76,6 +76,7 @@ fun AssistOverlayScreen(
   val listening = state.mode == FloatingMode.LISTENING
   val canSend = state.attachment != null || recording || state.mode == FloatingMode.AUDIO_READY ||
     (state.mode == FloatingMode.TYPING && state.text.isNotBlank())
+  val canControlStopwatch = state.mode in listOf(FloatingMode.IDLE, FloatingMode.TYPING) && state.text.isBlank()
   val focus = LocalFocusManager.current
   val keyboard = LocalSoftwareKeyboardController.current
 
@@ -183,17 +184,17 @@ fun AssistOverlayScreen(
           Text("Cronómetro · %02d:%02d:%02d".format(elapsed / 3600000, elapsed / 60000 % 60, elapsed / 1000 % 60),
             style = MaterialTheme.typography.titleMedium)
           Row {
-            TextButton(onClick = { onStopwatch(if (state.stopwatchRunning) StopwatchOp.PAUSE else StopwatchOp.RESUME) }, enabled = !busy && !recording && !listening) {
+            TextButton(onClick = { onStopwatch(if (state.stopwatchRunning) StopwatchOp.PAUSE else StopwatchOp.RESUME) }, enabled = canControlStopwatch) {
               Text(if (state.stopwatchRunning) "Pausar" else "Continuar")
             }
-            TextButton(onClick = { onStopwatch(StopwatchOp.RESET) }, enabled = !busy && !recording && !listening) { Text("Reiniciar") }
+            TextButton(onClick = { onStopwatch(StopwatchOp.RESET) }, enabled = canControlStopwatch) { Text("Reiniciar") }
           }
         }
         if (state.needsGroqKey) TextButton(onClick = onConfigureGroq) { Text("Configurar mi clave de Groq") }
         state.error?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall,
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
         if (state.error?.contains("contacto") == true) TextButton(onClick = onConfigureContact) { Text("Configurar contacto de Instinct") }
-        if (!autoSendEnabled && state.error != null && !state.needsGroqKey) {
+        if (!autoSendEnabled && state.needsWhatsAppAccessibility) {
           Text("Para enviar sin volver a tocar WhatsApp, activá el servicio de Accesibilidad de PingAssist.",
             color = secondary, style = MaterialTheme.typography.labelSmall)
           TextButton(onClick = {

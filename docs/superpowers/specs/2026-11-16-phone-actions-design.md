@@ -1,6 +1,6 @@
 # Acciones del teléfono desde el floating
 
-Estado: flujo aprobado por el usuario; implementación en curso. El usuario eligió uso personal y propuso Groq Whisper; se adopta Groq como reconocedor remoto sin backend propio.
+Estado: flujo aprobado por el usuario e implementado en la rama de trabajo; compilación y pruebas JVM verificadas, validación Android/Groq real pendiente. El usuario eligió uso personal y propuso Groq Whisper; se adopta Groq como reconocedor remoto sin backend propio.
 
 ## Intención y decisiones del usuario
 

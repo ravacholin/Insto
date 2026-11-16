@@ -8,6 +8,11 @@ class PhoneCommandParser {
   fun parseReply(context: String, text: String): PhoneRoute {
     val direct = parse(text)
     if (direct != PhoneRoute.Instinct) return direct
+    val normalized = normalize(text)
+    if (normalized.startsWith("no ")) return PhoneRoute.Cancel
+    // Only parameter-shaped replies may inherit a pending action. Explanations remain queries.
+    val parameter = Regex("^(?:(?:a|para) las? )?([a-z0-9]+)").find(normalized)?.groupValues?.get(1)
+    if (parameter == null || number(parameter) == null) return PhoneRoute.Instinct
     return when (context) {
       "timer" -> parse("temporizador de $text")
       "alarm" -> parse("alarma $text")
@@ -85,19 +90,27 @@ class PhoneCommandParser {
       !body.contains("todos los") && !body.contains("cada ")) {
       return PhoneRoute.Unsupported("Para una fecha específica, abrí las alarmas del Reloj y completá la fecha allí.")
     }
-    val days = if ("todos los dias" in body || "cada dia" in body) (1..7).toList() else {
-      if ("todos los" in body || "cada " in body) listOf("domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado").mapIndexedNotNull { i, d -> if (d in body) i + 1 else null } else emptyList()
+    if (body.isEmpty()) return PhoneRoute.Clarify("¿A qué hora? Por ejemplo, siete y media de la mañana.", "alarm")
+    // Consume the whole request: unsupported qualifiers must never silently change scheduling.
+    val time = Regex("^(?:(?:a|para) las? )?([a-z0-9]+)(?::([0-9]{1,2})| y (media|cuarto|[a-z]+(?: y [a-z]+)?))?(?: (de la manana|de la tarde|de la noche|am|pm|horas))?(?: (todos los dias|cada dia|(?:todos los|cada) [a-z]+(?: y [a-z]+)*))?(?: (?:llamad[ao]|con nombre) (.+))?$").matchEntire(body)
+      ?: return PhoneRoute.Unsupported("No pude interpretar todos los detalles de esa alarma. Indicá la hora completa; para fechas especiales, abrí las alarmas del Reloj.")
+    val repeating = time.groupValues[5]
+    val days = if (repeating in listOf("todos los dias", "cada dia")) (1..7).toList() else if (repeating.isEmpty()) emptyList() else {
+      val names = mapOf("domingo" to 1, "domingos" to 1, "lunes" to 2, "martes" to 3, "miercoles" to 4, "jueves" to 5, "viernes" to 6, "sabado" to 7, "sabados" to 7)
+      val requested = repeating.removePrefix("todos los ").removePrefix("cada ").split(" y ")
+      if (requested.any { it !in names }) return PhoneRoute.Unsupported("No pude interpretar los días de repetición. Indicá los días completos.")
+      requested.map { names.getValue(it) }.distinct().sorted()
     }
-    val time = Regex("(?:a las? |^)([a-z0-9]+)(?::([0-9]{1,2})| y (media|cuarto|[a-z]+(?: y [a-z]+)?))?(?: (de la manana|de la tarde|de la noche|am|pm|horas))?(?=$| para | todos | cada | llamado )").find(body)
-      ?: return PhoneRoute.Clarify("¿A qué hora? Por ejemplo, siete y media de la mañana.", "alarm")
+
     var hour = number(time.groupValues[1]) ?: return PhoneRoute.Clarify("¿A qué hora?", "alarm")
     val minutes = when (val m = time.groupValues[3]) { "media" -> 30; "cuarto" -> 15; "" -> time.groupValues[2].toIntOrNull() ?: 0; else -> number(m) ?: -1 }
     val period = time.groupValues[4]
     if (hour !in 0..23 || minutes !in 0..59 || (period.isNotEmpty() && period != "horas" && hour !in 1..12)) return PhoneRoute.Clarify("Indicá una hora válida, por ejemplo 07:30.", "alarm")
     if (period.isEmpty() && hour in 1..12 && !Regex("\\b0[0-9]:").containsMatchIn(body)) return PhoneRoute.Clarify("¿De la mañana o de la tarde? Repetí la hora completa.", "alarm")
-    if (period in listOf("de la tarde", "de la noche", "pm")) hour = hour % 12 + 12
+    if (period in listOf("de la tarde", "pm")) hour = hour % 12 + 12
+    if (period == "de la noche") hour = if (hour == 12) 0 else hour % 12 + 12
     if (period in listOf("de la manana", "am")) hour %= 12
-    val label = if (" llamado " in body) body.substringAfter(" llamado ") else ""
+    val label = time.groupValues[6]
     return PhoneRoute.Local(PhoneCommand.Alarm(hour, minutes, days, label))
   }
 
