@@ -478,7 +478,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   }
 
   private fun findSharePositiveButton(root: AccessibilityNodeInfo, pkg: String): AccessibilityNodeInfo? {
-    val ids = listOf("android:id/button1", "$pkg:id/confirm", "$pkg:id/confirm_button", "$pkg:id/ok",
+    val ids = listOf("android:id/button1", "$pkg:id/button1", "$pkg:id/confirm", "$pkg:id/confirm_button", "$pkg:id/ok",
       "$pkg:id/ok_button", "$pkg:id/positive_button", "$pkg:id/dialog_positive_button",
       "$pkg:id/send", "$pkg:id/send_button", "$pkg:id/send_btn", "$pkg:id/media_caption_send_btn")
     for (id in ids) {

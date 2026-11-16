@@ -137,3 +137,5 @@ Se reprodujo la frase real «quiero que enciendas la linterna»: el reconocedor 
 Los mensajes de resultado, permiso pendiente o error aparecen arriba del campo de entrada y la transcripción. En la linterna, el pedido reconocido llega a CameraManager tras el permiso de cámara de Android; rechazar el permiso deja el audio conservado. La prueba de integración de esa frase hasta el permiso está escrita y compila, pero la ejecución Android continúa bloqueada por Robolectric.
 
 Resultado 1.4.3: APK y fuentes de pruebas compilados; 52 pruebas JVM aprobadas. La revisión detectó y corrigió la preservación de «encendé el wifi» al normalizarlo. Firma y alineación verificadas. Suite completa continúa bloqueada antes de ejecutar por Robolectric (403); falta prueba física de la linterna.
+
+Compatibilidad revisada al preparar el PR: el PR #5 seguía abierto fuera de main. Se conserva también su selector `com.whatsapp:id/button1` y su comparación exacta del destinatario en «Share with Instinct?» / «¿Compartir con Instinct?». Los PR #5 y #6 se documentan como solapamientos de integración; no se fusionan ni cierran automáticamente.

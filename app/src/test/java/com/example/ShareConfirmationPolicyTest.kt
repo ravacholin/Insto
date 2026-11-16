@@ -96,6 +96,13 @@ class ShareConfirmationPolicyTest {
     assertFalse(attempt.observeSubmittedChat(43, 1500, true))
     assertTrue(attempt.observeSubmittedChat(43, 2000, true))
   }
+  @Test fun preservesTheExactShareQuestionSupportedByPrFive() {
+    assertTrue(canConfirm(listOf("Share with Instinct?", "OK")))
+    assertTrue(canConfirm(listOf("¿Compartir con Instinct?", "Aceptar"), "Aceptar"))
+    assertFalse(canConfirm(listOf("Share with Another Instinct?", "OK")))
+    assertFalse(ShareConfirmationPolicy.canConfirm(8, 8, true, "instinct_12345678.m4a", null, null,
+      "Instinct", "+5491112345678", listOf("Share with Otra Persona?", "OK"), "OK", false, true))
+  }
   @Test fun sendOnlyKeepsTheExistingOneTouchBehavior() {
     val attempt = ShareSendAttempt(8)
     assertFalse(attempt.beginSend(7, true, true, true))

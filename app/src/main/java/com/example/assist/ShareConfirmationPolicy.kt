@@ -26,6 +26,10 @@ object ShareConfirmationPolicy {
     if (body.any { negative.containsMatchIn(it) }) return false
     val name = clean(expectedName.orEmpty())
     val phone = PhoneNumberUtils.normalizeDigits(expectedPhone)
+    // Keep PR #5's exact recipient check for WhatsApp's native Share with …? dialog.
+    val nativeShareQuestion = Regex("^(?:share with|compartir con) (.+)$")
+    val nativeRecipients = body.mapNotNull { nativeShareQuestion.matchEntire(it.removePrefix("¿").removeSuffix("?"))?.groupValues?.get(1) }
+    if (nativeRecipients.any { !AutoSendGuard.recipientMatches(expectedPhone, listOf(it), name, openedConversation = true) }) return false
     val namePattern = name.takeIf { it.any(Char::isLetter) }?.let {
       Regex("(?<![\\p{L}\\p{N}_])${Regex.escape(it)}(?![\\p{L}\\p{N}_])")
     }
