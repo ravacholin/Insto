@@ -17,10 +17,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
-import androidx.compose.runtime.LaunchedEffect
-import kotlinx.coroutines.delay
 import com.example.phone.AppOption
-import com.example.phone.StopwatchOp
+import com.example.phone.ContactOption
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -58,14 +59,12 @@ fun AssistOverlayScreen(
   onRemoveAttachment: () -> Unit = {},
   onConfigureGroq: () -> Unit = {},
   onConfigureContact: () -> Unit = {},
+  onConfigureClockAccessibility: () -> Unit = {},
   onConfirm: (Boolean) -> Unit = {},
   onChooseApp: (AppOption) -> Unit = {},
-  onStopwatch: (StopwatchOp) -> Unit = {},
-  onStopwatchTick: () -> Unit = {},
+  onChooseContact: (ContactOption) -> Unit = {},
 ) {
-  LaunchedEffect(state.stopwatchMs != null) {
-    if (state.stopwatchMs != null) while (true) { onStopwatchTick(); delay(1000) }
-  }
+  var showExamples by remember { mutableStateOf(false) }
   val context = LocalContext.current
   val accent = Color.White
   val secondary = Color(0xFFAAAAAA)
@@ -76,7 +75,6 @@ fun AssistOverlayScreen(
   val listening = state.mode == FloatingMode.LISTENING
   val canSend = state.attachment != null || recording || state.mode == FloatingMode.AUDIO_READY ||
     (state.mode == FloatingMode.TYPING && state.text.isNotBlank())
-  val canControlStopwatch = state.mode in listOf(FloatingMode.IDLE, FloatingMode.TYPING) && state.text.isBlank()
   val focus = LocalFocusManager.current
   val keyboard = LocalSoftwareKeyboardController.current
 
@@ -107,12 +105,21 @@ fun AssistOverlayScreen(
             Text("DESTINO AUTOMÁTICO · ${com.example.BuildConfig.VERSION_NAME}", color = secondary,
               style = MaterialTheme.typography.labelSmall)
           }
-          TextButton(onClick = onConfigureGroq, enabled = !busy) { Text("Groq", color = secondary) }
+          TextButton(onClick = onConfigureGroq, enabled = !busy) { Text("IA", color = secondary) }
           IconButton(onClick = onDismissOverlay, modifier = Modifier.testTag("overlay_close_button")) {
             Icon(Icons.Filled.Close, "Cerrar asistente", tint = secondary)
           }
         }
         HorizontalDivider(color = edge)
+        if (!state.geminiConfigured) {
+          Text("Gemini Decisions sin configurar", color = secondary, style = MaterialTheme.typography.bodySmall)
+          TextButton(onClick = onConfigureGroq, enabled = !busy) { Text("Configurar clave de Gemini", color = Color.White) }
+        } else {
+          Text(if (state.geminiEnabled) "Gemini Decisions activado" else "Gemini Decisions desactivado", color = secondary, style = MaterialTheme.typography.bodySmall)
+        }
+        if (state.needsClockAccessibility) {
+          TextButton(onClick = onConfigureClockAccessibility, enabled = !busy) { Text("Activar Accesibilidad para el cronómetro", color = Color.White) }
+        }
         Text(
           text = when (state.mode) {
             FloatingMode.LISTENING -> "Te escucho… o tocá para escribir"
@@ -130,6 +137,20 @@ fun AssistOverlayScreen(
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
         state.error?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold,
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
+        if (!busy && !recording && !listening) {
+          TextButton(onClick = { showExamples = !showExamples }) {
+            Text(if (showExamples) "Ocultar ejemplos" else "Ejemplos de pedidos", color = secondary)
+          }
+          if (showExamples) Text(
+            "Llevame a Plaza de Mayo · Llevame a pie a Retiro\n" +
+              "Guardá mi casa en Av. Córdoba 1234 · Llevame a casa\n" +
+              "Buscá farmacias cerca · Llamá a Ana\n" +
+              "Agendá reunión mañana a las 17:00 durante una hora\n" +
+              "Abrí la cámara para grabar · Buscá jazz en YouTube\n" +
+              "Poné música de Soda Stereo\n" +
+              "Las llamadas y eventos se revisan en su propia app.",
+            color = secondary, style = MaterialTheme.typography.bodySmall)
+        }
         if (recording || listening) {
           Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Canvas(Modifier.weight(1f).height(26.dp)) {
@@ -151,7 +172,7 @@ fun AssistOverlayScreen(
           modifier = Modifier.fillMaxWidth().testTag("overlay_text_input")
             .onFocusChanged { if (it.isFocused) onTextFocus() },
           placeholder = { Text("Pedime algo del teléfono o consultá a ${state.contactName}", color = secondary) },
-          enabled = !busy, maxLines = 4, shape = controlShape,
+          enabled = !busy || state.deciding, maxLines = 4, shape = controlShape,
           keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
           keyboardActions = KeyboardActions(onSend = { if (canSend && !busy) onSend() }),
           colors = OutlinedTextFieldDefaults.colors(
@@ -182,14 +203,9 @@ fun AssistOverlayScreen(
         state.appOptions.forEachIndexed { index, app ->
           TextButton(onClick = { onChooseApp(app) }, enabled = !busy && !recording && !listening) { Text("${index + 1}. ${app.label}") }
         }
-        state.stopwatchMs?.let { elapsed ->
-          Text("Cronómetro · %02d:%02d:%02d".format(elapsed / 3600000, elapsed / 60000 % 60, elapsed / 1000 % 60),
-            style = MaterialTheme.typography.titleMedium)
-          Row {
-            TextButton(onClick = { onStopwatch(if (state.stopwatchRunning) StopwatchOp.PAUSE else StopwatchOp.RESUME) }, enabled = canControlStopwatch) {
-              Text(if (state.stopwatchRunning) "Pausar" else "Continuar")
-            }
-            TextButton(onClick = { onStopwatch(StopwatchOp.RESET) }, enabled = canControlStopwatch) { Text("Reiniciar") }
+        state.contactOptions.forEachIndexed { index, contact ->
+          TextButton(onClick = { onChooseContact(contact) }, enabled = !busy && !recording && !listening) {
+            Text("${index + 1}. ${contact.name} · ${contact.number}")
           }
         }
         if (state.needsGroqKey) TextButton(onClick = onConfigureGroq) { Text("Configurar mi clave de Groq") }

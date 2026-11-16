@@ -18,6 +18,17 @@ import org.robolectric.annotation.Config
 class FloatingOverlayTest {
   @get:Rule val composeRule = createComposeRule()
 
+  @Test fun `text remains editable while Gemini decides but sending stays disabled`() {
+    composeRule.setContent {
+      PingAssistTheme {
+        AssistOverlayScreen(FloatingAssistantState(mode = FloatingMode.SENDING, deciding = true), true, true,
+          {}, {}, {}, {}, {})
+      }
+    }
+    composeRule.onNodeWithTag("overlay_text_input").assertIsEnabled()
+    composeRule.onNodeWithTag("overlay_send_button").assertIsNotEnabled()
+  }
+
   @Test fun `text focus cancels voice before any characters are entered`() {
     var focused = false
     composeRule.setContent {

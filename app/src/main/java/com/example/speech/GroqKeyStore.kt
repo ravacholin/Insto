@@ -11,9 +11,10 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Ciphertext is outside backup; the AES key never leaves Android Keystore. */
-class GroqKeyStore(context: Context) {
-  private val file = File(context.noBackupFilesDir, "groq-key.enc")
-  private val alias = "insto.groq.personal.v1"
+class GroqKeyStore(context: Context, provider: String = "groq") {
+  init { require(provider in setOf("groq", "gemini")) }
+  private val file = File(context.noBackupFilesDir, "$provider-key.enc")
+  private val alias = "insto.$provider.personal.v1"
   @Synchronized fun read(): String? {
     if (!file.exists()) return null
     return runCatching {
@@ -30,7 +31,7 @@ class GroqKeyStore(context: Context) {
     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
     cipher.init(Cipher.ENCRYPT_MODE, secret())
     val bytes = cipher.iv + cipher.doFinal(text.toByteArray(Charsets.UTF_8))
-    val temporary = File(file.parentFile, "groq-key.tmp")
+    val temporary = File(file.parentFile, "${file.name}.tmp")
     temporary.writeBytes(bytes)
     check(temporary.renameTo(file)) { "No se pudo guardar la clave" }
   }
