@@ -126,6 +126,10 @@ fun AssistOverlayScreen(
           color = accent, style = MaterialTheme.typography.bodySmall,
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
+        if (!busy) state.status?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall,
+          modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+        state.error?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold,
+          modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
         if (recording || listening) {
           Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Canvas(Modifier.weight(1f).height(26.dp)) {
@@ -168,8 +172,6 @@ fun AssistOverlayScreen(
             }
           }
         }
-        if (!busy) state.status?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall,
-          modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
         state.transcript?.let { Text("Escuché: $it", color = secondary, style = MaterialTheme.typography.bodySmall, maxLines = 3) }
         if (state.needsConfirmation && !busy && !recording && !listening) {
           Row {
@@ -191,8 +193,6 @@ fun AssistOverlayScreen(
           }
         }
         if (state.needsGroqKey) TextButton(onClick = onConfigureGroq) { Text("Configurar mi clave de Groq") }
-        state.error?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall,
-          modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
         if (state.error?.contains("contacto") == true) TextButton(onClick = onConfigureContact) { Text("Configurar contacto de Instinct") }
         if (!autoSendEnabled && state.needsWhatsAppAccessibility) {
           Text("Para enviar sin volver a tocar WhatsApp, activá el servicio de Accesibilidad de PingAssist.",

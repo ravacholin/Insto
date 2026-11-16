@@ -84,6 +84,27 @@ class FloatingPhoneRoutingTest {
       vm.dismissFloatingAssistant()
     } finally { audio.delete(); Dispatchers.resetMain() }
   }
+  @Test fun reportedVoicePhraseReachesTorchPermissionInsteadOfOnlyShowingTranscript() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    shadowOf(app).denyPermissions(android.Manifest.permission.CAMERA)
+    val audio = File.createTempFile("route-audio", ".m4a").apply { writeText("original") }
+    try {
+      val capture = Capture(audio)
+      val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "quiero que enciendas la linterna" })
+      vm.startFloatingListening { fail("Phone action must not reach WhatsApp") }
+      capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
+      runCurrent(); vm.sendFloatingAudio { fail("Phone action must not reach WhatsApp") }; advanceUntilIdle()
+      assertEquals("quiero que enciendas la linterna", vm.floatingAssistant.value.transcript)
+      assertTrue(vm.floatingAssistant.value.needsCamera)
+      assertTrue(vm.floatingAssistant.value.status.orEmpty().contains("cámara"))
+      vm.onFloatingCameraPermission(false)
+      assertFalse(vm.floatingAssistant.value.needsCamera)
+      assertNotNull(vm.floatingAssistant.value.error)
+      assertEquals("original", audio.readText())
+      vm.dismissFloatingAssistant()
+    } finally { audio.delete(); Dispatchers.resetMain() }
+  }
   @Test fun rejectedLocalTextKeepsDraft() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     try {

@@ -129,3 +129,11 @@ Pruebas de la lógica de confirmación cubren esos órdenes, ventanas antiguas, 
 Validación de destinatario de 1.4.2: una lista «Enviar a» no queda autorizada por un paso anterior; el nombre del archivo de audio tampoco puede servir como nombre del contacto. Los controles de confirmación se buscan por sus IDs positivos de Android/WhatsApp, sin pulsar botones genéricos dentro de mensajes del chat.
 
 Resultado 1.4.2: assembleDebug y fuentes de pruebas compilados; 48 pruebas JVM aprobadas, incluidas 14 de la secuencia de confirmación. Firma APK y alineación de 16 KiB verificadas. Suite completa bloqueada antes de ejecución por nativeruntime-dist-compat (redirección HTTP 403). Sigue pendiente la verificación real en WhatsApp.
+
+## Corrección 1.4.3: interpretar el pedido completo antes de ejecutarlo
+
+Se reprodujo la frase real «quiero que enciendas la linterna»: el reconocedor la transcribía correctamente, pero el intérprete anterior la clasificaba Unsupported. Se normalizan ahora únicamente el encabezado del pedido («quiero que», «necesito que», «me gustaría que», «podrías», «me puedes») y su primer verbo (subjuntivo/infinitivo), conservando parámetros y condiciones. Esto aplica a las capacidades existentes, sin un segundo LLM y sin cambios de WhatsApp o Groq. Negaciones y explicaciones continúan sin ejecutar acciones.
+
+Los mensajes de resultado, permiso pendiente o error aparecen arriba del campo de entrada y la transcripción. En la linterna, el pedido reconocido llega a CameraManager tras el permiso de cámara de Android; rechazar el permiso deja el audio conservado. La prueba de integración de esa frase hasta el permiso está escrita y compila, pero la ejecución Android continúa bloqueada por Robolectric.
+
+Resultado 1.4.3: APK y fuentes de pruebas compilados; 52 pruebas JVM aprobadas. La revisión detectó y corrigió la preservación de «encendé el wifi» al normalizarlo. Firma y alineación verificadas. Suite completa continúa bloqueada antes de ejecutar por Robolectric (403); falta prueba física de la linterna.

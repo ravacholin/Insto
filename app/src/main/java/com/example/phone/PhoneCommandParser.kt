@@ -22,10 +22,10 @@ class PhoneCommandParser {
   }
 
   fun parse(text: String): PhoneRoute {
-    val s = normalize(text).removePrefix("por favor ").removeSuffix(" por favor").trim()
-      .replace(Regex("^(?:podes|puedes|podrias) (?:por favor )?"), "")
+    val original = normalize(text)
+    val s = canonicalRequest(original)
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel
-    if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |explica|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
+    if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |(?:me )?expli|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
     val commandPrefix = "(?:(?:me pones|poneme|ponme|pone|pon|poner|quiero|necesito|configura|crea|crear|programa|programar|inicia|iniciar|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"
     val timer = Regex("^${commandPrefix}(?:timer|temporizador|cuenta regresiva)\\b(.*)$").matchEntire(s)
     if (timer != null) {
@@ -70,7 +70,7 @@ class PhoneCommandParser {
       return if (n != null && n in 0..100) PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.SET, n))
         else PhoneRoute.Clarify("Indicá un volumen entre cero y cien por ciento.", "volume")
     }
-    val setting = Regex("^(?:abri|abrir|activa|activar|desactiva|apaga|encende|prende|configura) (?:el |los |la )?(?:ajustes de )?(wifi|wi fi|bluetooth|conectividad|internet|ajustes)$").matchEntire(s)
+    val setting = Regex("^(?:abri|abrir|activa|activar|desactiva|apaga|encende|enciende|prende|configura) (?:el |los |la )?(?:ajustes de )?(wifi|wi fi|bluetooth|conectividad|internet|ajustes)$").matchEntire(s)
     if (setting != null) return PhoneRoute.Local(PhoneCommand.Settings(setting.groupValues[1].replace("wi fi", "wifi")))
     val app = Regex("^(?:abri|abrir|abre) (?:la (?:app|aplicacion) )?(.+)$").matchEntire(s)
     if (app != null) return PhoneRoute.Local(PhoneCommand.OpenApp(app.groupValues[1]))
@@ -81,7 +81,20 @@ class PhoneCommandParser {
     if (Regex("^(?:necesito|quiero|me|pone|pon|encende|encender|encendeme|enciende|prende|prender|prendeme|apaga|apagar|apagame|activa|activar|inicia|iniciar|configura)\\b.*\\b(?:linterna|alarma|timer|temporizador|cronometro|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
       return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.")
     }
+    if (requestPrefix.containsMatchIn(original.removePrefix("por favor ")) &&
+      Regex("\\b(?:linterna|alarmas?|timers?|temporizadores?|cronometro|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
+      return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.")
+    }
     return PhoneRoute.Instinct
+  }
+
+  /** Normalize only the leading request and verb; keep every parameter and qualifier intact. */
+  private fun canonicalRequest(text: String): String {
+    var request = text.removePrefix("por favor ").removeSuffix(" por favor").trim()
+    requestPrefix.find(request)?.let { request = request.substring(it.range.last + 1).trim().removePrefix("por favor ") }
+    val head = Regex("^(?:me )?([a-z]+)\\b").find(request) ?: return request
+    val verb = requestVerbs[head.groupValues[1]] ?: return request
+    return verb + request.substring(head.range.last + 1)
   }
 
   private fun alarm(input: String): PhoneRoute {
@@ -119,6 +132,35 @@ class PhoneCommandParser {
   }
 
   companion object {
+    private val requestPrefix = Regex("^(?:(?:quiero|necesito|deseo|quisiera|me gustaria)(?: que)?|(?:me )?(?:podes|puedes|podrias|podras))\\s+")
+    private val requestVerbs = mapOf(
+      "enciende" to "enciendas encienda enciendan encender enciende encende encendeme",
+      "prende" to "prendas prenda prendan prender prende prendeme",
+      "apaga" to "apagues apague apaguen apagar apaga apagame",
+      "activa" to "actives active activen activar activa",
+      "desactiva" to "desactives desactive desactiven desactivar desactiva",
+      "pone" to "pongas ponga pongan poner pon pone poneme ponme pones",
+      "configura" to "configures configure configurar configura",
+      "programa" to "programes programe programar programa",
+      "crea" to "crees cree crear crea",
+      "inicia" to "inicies inicie iniciar inicia",
+      "arranca" to "arranques arranque arrancar arranca",
+      "pausa" to "pauses pause pausar pausa",
+      "para" to "pares pare parar para",
+      "detene" to "detengas detenga detener detene",
+      "continua" to "continues continue continuar continua",
+      "reanuda" to "reanudes reanude reanudar reanuda",
+      "reinicia" to "reinicies reinicie reiniciar reinicia",
+      "resetea" to "resetees resetee resetear resetea",
+      "subi" to "subas suba subir sube subi",
+      "baja" to "bajes baje bajar baja",
+      "aumenta" to "aumentes aumente aumentar aumenta",
+      "ajusta" to "ajustes ajuste ajustar ajusta",
+      "fija" to "fijes fije fijar fija",
+      "abri" to "abras abra abran abrir abre abri",
+      "mostra" to "muestres muestre mostrar muestra mostra",
+      "ver" to "veas vea ver"
+    ).flatMap { (canonical, variants) -> variants.split(' ').map { it to canonical } }.toMap()
     fun normalize(text: String): String = Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFD)
       .replace(Regex("\\p{M}+"), "").replace(Regex("[¿?¡!,.;]"), " ").replace(Regex("\\s+"), " ").trim()
     private val words = listOf("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce", "trece", "catorce", "quince", "dieciseis", "diecisiete", "dieciocho", "diecinueve", "veinte", "veintiuno", "veintidos", "veintitres", "veinticuatro", "veinticinco", "veintiseis", "veintisiete", "veintiocho", "veintinueve")

@@ -55,6 +55,33 @@ class PhoneCommandParserTest {
       assertTrue(text, parser.parse(text) is PhoneRoute.Unsupported)
     }
   }
+  @Test fun reportedTorchPhraseBecomesAnExecutableAction() {
+    assertEquals(PhoneRoute.Local(PhoneCommand.Torch(true)), parser.parse("quiero que enciendas la linterna"))
+    assertEquals(PhoneRoute.Local(PhoneCommand.Torch(false)), parser.parse("necesito que apagues la linterna"))
+    assertTrue(parser.parse("quiero que enciendas la linterna durante diez minutos") is PhoneRoute.Unsupported)
+  }
+  @Test fun naturalRequestWrappersWorkAcrossSupportedPhoneActions() {
+    for (text in listOf("Quiero encender la linterna", "quiero que me enciendas la linterna", "me gustaría que actives la linterna", "me puedes encender la linterna", "podrías encender la linterna por favor")) {
+      assertEquals(text, PhoneRoute.Local(PhoneCommand.Torch(true)), parser.parse(text))
+    }
+    assertEquals(PhoneRoute.Local(PhoneCommand.Timer(300)), parser.parse("necesito que pongas un temporizador de cinco minutos"))
+    assertEquals(PhoneRoute.Local(PhoneCommand.Stopwatch(StopwatchOp.START)), parser.parse("quiero que inicies el cronómetro"))
+    assertEquals(PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.DOWN)), parser.parse("quisiera que bajes el volumen"))
+    assertEquals(PhoneRoute.Local(PhoneCommand.OpenApp("spotify")), parser.parse("quiero que abras Spotify"))
+    assertEquals(PhoneRoute.Local(PhoneCommand.Alarm(7, 30)), parser.parse("me gustaría que pongas una alarma a las 07:30"))
+    assertEquals(PhoneRoute.Local(PhoneCommand.Settings("wifi")), parser.parse("quiero que actives el wifi"))
+  }
+  @Test fun wrappedNegationsAndExplanationsNeverExecutePhoneActions() {
+    for (text in listOf("quiero que no enciendas la linterna", "no quiero que enciendas la linterna", "quiero que me expliques cómo encender la linterna", "me gustaría que me expliques cómo funciona un cronómetro")) {
+      assertEquals(text, PhoneRoute.Instinct, parser.parse(text))
+    }
+  }
+  @Test fun canonicalizationPreservesExistingConnectivityCommands() {
+    for (target in listOf("wifi", "bluetooth", "internet")) {
+      assertEquals(PhoneRoute.Local(PhoneCommand.Settings(target)), parser.parse("encendé el $target"))
+      assertEquals(PhoneRoute.Local(PhoneCommand.Settings(target)), parser.parse("quiero que enciendas el $target"))
+    }
+  }
   @Test fun clarificationAndCancellation() {
     assertEquals(PhoneRoute.Local(PhoneCommand.Timer(180, "")), parser.parseReply("timer", "tres minutos"))
     assertEquals(PhoneRoute.Local(PhoneCommand.Torch(false)), parser.parseReply("alarm", "apagá la linterna"))
