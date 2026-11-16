@@ -1,6 +1,6 @@
 # Acciones del teléfono desde el floating
 
-Estado: propuesta para aprobación. No implementado.
+Estado: flujo aprobado por el usuario; implementación en curso. El usuario eligió uso personal y propuso Groq Whisper; se adopta Groq como reconocedor remoto sin backend propio.
 
 ## Intención y decisiones del usuario
 
@@ -33,7 +33,9 @@ El intérprete usa la transcripción internamente. Si es una orden local válida
 
 Una falla de transcripción o clasificación no demuestra que el pedido sea para Instinct: conservar la grabación y mostrar el problema, sin ejecutarla ni despacharla automáticamente. Los reintentos de interpretación reutilizan el audio guardado. Solo en esta situación excepcional puede ofrecerse una salida manual; el flujo normal nunca requiere elegir destino.
 
-Antes de implementar, validar un motor que pueda consumir PCM/archivo, español, compatibilidad con los SDK soportados y empaquetado nativo. SpeechRecognizer con micrófono propio no sirve; la entrada externa de Android depende de versión/proveedor y no es garantía universal. Se propone un motor local con modelo español, compartiendo PCM con el codificador AAC, para no requerir backend ni credenciales. El implementador debe registrar tamaño, licencia y compatibilidad reales del motor/modelo elegido y resolver su disponibilidad antes de habilitar la escucha automática. Si no es viable dentro de este alcance, presentar la limitación antes de cambiar a un proveedor remoto o alterar el flujo aprobado. El modelo no se descarga silenciosamente por datos móviles. Se permiten preparación/descarga inicial con estado visible y texto mientras no esté listo; no es una selección de destino por pedido.
+Reconocimiento elegido: Groq, endpoint HTTPS /openai/v1/audio/transcriptions, modelo whisper-large-v3-turbo, language=es y respuesta JSON. Enviar una copia del archivo M4A existente como multipart; preservar el original para Instinct. No requiere captura PCM adicional ni motor local. Tiene dependencia de internet y cuotas del proveedor; no asumir gratuidad ilimitada ni prometer límites no verificados.
+
+Uso personal: pantalla de configuración para cargar, reemplazar y borrar la clave una vez. Cifrarla con AES/GCM usando Android Keystore, almacenamiento privado excluido de copias de seguridad, sin BuildConfig, logs, repositorio ni textos de errores remotos. Informar en esa configuración que la voz se envía a Groq antes de decidir destino. Límites de tamaño, tiempos de espera y cancelación explícitos; sin reintentos automáticos de acciones o envíos. Si no hay clave, conservar audio y abrir configuración sin perderlo.
 
 ## Integración y presentación
 
@@ -59,4 +61,4 @@ Pruebas de integración para intents/extras, errores, permisos y conservación d
 
 ## Decisiones del implementador
 
-El implementador elige clases, gramática inicial de sinónimos, presentación exacta de controles y almacenamiento de estado dentro de las restricciones anteriores. No incorporar un modelo remoto, nuevos canales de WhatsApp ni capacidades fuera del alcance para resolver casos desconocidos.
+El implementador elige clases, gramática inicial de sinónimos, presentación exacta de controles y almacenamiento de estado dentro de las restricciones anteriores. No incorporar un segundo modelo de interpretación, nuevos canales de WhatsApp ni capacidades fuera del alcance para resolver casos desconocidos.
