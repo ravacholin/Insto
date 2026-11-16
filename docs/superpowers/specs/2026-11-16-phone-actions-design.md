@@ -4,11 +4,11 @@ Estado: propuesta para aprobación. No implementado.
 
 ## Intención y decisiones del usuario
 
-El floating debe resolver pedidos normales de un asistente Android, especialmente alarmas, temporizadores y cronómetro, sin depender de Instinct. El usuario eligió distinguir automáticamente las acciones del teléfono de las consultas para Instinct. No hace falta recibir comandos desde WhatsApp.
+El floating debe resolver pedidos normales de un asistente Android, especialmente alarmas, temporizadores y cronómetro, sin depender de Instinct. El usuario eligió distinguir automáticamente las acciones del teléfono de las consultas para Instinct. Aclaró que debe haber un único micrófono y una sola grabación: el audio se interpreta para decidir el destino y, cuando corresponde a Instinct, se envía el audio original, no su transcripción. No debe haber selector, botón de nota de voz aparte ni pasos adicionales para elegir destino. No hace falta recibir comandos desde WhatsApp.
 
 ## Enfoques
 
-Se ofrecieron detección automática y un selector Teléfono/Instinct. El usuario eligió detección automática para evitar un paso extra. La propuesta técnica es un intérprete local de acciones explícitas en español, con capacidades Android concretas; no requiere otro modelo ni servidor. Las consultas generales mantienen la integración existente con Instinct. El reconocimiento de voz usa el servicio de Android disponible en el dispositivo.
+Se ofrecieron detección automática y un selector Teléfono/Instinct. El usuario eligió detección automática para evitar un paso extra. La propuesta técnica es un intérprete local de acciones explícitas en español, con capacidades Android concretas; no requiere otro modelo ni servidor. Las consultas generales mantienen la integración existente con Instinct. La interpretación de voz debe consumir el mismo audio que ya captura la aplicación, sin abrir otro micrófono. La selección técnica del reconocedor requiere comprobar compatibilidad con audio externo y español antes de implementarla.
 
 ## Alcance inicial propuesto
 
@@ -27,17 +27,21 @@ Texto y voz reconocida pasan por el mismo intérprete. La salida es una acción 
 
 Las aclaraciones guardan la intención pendiente: «poné una alarma» → «¿A qué hora?» → «a las siete de la mañana». Cancelar, cerrar el panel o un nuevo pedido completo descarta esa intención. Las interpretaciones ambiguas de hora requieren aclaración; una hora pasada sin fecha explícita se propone para la próxima ocurrencia y se muestra antes de despacharla. Ejecutar solamente resultados finales de voz y proteger contra doble envío.
 
-Propuesta de voz: el micrófono principal pasa a dictado con SpeechRecognizer, preferentemente reconocimiento en el dispositivo si está disponible. Si solo hay un servicio de reconocimiento remoto, indicar esa circunstancia antes de activarlo por primera vez; el servicio del sistema puede requerir conexión. Si no hay reconocedor, ofrecer texto y nota de voz, sin mandar una grabación fallida automáticamente.
+Flujo de voz obligatorio: conservar la captura AudioRecord de 16 kHz mono y el archivo AAC/M4A existente. Compartir las muestras PCM de esa misma sesión con un reconocedor que acepte audio externo, o transcribir una copia tras finalizar. No arrancar otro capturador de micrófono, no pedir repetir el mensaje y no sustituir el audio original por texto para enviarlo a Instinct. Mantener el preroll, la finalización por silencio y el envío manual anticipado; estos ahora finalizan captura y disparan interpretación antes de cualquier despacho.
 
-Las consultas dictadas que vayan a Instinct se envían como texto reconocido. Esta es una decisión propuesta, no una preferencia ya confirmada del usuario. Conservar un control explícito de nota de voz para grabar y enviar audio mediante la captura AAC actual. Ese modo y los adjuntos se dirigen explícitamente a Instinct, sin interpretar el contenido como órdenes locales. No ejecutar SpeechRecognizer y la captura AAC al mismo tiempo. Mantener los disparadores explícitos heredados de grabación.
+El intérprete usa la transcripción internamente. Si es una orden local válida, la ejecuta y no manda audio a WhatsApp; si es una consulta general, usa el archivo M4A original y el envío de audio existente. Si necesita aclaración, la muestra y escucha la respuesta por el mismo micrófono al activarlo. Los adjuntos siguen el envío existente a Instinct.
+
+Una falla de transcripción o clasificación no demuestra que el pedido sea para Instinct: conservar la grabación y mostrar el problema, sin ejecutarla ni despacharla automáticamente. Los reintentos de interpretación reutilizan el audio guardado. Solo en esta situación excepcional puede ofrecerse una salida manual; el flujo normal nunca requiere elegir destino.
+
+Antes de implementar, validar un motor que pueda consumir PCM/archivo, español, compatibilidad con los SDK soportados y empaquetado nativo. SpeechRecognizer con micrófono propio no sirve; la entrada externa de Android depende de versión/proveedor y no es garantía universal. Se propone un motor local con modelo español, compartiendo PCM con el codificador AAC, para no requerir backend ni credenciales. El implementador debe registrar tamaño, licencia y compatibilidad reales del motor/modelo elegido y resolver su disponibilidad antes de habilitar la escucha automática. Si no es viable dentro de este alcance, presentar la limitación antes de cambiar a un proveedor remoto o alterar el flujo aprobado. El modelo no se descarga silenciosamente por datos móviles. Se permiten preparación/descarga inicial con estado visible y texto mientras no esté listo; no es una selección de destino por pedido.
 
 ## Integración y presentación
 
 Mantener Kotlin, Compose, estilo oscuro y accesos existentes. Quitar la exigencia de configurar un contacto antes de abrir el floating: solo pedirlo al intentar despachar a Instinct. Las acciones locales deben funcionar sin WhatsApp instalado, sin contacto y sin Accesibilidad activada.
 
-El floating muestra el texto reconocido, aclaraciones y resultado. Un cronómetro muestra tiempo y controles en el panel; no mantener el panel abierto como requisito para medir. Mantener el botón de adjuntos y añadir acceso explícito a nota de voz. El aviso de Accesibilidad corresponde a envíos de WhatsApp y no debe presentarse como requisito para usar el teléfono.
+El floating muestra el texto reconocido, aclaraciones y resultado. Un cronómetro muestra tiempo y controles en el panel; no mantener el panel abierto como requisito para medir. Mantener el botón de adjuntos y un único control de micrófono para todos los pedidos; no añadir un modo separado de nota de voz. El aviso de Accesibilidad corresponde a envíos de WhatsApp y no debe presentarse como requisito para usar el teléfono.
 
-Separar intérprete puro, catálogo de capacidades, ejecutor Android y estado conversacional del ViewModel. Los eventos de ejecución se consumen una vez, incluso al rotar. SpeechRecognizer se maneja en Main y se cancela al cerrar o interrumpir. No reanudar escucha de fondo ni activar micrófono permanente.
+Separar intérprete puro, catálogo de capacidades, ejecutor Android y estado conversacional del ViewModel. Los eventos de ejecución se consumen una vez, incluso al rotar. El reconocedor recibe muestras fuera del hilo principal, respeta la propiedad de cada sesión y se cancela al cerrar o interrumpir. Las colas de audio deben estar limitadas y no bloquear captura ni codificación. No reanudar escucha de fondo ni activar micrófono permanente.
 
 ## Ejecución, permisos y resultados
 
@@ -49,7 +53,7 @@ Persistir estado del cronómetro con tiempo acumulado y referencia SystemClock.e
 
 ## Verificación y límites
 
-Pruebas de interpretación en español: duraciones, números escritos y dígitos, horarios, días, aclaraciones, negaciones, consultas explicativas y entradas no soportadas. Verificar enrutamiento, no repetición de acciones, resultados de voz parciales/finales, contacto ausente, y tiempo del cronómetro con reloj inyectado, restauración y reinicio.
+Pruebas de interpretación en español: duraciones, números escritos y dígitos, horarios, días, aclaraciones, negaciones, consultas explicativas y entradas no soportadas. Verificar enrutamiento, no repetición de acciones, resultados de voz parciales/finales, integridad del M4A original enviado a Instinct, una sola captura de micrófono, fallas de reconocimiento sin despacho, contacto ausente, y tiempo del cronómetro con reloj inyectado, restauración y reinicio.
 
 Pruebas de integración para intents/extras, errores, permisos y conservación del envío de WhatsApp de texto, audio y adjuntos. Ejecutar las pruebas viables y ensamblar APK; registrar bloqueos reales sin presentar compilación como validación del dispositivo. Reloj, reconocimiento de voz, linterna, permisos, bloqueo de pantalla y envío real requieren comprobación en el Android del usuario.
 
