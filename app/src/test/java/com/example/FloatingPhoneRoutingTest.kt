@@ -6,6 +6,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.net.Uri
 import com.example.testsupport.ConnectedAccessibility
+import com.example.testsupport.installGoogleClock
 import com.example.data.AssistantPreferencesRepository
 import org.robolectric.Shadows.shadowOf
 import org.junit.Before
@@ -27,10 +28,92 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class FloatingPhoneRoutingTest {
-  @Before fun clearStopwatch() {
+  @Before fun installClock() {
     val app = ApplicationProvider.getApplicationContext<Application>()
-    app.getSharedPreferences("local_stopwatch", 0).edit().clear().commit()
+    installGoogleClock(app, listOf("com.android.deskclock.action.START_STOPWATCH"))
   }
+  @Test fun nativeTextHandsOffOnceAndCompletionIsConsumedOnce() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    try {
+      val vm = MainViewModel(app)
+      vm.updateFloatingText("iniciá el cronómetro")
+      vm.sendFloatingText { fail("Phone request must not send WhatsApp") }
+      assertEquals("com.android.deskclock.action.START_STOPWATCH", shadowOf(app).nextStartedActivity.action)
+      assertEquals(FloatingMode.IDLE, vm.floatingAssistant.value.mode)
+      assertEquals("", vm.floatingAssistant.value.text)
+      val completion = vm.floatingAssistant.value.phoneActionCompletion
+      assertNotNull(completion)
+      assertEquals(completion, vm.consumePhoneActionCompletion())
+      assertNull(vm.consumePhoneActionCompletion())
+      vm.sendFloatingText { fail("Consumed request cannot dispatch twice") }
+      assertNull(shadowOf(app).nextStartedActivity)
+      vm.dismissFloatingAssistant()
+    } finally { Dispatchers.resetMain() }
+  }
+
+  @Test fun unsupportedNativePausePreservesDraftAndCanOpenGoogleClockExplicitly() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    try {
+      val vm = MainViewModel(app)
+      vm.updateFloatingText("pausá el cronómetro")
+      vm.sendFloatingText { fail("Phone request must not send WhatsApp") }
+      assertEquals("pausá el cronómetro", vm.floatingAssistant.value.text)
+      assertEquals(FloatingMode.TYPING, vm.floatingAssistant.value.mode)
+      assertNotNull(vm.floatingAssistant.value.error)
+      assertNull(vm.consumePhoneActionCompletion())
+      assertNull(shadowOf(app).nextStartedActivity)
+      vm.chooseFloatingApp(vm.floatingAssistant.value.appOptions.single())
+      assertEquals("com.google.android.deskclock", shadowOf(app).nextStartedActivity.component!!.packageName)
+      assertNotNull(vm.consumePhoneActionCompletion())
+      assertNull(shadowOf(app).nextStartedActivity)
+      vm.dismissFloatingAssistant()
+    } finally { Dispatchers.resetMain() }
+  }
+
+  @Test fun nativeResetStaysOpenUntilConfirmedAndCancelDoesNotLaunchClock() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    installGoogleClock(app, listOf("com.android.deskclock.action.RESET_STOPWATCH"))
+    try {
+      val vm = MainViewModel(app)
+      vm.updateFloatingText("reiniciá el cronómetro")
+      vm.sendFloatingText { fail("Phone request must not send WhatsApp") }
+      assertTrue(vm.floatingAssistant.value.needsConfirmation)
+      assertNull(vm.consumePhoneActionCompletion())
+      assertNull(shadowOf(app).nextStartedActivity)
+      vm.confirmFloatingAction(false)
+      assertFalse(vm.floatingAssistant.value.needsConfirmation)
+      assertNull(vm.consumePhoneActionCompletion())
+      assertNull(shadowOf(app).nextStartedActivity)
+      vm.updateFloatingText("reiniciá el cronómetro")
+      vm.sendFloatingText { fail("Phone request must not send WhatsApp") }
+      vm.confirmFloatingAction(true)
+      assertEquals("com.android.deskclock.action.RESET_STOPWATCH", shadowOf(app).nextStartedActivity.action)
+      assertNotNull(vm.consumePhoneActionCompletion())
+      vm.confirmFloatingAction(true)
+      assertNull(shadowOf(app).nextStartedActivity)
+      vm.dismissFloatingAssistant()
+    } finally { Dispatchers.resetMain() }
+  }
+
+  @Test fun volumeChangesTheNativeMusicStreamAndCompletesWithoutAnotherScreen() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    try {
+      val audio = app.getSystemService(android.media.AudioManager::class.java)
+      val vm = MainViewModel(app)
+      vm.updateFloatingText("poné el volumen al cincuenta por ciento")
+      vm.sendFloatingText { fail("Phone request must not send WhatsApp") }
+      assertEquals(audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) / 2,
+        audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC))
+      assertNotNull(vm.consumePhoneActionCompletion())
+      assertNull(shadowOf(app).nextStartedActivity)
+      vm.dismissFloatingAssistant()
+    } finally { Dispatchers.resetMain() }
+  }
+
   @Test fun generalVoiceSendsOriginalAudioRatherThanTranscript() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
@@ -80,7 +163,7 @@ class FloatingPhoneRoutingTest {
       vm.sendFloatingAudio { fail("Must not dispatch") }
       advanceUntilIdle()
       assertEquals(FloatingMode.IDLE, vm.floatingAssistant.value.mode)
-      assertTrue(vm.floatingAssistant.value.stopwatchRunning)
+      assertEquals("com.android.deskclock.action.START_STOPWATCH", shadowOf(ApplicationProvider.getApplicationContext<Application>()).nextStartedActivity.action)
       vm.dismissFloatingAssistant()
     } finally { audio.delete(); Dispatchers.resetMain() }
   }
@@ -97,6 +180,7 @@ class FloatingPhoneRoutingTest {
       runCurrent(); vm.sendFloatingAudio { fail("Phone action must not reach WhatsApp") }; advanceUntilIdle()
       assertEquals("quiero que enciendas la linterna", vm.floatingAssistant.value.transcript)
       assertTrue(vm.floatingAssistant.value.needsCamera)
+      assertNull(vm.consumePhoneActionCompletion())
       assertTrue(vm.floatingAssistant.value.status.orEmpty().contains("cámara"))
       vm.onFloatingCameraPermission(false)
       assertFalse(vm.floatingAssistant.value.needsCamera)
@@ -128,7 +212,7 @@ class FloatingPhoneRoutingTest {
       runCurrent(); vm.sendFloatingAudio { fail("Must not dispatch") }; advanceUntilIdle()
       assertEquals(FloatingMode.AUDIO_READY, vm.floatingAssistant.value.mode)
       assertEquals("original", audio.readText())
-      vm.runFloatingStopwatch(com.example.phone.StopwatchOp.START)
+      vm.sendFloatingAudio { fail("Rejected local request must not dispatch") }; advanceUntilIdle()
       assertEquals(FloatingMode.AUDIO_READY, vm.floatingAssistant.value.mode)
       assertEquals("original", audio.readText())
       vm.dismissFloatingAssistant()
@@ -150,12 +234,12 @@ class FloatingPhoneRoutingTest {
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent(); vm.sendFloatingAudio {}; runCurrent()
       vm.pauseFloatingAssistant(); release.complete(Unit); advanceUntilIdle()
-      assertFalse(vm.floatingAssistant.value.stopwatchRunning)
+      assertNull(shadowOf(ApplicationProvider.getApplicationContext<Application>()).nextStartedActivity)
       assertEquals(FloatingMode.AUDIO_READY, vm.floatingAssistant.value.mode)
       assertTrue(audio.exists())
       vm.resumeFloatingAssistant(); vm.sendFloatingAudio {}; advanceUntilIdle()
       assertEquals(2, calls)
-      assertTrue(vm.floatingAssistant.value.stopwatchRunning)
+      assertEquals("com.android.deskclock.action.START_STOPWATCH", shadowOf(ApplicationProvider.getApplicationContext<Application>()).nextStartedActivity.action)
       vm.dismissFloatingAssistant()
     } finally { audio.delete(); Dispatchers.resetMain() }
   }
@@ -185,7 +269,7 @@ class FloatingPhoneRoutingTest {
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent(); vm.sendFloatingAudio {}; runCurrent(); vm.dismissFloatingAssistant()
       answer.complete("iniciá el cronómetro"); advanceUntilIdle()
-      assertFalse(vm.floatingAssistant.value.stopwatchRunning)
+      assertNull(shadowOf(ApplicationProvider.getApplicationContext<Application>()).nextStartedActivity)
     } finally { audio.delete(); Dispatchers.resetMain() }
   }
 }

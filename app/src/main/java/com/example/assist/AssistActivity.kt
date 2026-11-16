@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.example.speech.GroqSettingsActivity
 import com.example.MainActivity
 import com.example.data.AssistantPreferencesRepository
@@ -28,6 +30,8 @@ import com.example.ui.FloatingMode
 import com.example.ui.screens.AssistOverlayScreen
 import com.example.ui.theme.PingAssistTheme
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 
 class AssistActivity : ComponentActivity() {
   private val viewModel: MainViewModel by viewModels()
@@ -49,6 +53,16 @@ class AssistActivity : ComponentActivity() {
       return
     }
     viewModel.prepareFloatingAssistant()
+    // A native handoff can stop this window before Compose gets another frame.
+    // Observe until destruction so completion still closes the stopped overlay.
+    lifecycleScope.launch {
+      viewModel.floatingAssistant.collect {
+        viewModel.consumePhoneActionCompletion()?.let { message ->
+          Toast.makeText(this@AssistActivity, message, Toast.LENGTH_SHORT).show()
+          finish()
+        }
+      }
+    }
     setContent {
       PingAssistTheme {
         val state by viewModel.floatingAssistant.collectAsStateWithLifecycle()
@@ -118,8 +132,6 @@ class AssistActivity : ComponentActivity() {
           },
           onConfirm = viewModel::confirmFloatingAction,
           onChooseApp = viewModel::chooseFloatingApp,
-          onStopwatch = viewModel::runFloatingStopwatch,
-          onStopwatchTick = viewModel::refreshFloatingStopwatch,
           onDismissOverlay = dismiss,
         )
       }

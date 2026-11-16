@@ -52,12 +52,12 @@ class PhoneCommandParser {
     if (Regex("^(?:mostra|ver|abrir|abri|muestra) (?:las |los |mis )?(alarmas|timers|temporizadores)$").matches(s)) {
       return PhoneRoute.Local(PhoneCommand.ClockList(s.endsWith("alarmas")))
     }
-    val chrono = Regex("^(?:(inicia|iniciar|arranca|arrancar|pone|pon|pausa|pausar|para|parar|detene|continua|continuar|reanuda|reinicia|reiniciar|resetea|ver|mostra|consulta) (?:el |un )?)?cronometro$").matchEntire(s)
+    val chrono = Regex("^(?:(inicia|iniciar|arranca|arrancar|pone|pon|pausa|pausar|para|parar|detene|continua|continuar|reanuda|reinicia|reiniciar|resetea|ver|mostra|consulta|abri|abre|abrir) (?:el |un )?)?cronometro$").matchEntire(s)
     if (chrono != null) return PhoneRoute.Local(PhoneCommand.Stopwatch(when (chrono.groupValues[1]) {
       "pausa", "pausar", "para", "parar", "detene" -> StopwatchOp.PAUSE
       "continua", "continuar", "reanuda" -> StopwatchOp.RESUME
       "reinicia", "reiniciar", "resetea" -> StopwatchOp.RESET
-      "ver", "mostra", "consulta", "" -> StopwatchOp.STATUS
+      "ver", "mostra", "consulta", "abri", "abre", "abrir", "" -> StopwatchOp.STATUS
       else -> StopwatchOp.START
     }))
     val torch = Regex("^(prende|prender|prendeme|enciende|encende|encender|encendeme|activa|activar|apaga|apagar|apagame|desactiva|desactivar) (?:la )?linterna$").matchEntire(s)
