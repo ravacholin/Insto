@@ -119,8 +119,7 @@ data class FloatingAssistantState(
   val needsConfirmation: Boolean = false,
   val needsWhatsAppAccessibility: Boolean = false,
   val appOptions: List<AppOption> = emptyList(),
-  val stopwatchMs: Long? = null,
-  val stopwatchRunning: Boolean = false,
+  val phoneActionCompletion: String? = null,
 )
 
 class MainViewModel @JvmOverloads constructor(
@@ -146,8 +145,7 @@ class MainViewModel @JvmOverloads constructor(
 
   fun resumeFloatingAssistant() { floatingPaused = false }
   private val phoneParser = PhoneCommandParser()
-  private val stopwatchRepository = StopwatchRepository(application)
-  private val phoneExecutor = PhoneActionExecutor(application, stopwatchRepository)
+  private val phoneExecutor = PhoneActionExecutor(application)
   private var clarification: String? = null
   private var confirmation: PhoneCommand? = null
   private var cameraCommand: PhoneCommand? = null
@@ -156,15 +154,10 @@ class MainViewModel @JvmOverloads constructor(
   private var retryLocalCommand: Pair<PhoneCommand, Boolean>? = null
   private var retryLocalText: String? = null
 
-  fun refreshFloatingStopwatch() {
-    if (floatingState.value.stopwatchMs == null) return
-    val (elapsed, running) = stopwatchRepository.snapshot()
-    floatingState.value = floatingState.value.copy(stopwatchMs = elapsed, stopwatchRunning = running)
-  }
-
-  fun runFloatingStopwatch(operation: StopwatchOp) {
-    if (floatingState.value.mode !in listOf(FloatingMode.IDLE, FloatingMode.TYPING) || floatingState.value.text.isNotBlank()) return
-    runPhoneCommand(PhoneCommand.Stopwatch(operation))
+  fun consumePhoneActionCompletion(): String? {
+    val message = floatingState.value.phoneActionCompletion ?: return null
+    floatingState.value = floatingState.value.copy(phoneActionCompletion = null)
+    return message
   }
 
   fun confirmFloatingAction(accept: Boolean) {
@@ -205,15 +198,14 @@ class MainViewModel @JvmOverloads constructor(
       text = if (result.retainRequest) floatingState.value.text else "",
       error = if (result.outcome == PhoneActionOutcome.REJECTED) result.message else null,
       status = if (result.outcome == PhoneActionOutcome.REJECTED) null else result.message, needsWhatsAppAccessibility = false, needsConfirmation = result.confirmation != null,
-      appOptions = result.appOptions, needsCamera = result.needsCamera, needsGroqKey = false)
+      appOptions = result.appOptions, needsCamera = result.needsCamera, needsGroqKey = false,
+      phoneActionCompletion = result.message.takeIf {
+        result.outcome == PhoneActionOutcome.COMPLETED || result.outcome == PhoneActionOutcome.HANDOFF
+      })
     if (!result.retainRequest) {
       pendingFloatingAudio?.file?.delete()
       pendingFloatingAudio = null
       pendingTranscript = null
-    }
-    if (command is PhoneCommand.Stopwatch) {
-      val (elapsed, running) = stopwatchRepository.snapshot()
-      floatingState.value = floatingState.value.copy(stopwatchMs = elapsed, stopwatchRunning = running)
     }
   }
 
@@ -425,7 +417,7 @@ class MainViewModel @JvmOverloads constructor(
     clarification = null
     confirmation = null
     cameraCommand = null
-    floatingState.value = floatingState.value.copy(needsConfirmation = false, needsCamera = false, appOptions = emptyList())
+    floatingState.value = floatingState.value.copy(needsConfirmation = false, needsCamera = false, appOptions = emptyList(), phoneActionCompletion = null)
   }
 
   fun sendFloatingAudio(onDispatched: () -> Unit) {

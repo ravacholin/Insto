@@ -16,7 +16,6 @@ import java.util.Calendar
 
 class PhoneActionExecutor(
   private val context: Context,
-  private val stopwatch: StopwatchRepository,
   private val nowHourMinute: () -> Pair<Int, Int> = { Calendar.getInstance().let { it.get(Calendar.HOUR_OF_DAY) to it.get(Calendar.MINUTE) } },
 ) {
   fun execute(command: PhoneCommand, confirmed: Boolean = false): PhoneActionResult {
@@ -34,18 +33,7 @@ class PhoneActionExecutor(
           if (intent.resolveActivity(context.packageManager) == null) PhoneActionResult("No hay una aplicación Reloj compatible instalada.", outcome = PhoneActionOutcome.REJECTED)
           else { launch(intent); PhoneActionResult(if (command is PhoneCommand.ClockList) "Abriendo el Reloj." else "Solicitud enviada al Reloj. Revisá allí la alarma o el temporizador.", outcome = PhoneActionOutcome.HANDOFF) }
         }
-        is PhoneCommand.Stopwatch -> {
-          if (command.operation == StopwatchOp.RESET && !confirmed && stopwatch.snapshot().first > 0) {
-            return PhoneActionResult("¿Borro el tiempo actual y dejo el cronómetro en cero?", confirmation = command, outcome = PhoneActionOutcome.NEEDS_INPUT)
-          }
-          stopwatch.apply(command.operation)
-          PhoneActionResult(when (command.operation) {
-            StopwatchOp.START, StopwatchOp.RESUME -> "Cronómetro en marcha."
-            StopwatchOp.PAUSE -> "Cronómetro pausado."
-            StopwatchOp.RESET -> "Cronómetro en cero."
-            StopwatchOp.STATUS -> "Cronómetro."
-          })
-        }
+        is PhoneCommand.Stopwatch -> NativeStopwatchController(context).execute(command.operation, confirmed)
         is PhoneCommand.OpenApp -> openApp(command.name)
         is PhoneCommand.Volume -> {
           val audio = context.getSystemService(AudioManager::class.java)
@@ -72,7 +60,7 @@ class PhoneActionExecutor(
             else -> Settings.ACTION_SETTINGS
           }
           launch(Intent(action))
-          PhoneActionResult("Abrí los ajustes para que completes el cambio.")
+          PhoneActionResult("Abrí los ajustes para que completes el cambio.", outcome = PhoneActionOutcome.HANDOFF)
         }
       }
     } catch (_: SecurityException) { PhoneActionResult("Android no permitió esa acción. Revisá los permisos o abrí los ajustes.", outcome = PhoneActionOutcome.REJECTED) }
@@ -93,7 +81,7 @@ class PhoneActionExecutor(
     val target = matches.single()
     val intent = context.packageManager.getLaunchIntentForPackage(target.packageName) ?: return PhoneActionResult("Esa aplicación no se puede abrir.", outcome = PhoneActionOutcome.REJECTED)
     launch(intent)
-    return PhoneActionResult("Abriendo ${target.label}.")
+    return PhoneActionResult("Abriendo ${target.label}.", outcome = PhoneActionOutcome.HANDOFF)
   }
 
   private fun launch(intent: Intent) { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }

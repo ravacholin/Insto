@@ -17,7 +17,7 @@ El upload usa HTTPS sin seguir redirecciones, un máximo conservador de 24 MiB p
 - `Poné un timer de diez minutos para fideos` o `temporizador de una hora y treinta minutos`.
 - `Despertame a las siete y media de la mañana`, `alarma a las 07:00`, `alarma a las 07:00 todos los lunes y jueves`. Las horas ambiguas requieren aclaración y las que ya pasaron requieren confirmar la próxima ocurrencia. Las fechas o condiciones que no pueden expresarse fielmente con los intents públicos del Reloj se rechazan con explicación; no se ignoran detalles.
 - `Abrí las alarmas` / `mostrá los temporizadores`. Crear se delega al Reloj; se confirma solo la entrega de la solicitud, no la creación verificada. Pausar o cancelar un timer específico requiere usar el Reloj.
-- `Iniciá el cronómetro`, `pausá el cronómetro`, `continuá el cronómetro`, `reiniciá el cronómetro`, `mostrá el cronómetro`. Es un cronómetro propio persistente; reiniciar pide confirmación y lo deja detenido en cero. Usa tiempo monotónico e identidad de arranque, sin servicio de fondo. Tras reiniciar el dispositivo conserva el último tiempo guardado y queda pausado.
+- `Iniciá el cronómetro`, `pausá el cronómetro`, `continuá el cronómetro`, `reiniciá el cronómetro`, `mostrá el cronómetro`, `abrí el cronómetro`. Se delegan al Reloj de Google instalado mediante sus intents específicos de DeskClock. Cada operación se comprueba por separado: el handler debe estar exportado, habilitado y accesible con los permisos de Insto. Reiniciar requiere confirmación porque Insto no puede leer el tiempo nativo. El floating ya no mantiene un contador propio ni controles paralelos. Los datos del cronómetro anterior se conservan sin usarse; no se migran al Reloj.
 - `Abrí Spotify` (o el nombre de otra app lanzable y visible). Si hay varias coincidencias, ofrece opciones.
 - `Subí el volumen`, `bajá el volumen`, `poné el volumen al cincuenta por ciento`: volumen multimedia.
 - `Prendé la linterna` / `apagá la linterna`: pide permiso de cámara cuando corresponda.
@@ -139,3 +139,30 @@ Los mensajes de resultado, permiso pendiente o error aparecen arriba del campo d
 Resultado 1.4.3: APK y fuentes de pruebas compilados; 52 pruebas JVM aprobadas. La revisión detectó y corrigió la preservación de «encendé el wifi» al normalizarlo. Firma y alineación verificadas. Suite completa continúa bloqueada antes de ejecutar por Robolectric (403); falta prueba física de la linterna.
 
 Compatibilidad revisada al preparar el PR: el PR #5 seguía abierto fuera de main. Se conserva también su selector `com.whatsapp:id/button1` y su comparación exacta del destinatario en «Share with Instinct?» / «¿Compartir con Instinct?». Los PR #5 y #6 se documentan como solapamientos de integración; no se fusionan ni cierran automáticamente.
+
+## Acciones nativas (1.4.4)
+
+El Motorola del usuario usa Reloj de Google (`com.google.android.deskclock`). Los intents de cronómetro específicos de DeskClock no son parte del contrato público universal de Android. START y RESUME solicitan `com.android.deskclock.action.START_STOPWATCH`; PAUSE solicita `PAUSE_STOPWATCH`; RESET solicita `RESET_STOPWATCH`; STATUS solicita `SHOW_STOPWATCH`. Solo se despachan si el paquete instalado expone un handler accesible. El lanzamiento confirma entrega de la solicitud, no el estado final del cronómetro.
+
+Si la versión instalada no admite una operación, Insto conserva el texto o el audio y ofrece abrir Reloj de Google para completarla allí. No crea un cronómetro alternativo ni envía ese pedido a WhatsApp. Esta alternativa abre la app; no se presenta como una pausa, inicio o reinicio realizado. Tampoco se adivinan componentes internos ni se inyectan toques.
+
+Alarmas y temporizadores siguen usando los intents públicos de Android con `EXTRA_SKIP_UI`; linterna y volumen usan las APIs nativas. Se declara `MODIFY_AUDIO_SETTINGS` para ajustar volumen. Las acciones completadas y las solicitudes entregadas cierran el floating con un aviso breve del sistema. Aclaraciones, permisos, confirmaciones y errores lo mantienen abierto.
+
+### Comprobación en el Motorola
+
+1. Con depuración USB y el teléfono conectado, ejecutar `scripts/check-google-clock.sh` (o pasar el serial como argumento). Solo consulta versión y handlers; no modifica ningún cronómetro. La identidad ADB no equivale a la de Insto: el ejecutor también verifica permisos en tiempo de ejecución.
+2. Probar inicio, pausa, continuación, consulta y reset confirmado desde voz y texto; comprobar el resultado en el Reloj de Google. Cancelar un reset no debe afectar al contador.
+3. Si faltan handlers, conservar la salida del diagnóstico para identificar la integración posible con esa versión. El script no instala servicios ni requiere Shizuku.
+4. Comprobar cierre del floating tras ajustar volumen/linterna y tras entregar solicitudes al Reloj. Denegar cámara debe conservar el pedido.
+5. Comprobar que las consultas generales siguen enviando el audio M4A original a Instinct y que una transcripción tardía tras cerrar el panel no ejecuta acciones.
+
+No hay dispositivo conectado en el entorno de implementación; la compatibilidad y ejecución reales en la versión del Reloj instalada quedan pendientes de esa comprobación.
+
+### Resultado de verificación 1.4.4
+
+- `assembleDebug`: correcto, repetido tras la corrección de ciclo de vida; firma v2 y alineación de 16 KiB verificadas. Se generó una clave de depuración local excluida de Git: este APK de prueba no garantiza actualización sobre la firma de una instalación anterior.
+- 50 pruebas JVM aprobadas: interpretación en español, rutas de comandos, política de voz, guardas de envío, confirmaciones de WhatsApp y protocolo Groq. Se usó un init script externo que excluye únicamente `nativeruntime-dist-compat`; las dependencias del proyecto no cambiaron.
+- Todos los fuentes de pruebas Android compilan, incluidos handlers exportados/protegidos, reset confirmado, retención, cancelación de transcripción y cierre de la actividad detenida. La ejecución de estas pruebas no está validada: el runner no puede descargar `android-all-instrumented:9-robolectric-4913185-2-i7` (HTTP 403).
+- Se ejecutó también `testDebugUnitTest` sin exclusiones después de los cambios: bloqueado por `nativeruntime-dist-compat:1.0.18` (HTTP 403 del mirror de Maven), antes de ejecutar las pruebas.
+- Revisión independiente: detectó la posibilidad de dejar el panel detrás del Reloj al detenerse Compose. La finalización ahora se observa desde `Activity.lifecycleScope` hasta destrucción, se consume una sola vez y no depende de un frame. Se agregó una prueba de regresión de ciclo de vida; su ejecución Android sigue bloqueada como se indica arriba.
+- Diagnóstico ADB: sintaxis de script verificada. No hay dispositivos conectados; no se afirma validación física ni compatibilidad comprobada de una versión específica del Reloj de Google.
