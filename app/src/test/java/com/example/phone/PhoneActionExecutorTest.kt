@@ -24,7 +24,7 @@ class PhoneActionExecutorTest {
   }
   @Test fun pastTimeRequiresConfirmationBeforeLaunching() {
     val app = ApplicationProvider.getApplicationContext<Application>()
-    val executor = PhoneActionExecutor(app, StopwatchRepository(app), nowHourMinute = { 20 to 0 })
+    val executor = PhoneActionExecutor(app, nowHourMinute = { 20 to 0 })
     assertNotNull(executor.execute(PhoneCommand.Alarm(7, 0)).confirmation)
   }
 }

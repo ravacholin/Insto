@@ -5,6 +5,11 @@ import org.junit.Test
 
 class PhoneCommandParserTest {
   private val parser = PhoneCommandParser()
+  @Test fun openingTheStopwatchIsAClockRequestNotAnAppName() {
+    listOf("abrí el cronómetro", "abre el cronómetro", "abrir el cronómetro").forEach {
+      assertEquals(PhoneRoute.Local(PhoneCommand.Stopwatch(StopwatchOp.STATUS)), parser.parse(it))
+    }
+  }
   @Test fun durations() {
     assertEquals(PhoneRoute.Local(PhoneCommand.Timer(600, "fideos")), parser.parse("Poné un timer de diez minutos para fideos"))
     assertEquals(PhoneRoute.Local(PhoneCommand.Timer(300, "")), parser.parse("¿Me ponés un temporizador de cinco minutos?"))

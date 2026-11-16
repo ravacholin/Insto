@@ -4,12 +4,25 @@ import java.text.Normalizer
 import java.util.Locale
 
 /** Deliberately anchored grammar: mentioning a capability is not an instruction to use it. */
-class PhoneCommandParser {
+class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { java.util.Calendar.getInstance() }) {
   fun parseReply(context: String, text: String): PhoneRoute {
     val direct = parse(text)
     if (direct != PhoneRoute.Instinct) return direct
     val normalized = normalize(text)
-    if (normalized.startsWith("no ")) return PhoneRoute.Cancel
+    if (normalized in listOf("no", "nunca") || normalized.startsWith("no ") || normalized.startsWith("nunca ")) return PhoneRoute.Cancel
+    if (normalized in listOf("si", "dale", "ok") || normalized.startsWith("si ")) {
+      return PhoneRoute.Clarify("Indicá el dato del pedido sin condiciones, o decí cancelar.", context)
+    }
+    if (normalized.startsWith("instinct")) return PhoneRoute.Instinct
+    if (Regex("^(?:(?:como|que|por que|conta)\\b|(?:me )?expli)").containsMatchIn(normalized)) return PhoneRoute.Instinct
+    when (context) {
+      "navigate" -> return parse("llevame a $text")
+      "dial" -> return parse("llamá a $text")
+      "youtube" -> return parse("buscá en YouTube $text")
+      "maps" -> return parse("buscá en Maps $text")
+      "music" -> return parse("poné música de $text")
+      "calendar" -> return PhoneRoute.Clarify("Repetí el evento con título, fecha y hora: agendá reunión mañana a las 17:00.", "calendar")
+    }
     // Only parameter-shaped replies may inherit a pending action. Explanations remain queries.
     val parameter = Regex("^(?:(?:a|para) las? )?([a-z0-9]+)").find(normalized)?.groupValues?.get(1)
     if (parameter == null || number(parameter) == null) return PhoneRoute.Instinct
@@ -26,38 +39,28 @@ class PhoneCommandParser {
     val s = canonicalRequest(original)
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel
     if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |(?:me )?expli|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
+    EverydayCommandParser(calendarNow).parse(text)?.let { return it }
     val commandPrefix = "(?:(?:me pones|poneme|ponme|pone|pon|poner|quiero|necesito|configura|crea|crear|programa|programar|inicia|iniciar|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"
     val timer = Regex("^${commandPrefix}(?:timer|temporizador|cuenta regresiva)\\b(.*)$").matchEntire(s)
     if (timer != null) {
       val body = timer.groupValues[1].trim().removePrefix("de ")
       val duration = body.substringBefore(" para ").substringBefore(" llamado ")
-      var seconds = 0L
-      var found = false
-      var remaining = duration
-      val chunks = Regex("([a-z0-9]+(?: y [a-z]+)?)\\s+(horas?|minutos?|segundos?)")
-      for (m in chunks.findAll(duration)) {
-        val amount = number(m.groupValues[1]) ?: return PhoneRoute.Clarify("¿Cuánto tiempo? Por ejemplo, diez minutos.", "timer")
-        found = true
-        seconds += amount.toLong() * when { m.groupValues[2].startsWith("hora") -> 3600; m.groupValues[2].startsWith("minuto") -> 60; else -> 1 }
-        remaining = remaining.replace(m.value, "")
-      }
-      if (!found || remaining.replace(Regex("\\by\\b"), "").trim().isNotEmpty() || seconds !in 1..Int.MAX_VALUE.toLong()) {
-        return PhoneRoute.Clarify("¿Cuánto tiempo? Por ejemplo, diez minutos.", "timer")
-      }
+      val seconds = CommandDuration.seconds(duration)
+        ?: return PhoneRoute.Clarify("¿Cuánto tiempo? Por ejemplo, diez minutos.", "timer")
       val label = when { " para " in body -> body.substringAfter(" para "); " llamado " in body -> body.substringAfter(" llamado "); else -> "" }
-      return PhoneRoute.Local(PhoneCommand.Timer(seconds.toInt(), label))
+      return PhoneRoute.Local(PhoneCommand.Timer(seconds, label))
     }
     val alarm = Regex("^(?:${commandPrefix}alarma\\b|despertame\\b)(.*)$").matchEntire(s)
     if (alarm != null) return alarm(alarm.groupValues[1])
     if (Regex("^(?:mostra|ver|abrir|abri|muestra) (?:las |los |mis )?(alarmas|timers|temporizadores)$").matches(s)) {
       return PhoneRoute.Local(PhoneCommand.ClockList(s.endsWith("alarmas")))
     }
-    val chrono = Regex("^(?:(inicia|iniciar|arranca|arrancar|pone|pon|pausa|pausar|para|parar|detene|continua|continuar|reanuda|reinicia|reiniciar|resetea|ver|mostra|consulta) (?:el |un )?)?cronometro$").matchEntire(s)
+    val chrono = Regex("^(?:(inicia|iniciar|arranca|arrancar|pone|pon|pausa|pausar|para|parar|detene|continua|continuar|reanuda|reinicia|reiniciar|resetea|ver|mostra|consulta|abri|abre|abrir) (?:el |un )?)?cronometro$").matchEntire(s)
     if (chrono != null) return PhoneRoute.Local(PhoneCommand.Stopwatch(when (chrono.groupValues[1]) {
       "pausa", "pausar", "para", "parar", "detene" -> StopwatchOp.PAUSE
       "continua", "continuar", "reanuda" -> StopwatchOp.RESUME
       "reinicia", "reiniciar", "resetea" -> StopwatchOp.RESET
-      "ver", "mostra", "consulta", "" -> StopwatchOp.STATUS
+      "ver", "mostra", "consulta", "abri", "abre", "abrir", "" -> StopwatchOp.STATUS
       else -> StopwatchOp.START
     }))
     val torch = Regex("^(prende|prender|prendeme|enciende|encende|encender|encendeme|activa|activar|apaga|apagar|apagame|desactiva|desactivar) (?:la )?linterna$").matchEntire(s)

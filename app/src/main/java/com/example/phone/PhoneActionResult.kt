@@ -7,7 +7,9 @@ data class PhoneActionResult(
   val confirmation: PhoneCommand? = null,
   val appOptions: List<AppOption> = emptyList(),
   val needsCamera: Boolean = false,
+  val needsContacts: Boolean = false,
+  val contactOptions: List<ContactOption> = emptyList(),
   val outcome: PhoneActionOutcome = PhoneActionOutcome.COMPLETED,
 ) {
-  val retainRequest: Boolean get() = outcome == PhoneActionOutcome.REJECTED || needsCamera
+  val retainRequest: Boolean get() = outcome == PhoneActionOutcome.REJECTED || needsCamera || needsContacts || contactOptions.isNotEmpty()
 }
