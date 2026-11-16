@@ -59,6 +59,7 @@ fun AssistOverlayScreen(
   onRemoveAttachment: () -> Unit = {},
   onConfigureGroq: () -> Unit = {},
   onConfigureContact: () -> Unit = {},
+  onConfigureClockAccessibility: () -> Unit = {},
   onConfirm: (Boolean) -> Unit = {},
   onChooseApp: (AppOption) -> Unit = {},
   onChooseContact: (ContactOption) -> Unit = {},
@@ -110,6 +111,15 @@ fun AssistOverlayScreen(
           }
         }
         HorizontalDivider(color = edge)
+        if (!state.geminiConfigured) {
+          Text("Gemini Decisions sin configurar", color = secondary, style = MaterialTheme.typography.bodySmall)
+          TextButton(onClick = onConfigureGroq, enabled = !busy) { Text("Configurar clave de Gemini", color = Color.White) }
+        } else {
+          Text(if (state.geminiEnabled) "Gemini Decisions activado" else "Gemini Decisions desactivado", color = secondary, style = MaterialTheme.typography.bodySmall)
+        }
+        if (state.needsClockAccessibility) {
+          TextButton(onClick = onConfigureClockAccessibility, enabled = !busy) { Text("Activar Accesibilidad para el cronómetro", color = Color.White) }
+        }
         Text(
           text = when (state.mode) {
             FloatingMode.LISTENING -> "Te escucho… o tocá para escribir"

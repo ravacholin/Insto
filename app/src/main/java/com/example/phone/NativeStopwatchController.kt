@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.AlarmClock
+import com.example.assist.PingAutoSendAccessibilityService
 
 /** DeskClock-specific intents; availability is checked against the installed Google Clock. */
 internal class NativeStopwatchController(private val context: Context) {
@@ -14,6 +15,10 @@ internal class NativeStopwatchController(private val context: Context) {
       catch (_: PackageManager.NameNotFoundException) { null }
     if (clock == null || !clock.enabled) {
       return PhoneActionResult("No encontré Reloj de Google habilitado en este teléfono.", outcome = PhoneActionOutcome.REJECTED)
+    }
+    if (operation == StopwatchOp.RESET && !confirmed) {
+      return PhoneActionResult("¿Reinicio el cronómetro del Reloj de Google? Se perderá su tiempo actual.",
+        confirmation = PhoneCommand.Stopwatch(operation), outcome = PhoneActionOutcome.NEEDS_INPUT)
     }
     val action = when (operation) {
       StopwatchOp.START, StopwatchOp.RESUME -> "START_STOPWATCH"
@@ -27,16 +32,14 @@ internal class NativeStopwatchController(private val context: Context) {
     if (handler == null || handler.packageName != GOOGLE_CLOCK || !handler.exported || !handler.enabled ||
       !handler.applicationInfo.enabled ||
       (!handler.permission.isNullOrEmpty() && context.checkSelfPermission(handler.permission) != PackageManager.PERMISSION_GRANTED)) {
-      val options = if (pm.getLaunchIntentForPackage(GOOGLE_CLOCK) != null)
-        listOf(AppOption("Abrir Reloj de Google", GOOGLE_CLOCK)) else emptyList()
+      if (PingAutoSendAccessibilityService.isConnected()) {
+        return PhoneActionResult("Operando el cronómetro en Reloj de Google…",
+          stopwatchAutomation = operation, outcome = PhoneActionOutcome.NEEDS_INPUT)
+      }
       return PhoneActionResult(
-        "Esta versión del Reloj de Google no permite ${operationLabel(operation)} el cronómetro desde Insto. Podés completarlo en el Reloj.",
-        appOptions = options, outcome = PhoneActionOutcome.REJECTED,
+        "Activá Accesibilidad de Insto para que pueda ${operationLabel(operation)} el cronómetro en Reloj de Google.",
+        needsClockAccessibility = true, outcome = PhoneActionOutcome.REJECTED,
       )
-    }
-    if (operation == StopwatchOp.RESET && !confirmed) {
-      return PhoneActionResult("¿Reinicio el cronómetro del Reloj de Google? Se perderá su tiempo actual.",
-        confirmation = PhoneCommand.Stopwatch(operation), outcome = PhoneActionOutcome.NEEDS_INPUT)
     }
     // Launch exactly the accessible handler we resolved; do not guess private components.
     intent.setClassName(handler.packageName, handler.name)

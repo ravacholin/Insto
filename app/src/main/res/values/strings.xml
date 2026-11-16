@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">PingAssist</string>
     <string name="accessibility_service_label">PingAssist Auto-Send &amp; Triggers</string>
-    <string name="accessibility_service_description">Optional helper that automates WhatsApp voice note sending (native PTT or Send button), optional volume-hold trigger, floating pill, and auto-return when armed by PingAssist.</string>
+    <string name="accessibility_service_description">Asistente de Insto para enviar mensajes y audios por WhatsApp, activar el panel con la burbuja o las teclas de volumen y controlar el cronómetro de Reloj de Google cuando lo pedís. Solo opera las aplicaciones correspondientes a una solicitud activa.</string>
     <string name="widget_description">Tap to open your pinned WhatsApp contact or tap the mic to record &amp; send a voice note.</string>
     <string name="qs_tile_label">PingAssist</string>
     <string name="direct_voice_label">PingAssist Voice</string>

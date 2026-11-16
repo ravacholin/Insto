@@ -13,6 +13,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,8 +69,11 @@ class AssistActivity : ComponentActivity() {
     setContent {
       PingAssistTheme {
         val state by viewModel.floatingAssistant.collectAsStateWithLifecycle()
+        val gemini = remember { com.example.phone.GeminiSettings(this@AssistActivity) }
+        var showGeminiSetup by remember { mutableStateOf(gemini.shouldPromptSetup()) }
         var hasMic by remember { mutableStateOf(hasMicrophonePermission()) }
         var startAfterPermission by remember { mutableStateOf(false) }
+        var startAfterGeminiSetup by remember { mutableStateOf(false) }
         val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
           hasMic = granted
           if (granted && startAfterPermission && state.mode != FloatingMode.TYPING) {
@@ -78,7 +84,12 @@ class AssistActivity : ComponentActivity() {
         val groqSetup = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
           if (result.resultCode == RESULT_OK && viewModel.floatingAssistant.value.needsGroqKey) {
             viewModel.sendFloatingAudio { finish() }
+          } else if (startAfterGeminiSetup && result.resultCode == RESULT_OK && hasMic &&
+            viewModel.floatingAssistant.value.mode == FloatingMode.IDLE) {
+            viewModel.resumeFloatingAssistant()
+            viewModel.startFloatingListening { finish() }
           }
+          startAfterGeminiSetup = false
         }
         val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
           viewModel.onFloatingCameraPermission(granted)
@@ -96,7 +107,32 @@ class AssistActivity : ComponentActivity() {
           if (uri != null) viewModel.selectFloatingAttachment(uri)
         }
         LaunchedEffect(Unit) {
-          if (savedInstanceState == null && hasMic) viewModel.startFloatingListening { finish() }
+          if (savedInstanceState == null && hasMic && !showGeminiSetup) viewModel.startFloatingListening { finish() }
+        }
+        if (showGeminiSetup) {
+          AlertDialog(
+            onDismissRequest = { showGeminiSetup = false },
+            title = { Text("Configurá Gemini Decisions") },
+            text = { Text("Falta tu clave de Gemini. Groq transcribe la voz; Gemini ayuda a entender pedidos que el intérprete local no reconoce. Para activarlo, cargá tu clave personal de Google AI Studio. Los pedidos claros del teléfono funcionan sin Gemini.") },
+            confirmButton = {
+              TextButton(onClick = {
+                showGeminiSetup = false
+                startAfterGeminiSetup = true
+                viewModel.pauseFloatingAssistant()
+                groqSetup.launch(Intent(this@AssistActivity, GroqSettingsActivity::class.java))
+              }) { Text("Configurar Gemini") }
+            },
+            dismissButton = {
+              TextButton(onClick = {
+                gemini.continueLocally()
+                showGeminiSetup = false
+                if (hasMic && viewModel.floatingAssistant.value.mode == FloatingMode.IDLE) {
+                  viewModel.resumeFloatingAssistant()
+                  viewModel.startFloatingListening { finish() }
+                }
+              }) { Text("Continuar sin Gemini") }
+            },
+          )
         }
         val dismiss = { viewModel.dismissFloatingAssistant(); finish() }
         BackHandler(onBack = dismiss)
@@ -131,6 +167,10 @@ class AssistActivity : ComponentActivity() {
           onConfigureGroq = {
             viewModel.pauseFloatingAssistant()
             groqSetup.launch(Intent(this, GroqSettingsActivity::class.java))
+          },
+          onConfigureClockAccessibility = {
+            viewModel.pauseFloatingAssistant()
+            startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
           },
           onConfigureContact = {
             viewModel.pauseFloatingAssistant()

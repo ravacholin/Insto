@@ -117,6 +117,9 @@ data class FloatingAssistantState(
   val needsGroqKey: Boolean = false,
   val needsCamera: Boolean = false,
   val needsContacts: Boolean = false,
+  val needsClockAccessibility: Boolean = false,
+  val geminiConfigured: Boolean = false,
+  val geminiEnabled: Boolean = false,
   val contactOptions: List<ContactOption> = emptyList(),
   val needsConfirmation: Boolean = false,
   val needsWhatsAppAccessibility: Boolean = false,
@@ -141,6 +144,7 @@ class MainViewModel @JvmOverloads constructor(
   val floatingAssistant: StateFlow<FloatingAssistantState> = floatingState
   private var floatingJob: Job? = null
   private var floatingGeneration = 0L
+  private var cancelClockAutomation: (() -> Unit)? = null
   private var floatingReturnPackage: String? = null
   private var floatingPrefs: AssistantPreferences? = null
   private var floatingContact: com.example.data.PinnedContact? = null
@@ -210,6 +214,20 @@ class MainViewModel @JvmOverloads constructor(
     cameraCommand = null
     contactsCommand = null
     val result = phoneExecutor.execute(command, confirmed)
+    applyPhoneActionResult(command, confirmed, result)
+    result.stopwatchAutomation?.let { operation ->
+      val generation = floatingGeneration
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING)
+      cancelClockAutomation = com.example.assist.PingAutoSendAccessibilityService.requestStopwatch(operation) { completed ->
+        if (generation == floatingGeneration) {
+          cancelClockAutomation = null
+          applyPhoneActionResult(command, confirmed, completed)
+        }
+      }
+    }
+  }
+
+  private fun applyPhoneActionResult(command: PhoneCommand, confirmed: Boolean, result: com.example.phone.PhoneActionResult) {
     confirmation = result.confirmation
     if (result.needsCamera) cameraCommand = command
     if (result.needsContacts) contactsCommand = command
@@ -222,6 +240,7 @@ class MainViewModel @JvmOverloads constructor(
       text = if (result.retainRequest) floatingState.value.text else "",
       error = if (result.outcome == PhoneActionOutcome.REJECTED) result.message else null,
       status = if (result.outcome == PhoneActionOutcome.REJECTED) null else result.message, needsWhatsAppAccessibility = false, needsConfirmation = result.confirmation != null,
+      needsClockAccessibility = result.needsClockAccessibility,
       appOptions = result.appOptions, needsCamera = result.needsCamera, needsGroqKey = false,
       needsContacts = result.needsContacts, contactOptions = result.contactOptions,
       phoneActionCompletion = result.message.takeIf {
@@ -344,6 +363,8 @@ class MainViewModel @JvmOverloads constructor(
     floatingContact = ContextRoutingEngine.resolveRoute(getApplication(), prefs).contact ?: prefs.pinnedContact
     floatingState.value = if (initialized) floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct")
       else FloatingAssistantState(contactName = floatingContact?.displayName ?: "Instinct")
+    val gemini = com.example.phone.GeminiSettings(getApplication())
+    floatingState.value = floatingState.value.copy(geminiConfigured = gemini.readKey() != null, geminiEnabled = gemini.isEnabled())
   }
 
   fun startFloatingListening(onDispatched: () -> Unit) {
@@ -494,6 +515,8 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun dismissFloatingAssistant() {
+    cancelClockAutomation?.invoke()
+    cancelClockAutomation = null
     floatingGeneration++
     transcribingAudio = false
     decidingRequest = false

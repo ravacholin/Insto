@@ -12,9 +12,11 @@ La clave se cifra con AES/GCM y Android Keystore en `noBackupFilesDir`: no va en
 
 El upload usa HTTPS sin seguir redirecciones, un máximo conservador de 24 MiB por grabación, respuesta limitada a 256 KiB, timeout total de 60 s y ningún reintento automático de red. Claves rechazadas, cuotas, respuestas vacías y errores de conexión conservan el audio para reintentar. Cerrar el panel cancela la petición y descarta datos no enviados; pasar a segundo plano durante la interpretación la cancela y conserva el audio. Las respuestas tardías no ejecutan órdenes.
 
-### Gemini Decisions opcional (1.6.0)
+### Gemini Decisions opcional (1.6.1)
 
-En **IA**, la sección **Gemini Decisions · híbrido** permite guardar una clave
+Al abrir el asistente sin clave se ofrece configurar Gemini o continuar sin él.
+El panel mantiene visible el acceso a configuración. En **IA**, la primera
+sección **Gemini Decisions · híbrido** permite guardar una clave
 personal de Google AI Studio. Guardarla activa el híbrido; el interruptor permite
 desactivarlo y también se puede borrar la clave. La clave se cifra por separado
 con Android Keystore en `noBackupFilesDir`; no se incluye en APK, Git o backups.
@@ -60,13 +62,13 @@ red. No se ha medido precisión ni latencia con el servicio real sin una clave.
 - `Poné un timer de diez minutos para fideos` o `temporizador de una hora y treinta minutos`.
 - `Despertame a las siete y media de la mañana`, `alarma a las 07:00`, `alarma a las 07:00 todos los lunes y jueves`. Las horas ambiguas requieren aclaración y las que ya pasaron requieren confirmar la próxima ocurrencia. Las fechas o condiciones que no pueden expresarse fielmente con los intents públicos del Reloj se rechazan con explicación; no se ignoran detalles.
 - `Abrí las alarmas` / `mostrá los temporizadores`. Crear se delega al Reloj; se confirma solo la entrega de la solicitud, no la creación verificada. Pausar o cancelar un timer específico requiere usar el Reloj.
-- `Iniciá el cronómetro`, `pausá el cronómetro`, `continuá el cronómetro`, `reiniciá el cronómetro`, `mostrá el cronómetro`, `abrí el cronómetro`. Se delegan al Reloj de Google instalado mediante sus intents específicos de DeskClock. Cada operación se comprueba por separado: el handler debe estar exportado, habilitado y accesible con los permisos de Insto. Reiniciar requiere confirmación porque Insto no puede leer el tiempo nativo. El floating ya no mantiene un contador propio ni controles paralelos. Los datos del cronómetro anterior se conservan sin usarse; no se migran al Reloj.
+- `Iniciá el cronómetro`, `pausá el cronómetro`, `continuá el cronómetro`, `reiniciá el cronómetro`, `mostrá el cronómetro`, `abrí el cronómetro`. Se delegan al Reloj de Google instalado mediante sus intents específicos de DeskClock o, si no son utilizables, mediante Accesibilidad. Para los intents, cada operación se comprueba por separado: el handler debe estar exportado, habilitado y accesible con los permisos de Insto. Reiniciar requiere confirmación porque Insto no puede leer el tiempo nativo. El floating ya no mantiene un contador propio ni controles paralelos. Los datos del cronómetro anterior se conservan sin usarse; no se migran al Reloj.
 - `Abrí Spotify` (o el nombre de otra app lanzable y visible). Si hay varias coincidencias, ofrece opciones.
 - `Subí el volumen`, `bajá el volumen`, `poné el volumen al cincuenta por ciento`: volumen multimedia.
 - `Prendé la linterna` / `apagá la linterna`: pide permiso de cámara cuando corresponda.
 - `Activá el wifi`, `abrí Bluetooth`, `abrí conectividad`: abre los ajustes que Android permite gestionar al usuario; no afirma haber cambiado un interruptor que no controla.
 
-La interpretación inicial usa una gramática explícita en español; el híbrido opcional consulta Gemini Decisions en los casos no resueltos. No es control arbitrario de cualquier aplicación. Consultas como `explicame cómo funciona un cronómetro` van a Instinct. Los pedidos locales incompletos piden aclaración dentro del panel; se responden por el mismo micrófono o por texto. Los rechazos de Android conservan el pedido para un reintento explícito, sin repetir un despacho incierto. Las acciones locales funcionan sin contacto, WhatsApp ni Accesibilidad. Un teléfono bloqueado requiere desbloqueo.
+La interpretación inicial usa una gramática explícita en español; el híbrido opcional consulta Gemini Decisions en los casos no resueltos. No es control arbitrario de cualquier aplicación. Consultas como `explicame cómo funciona un cronómetro` van a Instinct. Los pedidos locales incompletos piden aclaración dentro del panel; se responden por el mismo micrófono o por texto. Los rechazos de Android conservan el pedido para un reintento explícito, sin repetir un despacho incierto. Las acciones locales funcionan sin contacto ni WhatsApp. El control del cronómetro requiere Accesibilidad cuando Reloj de Google no ofrece el intent solicitado; las demás acciones locales no la requieren. Un teléfono bloqueado requiere desbloqueo.
 
 The normal assistant entrypoint always uses this panel, independent of legacy
 activation-mode preferences. Existing explicit Open Chat shortcuts and optional
@@ -275,3 +277,22 @@ Si falta una app receptora, el permiso o un dato, se conserva el pedido/audio y 
 - Revisión independiente de código y del ajuste de edición: sin hallazgos
   materiales. No hay teléfono conectado ni clave Gemini en este entorno:
   comportamiento/latencia del proveedor y flujos físicos siguen pendientes.
+
+## Corrección 1.6.1: configuración visible y cronómetro con Accesibilidad
+
+Los PR #8 y #10 introdujeron los dos comportamientos reportados: el cronómetro dependía exclusivamente de intents de DeskClock que no todas las versiones de Reloj de Google exportan; Gemini era opcional, desactivado sin clave y accesible únicamente desde «IA».
+
+Ahora el asistente pide configurar Gemini al abrirlo si falta la clave, incluso en instalaciones que ya tienen Groq. Se puede elegir explícitamente «Continuar sin Gemini»; el acceso a configurar la clave permanece visible en el panel. Gemini aparece primero en configuración y guardar su clave activa el híbrido. Los comandos claros continúan funcionando localmente. Ninguna clave se incluye en el APK ni se pide en el chat.
+
+Si el Reloj no expone un intent de cronómetro utilizable, Insto usa su servicio de Accesibilidad conectado para abrir Reloj de Google, seleccionar Cronómetro y ejecutar la operación. Si falta ese servicio, ofrece el acceso a Ajustes de Accesibilidad y conserva el pedido para reintentar. No se requiere ADB durante el uso normal.
+
+La automatización dura como máximo ocho segundos, se limita al paquete de Reloj de Google y reconoce controles en español e inglés. Selecciona controles por texto/descripción y jerarquía accesible, sin coordenadas ni componentes privados. Inicio/continuación son idempotentes si ya está en marcha. Pausar y reiniciar esperan el cambio de controles; reiniciar requiere confirmación y pausa primero si hace falta. Solo un estado observado completa el pedido y cierra el panel. Una pantalla ambigua, bloqueo, salida del Reloj o interrupción conservan el pedido y muestran el problema. Cerrar Insto cancela una operación pendiente. Las versiones o idiomas de Reloj con otra estructura accesible requieren comprobación; no se afirma validación física sin dispositivo.
+
+Validación de 1.6.1 en este entorno:
+
+- `assembleDebug` y `compileDebugUnitTestKotlin` correctos con Gradle 9.3.1, JDK 21 y SDK 36.1. Versión 1.6.1, versionCode 11.
+- 96 pruebas JVM en 16 clases aprobadas, incluidas nueve de política de cronómetro/configuración. La ejecución filtrada usa un init script externo que excluye únicamente `nativeruntime-dist-compat:1.0.18`; no se modificaron dependencias del proyecto.
+- Suite completa intentada sin exclusiones: bloqueada por HTTP 403 al descargar ese runtime nativo. `ClockStopwatchAutomationTest`, `NativeStopwatchControllerTest` y `StopwatchAccessibilityRoutingTest` se intentaron por separado; las tres clases fallaron al inicializar `android-all-instrumented:9-robolectric-4913185-2-i7` por HTTP 403. Sus aserciones Android no se ejecutaron y no se presentan como aprobadas.
+- Revisión independiente: corregida la reanudación de escucha al continuar sin Gemini o volver de su configuración; sin otros hallazgos de corrección.
+- APK final: firma v2 y alineación ZIP/16 KiB verificadas. SHA-256: `623706c7f01c045cbe9a55ea99067dbd0c10b9d66b7ee83182058f61c1d462c1`. Usa una clave nueva de depuración, excluida de Git; para actualizar una instalación con otra firma hace falta su clave original. No se recomienda desinstalar para forzar una actualización, pues se perdería la configuración local.
+- `adb devices -l` no muestra dispositivos. No se usaron claves reales de Gemini/Groq ni se ejecutó el Reloj del Motorola; falta la comprobación física de su árbol accesible y del proveedor real.

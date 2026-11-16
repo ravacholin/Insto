@@ -61,6 +61,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   private val mainHandler = Handler(Looper.getMainLooper())
   private var autoSendPoll: Runnable? = null
   private var pollingRequestId = -1L
+  private var clockAutomation: com.example.phone.ClockStopwatchAutomation? = null
   private var textAttempt: TextSendAttempt? = null
   private var shareAttempt: ShareSendAttempt? = null
 
@@ -348,6 +349,8 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   }
 
   override fun onInterrupt() {
+    clockAutomation?.interrupt()
+    clockAutomation = null
     autoSendPoll?.let { mainHandler.removeCallbacks(it) }
     volumeHoldRunnable?.let { mainHandler.removeCallbacks(it) }
     volumeHoldRunnable = null
@@ -356,6 +359,8 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   }
 
   override fun onDestroy() {
+    clockAutomation?.interrupt()
+    clockAutomation = null
     autoSendPoll?.let { mainHandler.removeCallbacks(it) }
     if (connectedInstance === this) connectedInstance = null
     val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -922,6 +927,21 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     @Volatile private var connectedInstance: PingAutoSendAccessibilityService? = null
 
     fun isConnected(): Boolean = connectedInstance != null
+
+    fun requestStopwatch(operation: com.example.phone.StopwatchOp, onResult: (com.example.phone.PhoneActionResult) -> Unit): () -> Unit {
+      val service = connectedInstance
+      if (service == null) {
+        onResult(com.example.phone.PhoneActionResult("Activá Accesibilidad de Insto y reintentá el cronómetro.",
+          needsClockAccessibility = true, outcome = com.example.phone.PhoneActionOutcome.REJECTED))
+        return {}
+      }
+      service.clockAutomation?.interrupt()
+      val automation = com.example.phone.ClockStopwatchAutomation(service, operation, onResult)
+      service.clockAutomation = automation
+      // Post so the caller has stored its cancellation handle before a result can arrive.
+      service.mainHandler.post { automation.start() }
+      return { automation.cancel() }
+    }
 
     fun requestTextSend(pkg: String, request: Long) {
       val service = connectedInstance ?: return
