@@ -39,6 +39,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     val s = canonicalRequest(original)
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel
     if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |(?:me )?expli|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
+    ExtendedCommandParser.parse(s)?.let { return it }
     EverydayCommandParser(calendarNow).parse(text)?.let { return it }
     val commandPrefix = "(?:(?:me pones|poneme|ponme|pone|pon|poner|quiero|necesito|configura|crea|crear|programa|programar|inicia|iniciar|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"
     val timer = Regex("^${commandPrefix}(?:timer|temporizador|cuenta regresiva)\\b(.*)$").matchEntire(s)
@@ -167,6 +168,11 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     fun normalize(text: String): String = Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFD)
       .replace(Regex("\\p{M}+"), "").replace(Regex("[¿?¡!,.;]"), " ").replace(Regex("\\s+"), " ").trim()
     private val words = listOf("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce", "trece", "catorce", "quince", "dieciseis", "diecisiete", "dieciocho", "diecinueve", "veinte", "veintiuno", "veintidos", "veintitres", "veinticuatro", "veinticinco", "veintiseis", "veintisiete", "veintiocho", "veintinueve")
+    fun choiceIndex(text: String): Int? {
+      val s=normalize(text).removePrefix("el ").removePrefix("la ").removePrefix("opcion ")
+      val ordinal=mapOf("primero" to 0,"primer" to 0,"primera" to 0,"segundo" to 1,"segunda" to 1,"tercero" to 2,"tercera" to 2,"cuarto" to 3,"cuarta" to 3,"quinto" to 4,"quinta" to 4)
+      return ordinal[s] ?: number(s)?.takeIf {it>0}?.minus(1)
+    }
     fun number(text: String): Int? {
       val s = text.trim()
       s.toIntOrNull()?.let { return it }

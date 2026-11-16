@@ -296,3 +296,35 @@ Validación de 1.6.1 en este entorno:
 - Revisión independiente: corregida la reanudación de escucha al continuar sin Gemini o volver de su configuración; sin otros hallazgos de corrección.
 - APK final: firma v2 y alineación ZIP/16 KiB verificadas. SHA-256: `623706c7f01c045cbe9a55ea99067dbd0c10b9d66b7ee83182058f61c1d462c1`. Usa una clave nueva de depuración, excluida de Git; para actualizar una instalación con otra firma hace falta su clave original. No se recomienda desinstalar para forzar una actualización, pues se perdería la configuración local.
 - `adb devices -l` no muestra dispositivos. No se usaron claves reales de Gemini/Groq ni se ejecutó el Reloj del Motorola; falta la comprobación física de su árbol accesible y del proveedor real.
+
+## Conversación y secuencias (1.7.0)
+
+Las rutinas guardadas quedan fuera del alcance por elección del usuario. Se agregan pedidos de varios pasos por voz o texto, con un máximo de diez, revisión previa y ejecución secuencial. Ejemplo: «Bajá el volumen, poné un timer de diez minutos y abrí Spotify». Se interpreta el pedido completo antes de ejecutar: si un paso no se entiende no se ejecuta parcialmente la lista. Las condiciones y bucles siguen sin admitirse. Los títulos entre comillas conservan sus conjunciones.
+
+Calendario conserva título, fecha, hora y duración durante la conversación: «Agendá reunión con Laura mañana» → «a las cinco de la tarde» → «mejor a las seis y que dure media hora». Antes de entregar el borrador muestra un resumen y pide confirmación. Las correcciones de hora conservan el período previamente indicado. Los eventos continúan siendo borradores que hay que guardar en la app de Calendario; una entrega no demuestra que se guardaron.
+
+El panel muestra el resultado de cada paso. Una entrega a otra app pausa la secuencia: al volver, «Ya lo revisé · continuar sin repetir» reconoce la entrega sin repetirla. «Reintentar solo este paso» conserva los completados. Un paso interrumpido durante el despacho se recupera como incierto y requiere revisar la app; nunca se reenvía automáticamente. Cancelar o cerrar impide los pasos futuros y no revierte los realizados. El progreso se guarda atómicamente en almacenamiento privado sin backup. No se guarda un historial de conversaciones ni una biblioteca de rutinas.
+
+El parser local sigue siendo la primera opción. Cuando el híbrido necesita interpretar una redacción no reconocida, la clave Gemini habilita una propuesta de comandos/parámetros por `models/gemini-2.5-flash:generateContent`, con JSON Schema y validación local estricta. Decisions conserva la clasificación. El modelo no emite intents, código ni URLs; las propuestas extraídas se muestran antes de ejecutarse. La llamada tiene timeout total de diez segundos, cuerpo de respuesta limitado a 64 KiB, sin redirecciones ni reintentos automáticos. Se comparte el texto del pedido, no la libreta de contactos. La disponibilidad, cuota y precisión reales del proveedor requieren una clave y no se infieren de las pruebas con respuestas simuladas.
+
+### Multimedia
+
+«Pausá la música», «continuá la música», «pasá al siguiente tema», «anterior tema» y «mostrá la música» usan las sesiones multimedia publicadas por las apps. La primera vez puede ser necesario habilitar «Insto · control multimedia» en Acceso a notificaciones. El servicio se usa para consultar sesiones; no procesa mensajes de notificaciones. Si hay varias apps, se elige cuál controlar. Si una app publica múltiples sesiones o no ofrece la operación, se informa el límite y se conserva el pedido. El despacho de un control no se presenta como reproducción final verificada. Las búsquedas de música existentes conservan su contrato anterior.
+
+### Modos temporales
+
+«Poné el volumen al veinte por ciento durante treinta minutos», «silenciá el teléfono durante una hora» y «activá No molestar durante una hora» requieren revisar y confirmar el canal afectado. Silencio/No molestar pueden pedir acceso a la política de notificaciones; cambiar solo volumen multimedia no requiere ese acceso. No se cambian alarmas guardadas ni Wi-Fi/Bluetooth. Duración admitida: un segundo a veinticuatro horas.
+
+Android puede impedir una alarma exacta de restauración. En ese caso se ofrece explícitamente restauración aproximada antes de aplicar el modo; puede demorarse por ahorro de batería. Solo se permite un modo temporal activo. Para cambiarlo se termina primero el anterior. Se solicita permiso para mostrar notificaciones antes de aplicar el modo. Una notificación persistente permite terminarlo y restaurar ahora; también se puede decir «terminá el modo y restaurá ahora».
+
+Mientras está activo, un servicio visible observa cambios del ajuste. Si el usuario lo modifica, la restauración automática conserva su decisión. Si hay un hueco de observación por muerte del proceso o reinicio, se pierde la autorización para sobrescribir ajustes: el vencimiento se recupera, pero no se fuerza la restauración automática de un estado que pudo cambiar manualmente. La restauración explícita por botón/voz sí vuelve al valor anterior. Force-stop puede impedir recibir el vencimiento hasta abrir la app. Estos límites requieren comprobación física con la gestión de batería del Motorola.
+
+### Verificación de 1.7.0
+
+- `assembleDebug` y `compileDebugUnitTestKotlin`: correctos con Gradle 9.3.1, JDK 21 y SDK 36.1. Paquete comprobado: versión 1.7.0, versionCode 12.
+- 119 pruebas JVM en 22 clases aprobadas, cero fallos, incluidas conversación, secuencias, validación de comandos, política multimedia, modos y regresiones de voz/WhatsApp. La ejecución usa un init script externo que excluye únicamente `nativeruntime-dist-compat:1.0.18`; las dependencias del proyecto no se modificaron.
+- Suite completa intentada sin exclusiones: bloqueada por HTTP 403 al descargar ese runtime nativo desde el mirror de Maven.
+- `FloatingWorkflowTest`, `WorkflowStoreTest` y `TemporaryModeManagerTest` se intentaron con el init externo. Fallaron al inicializar los SDK 28/33 por descarga de `android-all-instrumented` con HTTP 403. Sus aserciones de integración no se ejecutaron; los fuentes completos sí compilan.
+- Revisión independiente realizada y hallazgos corregidos: invalidación del plan anterior al recibir una aclaración; fechas/condiciones dentro de títulos citados; rechazo de volumen SET sin porcentaje. Regresiones puras observadas fallar y luego pasar. La integración del floating sigue pendiente de ejecución Android.
+- Firma APK v2 y alineación ZIP/16 KiB verificadas. Se generó una clave de debug nueva, excluida de Git; no garantiza actualización sobre una instalación firmada con otra clave. Para actualizar conservando datos hace falta la firma original.
+- `adb devices` no muestra teléfonos conectados. No se usaron claves reales de Gemini/Groq. Falta validar sesiones multimedia, permisos, servicio de modos temporales, restricciones de batería, proveedor y ejecución real en el Motorola.

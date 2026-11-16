@@ -1,6 +1,6 @@
 package com.example.phone
 
-enum class PhoneActionOutcome { COMPLETED, HANDOFF, NEEDS_INPUT, REJECTED }
+enum class PhoneActionOutcome { COMPLETED, HANDOFF, NEEDS_INPUT, REJECTED, UNCERTAIN }
 data class AppOption(val label: String, val packageName: String)
 data class PhoneActionResult(
   val message: String,
@@ -8,10 +8,12 @@ data class PhoneActionResult(
   val appOptions: List<AppOption> = emptyList(),
   val needsCamera: Boolean = false,
   val needsContacts: Boolean = false,
+  val needsNotifications: Boolean = false,
   val needsClockAccessibility: Boolean = false,
+  val accessSettingsAction: String? = null,
   val stopwatchAutomation: StopwatchOp? = null,
   val contactOptions: List<ContactOption> = emptyList(),
   val outcome: PhoneActionOutcome = PhoneActionOutcome.COMPLETED,
 ) {
-  val retainRequest: Boolean get() = outcome == PhoneActionOutcome.REJECTED || stopwatchAutomation != null || needsCamera || needsContacts || contactOptions.isNotEmpty()
+  val retainRequest: Boolean get() = outcome == PhoneActionOutcome.REJECTED || outcome == PhoneActionOutcome.UNCERTAIN || stopwatchAutomation != null || needsCamera || needsContacts || needsNotifications || contactOptions.isNotEmpty()
 }

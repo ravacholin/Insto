@@ -63,6 +63,9 @@ fun AssistOverlayScreen(
   onConfirm: (Boolean) -> Unit = {},
   onChooseApp: (AppOption) -> Unit = {},
   onChooseContact: (ContactOption) -> Unit = {},
+  onContinueWorkflow: () -> Unit = {},
+  onRetryWorkflow: () -> Unit = {},
+  onCancelWorkflow: () -> Unit = {},
 ) {
   var showExamples by remember { mutableStateOf(false) }
   val context = LocalContext.current
@@ -137,6 +140,19 @@ fun AssistOverlayScreen(
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
         state.error?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold,
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
+        if (state.workflowLines.isNotEmpty()) {
+          Text(state.workflowLines.joinToString("\n"), style = MaterialTheme.typography.bodySmall)
+        }
+        if (state.workflowActive && !busy && !recording && !listening) {
+          Column {
+            if (state.workflowCanContinue) TextButton(onClick = onContinueWorkflow) { Text("Ya lo revisé · continuar sin repetir") }
+            if (state.workflowCanRetry) TextButton(onClick = onRetryWorkflow) { Text("Reintentar solo este paso") }
+            TextButton(onClick = onCancelWorkflow) { Text("Cancelar pasos pendientes") }
+          }
+        }
+        state.accessSettingsAction?.let { action ->
+          TextButton(onClick = { context.startActivity(android.content.Intent(action)) }, enabled = !busy) { Text("Habilitar acceso en Ajustes") }
+        }
         if (!busy && !recording && !listening) {
           TextButton(onClick = { showExamples = !showExamples }) {
             Text(if (showExamples) "Ocultar ejemplos" else "Ejemplos de pedidos", color = secondary)
@@ -147,7 +163,9 @@ fun AssistOverlayScreen(
               "Buscá farmacias cerca · Llamá a Ana\n" +
               "Agendá reunión mañana a las 17:00 durante una hora\n" +
               "Abrí la cámara para grabar · Buscá jazz en YouTube\n" +
-              "Poné música de Soda Stereo\n" +
+              "Poné música de Soda Stereo · Pausá la música\n" +
+              "Bajá el volumen y abrí Spotify\n" +
+              "Silenciá el teléfono durante una hora\n" +
               "Las llamadas y eventos se revisan en su propia app.",
             color = secondary, style = MaterialTheme.typography.bodySmall)
         }
