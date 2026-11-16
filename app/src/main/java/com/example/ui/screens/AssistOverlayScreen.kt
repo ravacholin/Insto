@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -15,6 +17,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
+import com.example.phone.AppOption
+import com.example.phone.StopwatchOp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -50,7 +56,16 @@ fun AssistOverlayScreen(
   onDismissOverlay: () -> Unit,
   onAttach: () -> Unit = {},
   onRemoveAttachment: () -> Unit = {},
+  onConfigureGroq: () -> Unit = {},
+  onConfigureContact: () -> Unit = {},
+  onConfirm: (Boolean) -> Unit = {},
+  onChooseApp: (AppOption) -> Unit = {},
+  onStopwatch: (StopwatchOp) -> Unit = {},
+  onStopwatchTick: () -> Unit = {},
 ) {
+  LaunchedEffect(state.stopwatchMs != null) {
+    if (state.stopwatchMs != null) while (true) { onStopwatchTick(); delay(1000) }
+  }
   val context = LocalContext.current
   val accent = Color.White
   val secondary = Color(0xFFAAAAAA)
@@ -78,7 +93,7 @@ fun AssistOverlayScreen(
       shadowElevation = 0.dp,
       onClick = {},
     ) {
-      Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+      Column(Modifier.heightIn(max = 640.dp).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
           Box(Modifier.size(34.dp).background(Color.White, controlShape),
             contentAlignment = Alignment.Center) {
@@ -86,11 +101,12 @@ fun AssistOverlayScreen(
           }
           Spacer(Modifier.width(10.dp))
           Column(Modifier.weight(1f)) {
-            Text(state.contactName, fontWeight = FontWeight.Bold,
+            Text("Teléfono + ${state.contactName}", fontWeight = FontWeight.Bold,
               style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("ASISTENTE / WHATSAPP", color = secondary,
+            Text("DESTINO AUTOMÁTICO", color = secondary,
               style = MaterialTheme.typography.labelSmall)
           }
+          TextButton(onClick = onConfigureGroq, enabled = !busy) { Text("Groq", color = secondary) }
           IconButton(onClick = onDismissOverlay, modifier = Modifier.testTag("overlay_close_button")) {
             Icon(Icons.Filled.Close, "Cerrar asistente", tint = secondary)
           }
@@ -99,10 +115,10 @@ fun AssistOverlayScreen(
         Text(
           text = when (state.mode) {
             FloatingMode.LISTENING -> "Te escucho… o tocá para escribir"
-            FloatingMode.RECORDING -> "Grabando · se envía tras 3 s de silencio"
-            FloatingMode.TYPING -> "Mensaje de texto · micrófono apagado"
-            FloatingMode.SENDING -> "Preparando envío…"
-            FloatingMode.AUDIO_READY -> "Audio guardado · tocá Enviar para intentarlo"
+            FloatingMode.RECORDING -> "Grabando · se interpreta tras 3 s de silencio"
+            FloatingMode.TYPING -> "Pedido o consulta · micrófono apagado"
+            FloatingMode.SENDING -> state.status ?: "Interpretando pedido…"
+            FloatingMode.AUDIO_READY -> "Audio guardado · podés reintentar sin grabar de nuevo"
             FloatingMode.IDLE -> if (hasAudioPermission) "Escribí o activá el micrófono"
               else "Podés escribir o permitir el micrófono"
           },
@@ -129,7 +145,7 @@ fun AssistOverlayScreen(
           value = state.text, onValueChange = onTextChange,
           modifier = Modifier.fillMaxWidth().testTag("overlay_text_input")
             .onFocusChanged { if (it.isFocused) onTextFocus() },
-          placeholder = { Text("Mensaje para ${state.contactName}", color = secondary) },
+          placeholder = { Text("Pedime algo del teléfono o consultá a ${state.contactName}", color = secondary) },
           enabled = !busy, maxLines = 4, shape = controlShape,
           keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
           keyboardActions = KeyboardActions(onSend = { if (canSend && !busy) onSend() }),
@@ -151,9 +167,33 @@ fun AssistOverlayScreen(
             }
           }
         }
+        if (!busy) state.status?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall,
+          modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+        state.transcript?.let { Text("Escuché: $it", color = secondary, style = MaterialTheme.typography.bodySmall, maxLines = 3) }
+        if (state.needsConfirmation && !busy && !recording && !listening) {
+          Row {
+            TextButton(onClick = { onConfirm(true) }) { Text("Confirmar") }
+            TextButton(onClick = { onConfirm(false) }) { Text("Cancelar") }
+          }
+        }
+        state.appOptions.forEachIndexed { index, app ->
+          TextButton(onClick = { onChooseApp(app) }, enabled = !busy && !recording && !listening) { Text("${index + 1}. ${app.label}") }
+        }
+        state.stopwatchMs?.let { elapsed ->
+          Text("Cronómetro · %02d:%02d:%02d".format(elapsed / 3600000, elapsed / 60000 % 60, elapsed / 1000 % 60),
+            style = MaterialTheme.typography.titleMedium)
+          Row {
+            TextButton(onClick = { onStopwatch(if (state.stopwatchRunning) StopwatchOp.PAUSE else StopwatchOp.RESUME) }, enabled = !busy && !recording && !listening) {
+              Text(if (state.stopwatchRunning) "Pausar" else "Continuar")
+            }
+            TextButton(onClick = { onStopwatch(StopwatchOp.RESET) }, enabled = !busy && !recording && !listening) { Text("Reiniciar") }
+          }
+        }
+        if (state.needsGroqKey) TextButton(onClick = onConfigureGroq) { Text("Configurar mi clave de Groq") }
         state.error?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall,
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
-        if (!autoSendEnabled) {
+        if (state.error?.contains("contacto") == true) TextButton(onClick = onConfigureContact) { Text("Configurar contacto de Instinct") }
+        if (!autoSendEnabled && state.error != null && !state.needsGroqKey) {
           Text("Para enviar sin volver a tocar WhatsApp, activá el servicio de Accesibilidad de PingAssist.",
             color = secondary, style = MaterialTheme.typography.labelSmall)
           TextButton(onClick = {
@@ -184,7 +224,7 @@ fun AssistOverlayScreen(
             if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = secondary, strokeWidth = 2.dp)
             else Icon(Icons.AutoMirrored.Filled.Send, null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("ENVIAR", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Text(if (state.mode == FloatingMode.AUDIO_READY) "REINTENTAR" else "LISTO", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
           }
         }
       }

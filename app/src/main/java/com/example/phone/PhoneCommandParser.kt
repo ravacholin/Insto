@@ -11,6 +11,7 @@ class PhoneCommandParser {
     return when (context) {
       "timer" -> parse("temporizador de $text")
       "alarm" -> parse("alarma $text")
+      "volume" -> parse("pone volumen al $text")
       else -> direct
     }
   }
@@ -19,7 +20,7 @@ class PhoneCommandParser {
     val s = normalize(text).removePrefix("por favor ").removeSuffix(" por favor").trim()
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel
     if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |explica|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
-    val commandPrefix = "(?:(?:pone|pon|poner|configura|crea|crear|programa|programar|inicia|iniciar|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"
+    val commandPrefix = "(?:(?:me pones|poneme|ponme|pone|pon|poner|quiero|necesito|configura|crea|crear|programa|programar|inicia|iniciar|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"
     val timer = Regex("^${commandPrefix}(?:timer|temporizador|cuenta regresiva)\\b(.*)$").matchEntire(s)
     if (timer != null) {
       val body = timer.groupValues[1].trim().removePrefix("de ")
@@ -76,10 +77,13 @@ class PhoneCommandParser {
 
   private fun alarm(input: String): PhoneRoute {
     val body = input.trim()
-    if (Regex("\\b(?:manana|pasado|hoy|lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\\b").containsMatchIn(body) &&
-      !Regex("^(?:a las? )?.+ de la manana$").matches(body)) {
-      // Repeating weekdays have a public Android representation; one-off dates do not.
-      if (!body.contains("todos los") && !body.contains("cada ")) return PhoneRoute.Unsupported("Para una fecha específica, abrí las alarmas del Reloj y completá la fecha allí.")
+    val datePart = body.replace("de la manana", "")
+    if (Regex("\\b(?:manana|pasado|hoy|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\\b|[0-9]+[/-][0-9]+|\\bel [0-9]+").containsMatchIn(datePart)) {
+      return PhoneRoute.Unsupported("Para una fecha específica, abrí las alarmas del Reloj y completá la fecha allí.")
+    }
+    if (Regex("\\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\\b").containsMatchIn(body) &&
+      !body.contains("todos los") && !body.contains("cada ")) {
+      return PhoneRoute.Unsupported("Para una fecha específica, abrí las alarmas del Reloj y completá la fecha allí.")
     }
     val days = if ("todos los dias" in body || "cada dia" in body) (1..7).toList() else {
       if ("todos los" in body || "cada " in body) listOf("domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado").mapIndexedNotNull { i, d -> if (d in body) i + 1 else null } else emptyList()
