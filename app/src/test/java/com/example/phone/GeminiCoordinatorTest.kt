@@ -29,10 +29,10 @@ class GeminiCoordinatorTest {
     assertEquals(listOf(PhoneCommand.Timer(600)), (result as InterpretationResult.Plan).commands)
   }
 
-  @Test fun classifierAndExtractedCapabilityMustAgree() = runTest {
+  @Test fun disagreementBetweenClassificationAndExtractionDefersAnUnrecognizedRequestToInstinct() = runTest {
     val result = coordinator("timer", StructuredCommandExtractor { listOf(PhoneCommand.Alarm(7, 0)) })
       .interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
-    assertTrue(result is InterpretationResult.Rejected)
+    assertEquals(InterpretationResult.Query(), result)
   }
 
   @Test fun unavailableDecisionsUsesOneFallbackWithoutAddingQueryConfirmation() = runTest {

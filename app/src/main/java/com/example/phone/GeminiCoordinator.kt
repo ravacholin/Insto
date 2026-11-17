@@ -17,6 +17,7 @@ class GeminiCoordinator(
     stage: (String) -> Unit = {},
   ): InterpretationResult {
     RequestSafetyPolicy.rejection(request.text)?.let { return InterpretationResult.Rejected(it) }
+    val canDeferToInstinct = request.draft == null && local == PhoneRoute.Instinct
     // Google may be slow, unavailable or uncertain. It must not gate a fully parsed request.
     // Multi-step requests still go through planning so that no trailing action is discarded.
     if (request.draft == null && ConversationSession.splitSteps(request.text).size == 1) {
@@ -42,7 +43,8 @@ class GeminiCoordinator(
       is PhoneRoute.Unsupported -> InterpretationResult.Rejected(local.message)
       PhoneRoute.Cancel -> InterpretationResult.Rejected("Pedido cancelado.")
     }
-    if (request.modelInput().length > 16000) return InterpretationResult.Failure(GeminiFailureKind.INVALID_REQUEST, "El pedido o su contexto es demasiado largo. Se conserva para editarlo.")
+    if (request.modelInput().length > 16000) return unavailableRoute(request, local,
+      GeminiFailureKind.INVALID_REQUEST, "El pedido o su contexto es demasiado largo. Se conserva para editarlo.")
     val start = System.nanoTime()
     var failure: GeminiFailureKind? = null
     try {
@@ -53,6 +55,8 @@ class GeminiCoordinator(
           if (error.kind != GeminiFailureKind.UNAVAILABLE) throw error
           stage("Decisions no disponible; interpretando con Gemini de respaldo…")
           val alternative = extract(request, fallback = true)
+          if (alternative is InterpretationResult.Failure)
+            return@withTimeout unavailableRoute(request, local, alternative.kind, alternative.message)
           return@withTimeout if (alternative is InterpretationResult.Query && local is PhoneRoute.Unsupported)
             InterpretationResult.Rejected("Reconocí un pedido del teléfono. No se envió a Instinct; completalo o cancelalo.") else alternative
         }
@@ -78,7 +82,7 @@ class GeminiCoordinator(
           }
         }
         when {
-          decision.choice == "unsupported" && request.draft == null && local == PhoneRoute.Instinct -> InterpretationResult.Query()
+          decision.choice == "unsupported" && canDeferToInstinct -> InterpretationResult.Query()
           decision.choice == "instinct" -> if (request.draft != null || local is PhoneRoute.Unsupported)
             InterpretationResult.Rejected("Hay un pedido del teléfono pendiente. Completalo o cancelalo; no se envió a Instinct.")
             else InterpretationResult.Query()
@@ -89,6 +93,8 @@ class GeminiCoordinator(
           decision.choice in CapabilityCatalog.parameterChoices || decision.choice in setOf("app_open", "spotify") || request.draft != null && router.hasIntent(decision.choice) || request.draft != null && decision.choice in CapabilityCatalog.fixed -> {
             stage("Completando los datos con Gemini…")
             val result = extract(request, fallback = false)
+            if (result is InterpretationResult.Failure)
+              return@withTimeout unavailableRoute(request, local, result.kind, result.message)
             val commands = (result as? InterpretationResult.Plan)?.commands
             val drafts = (result as? InterpretationResult.Incomplete)?.draft?.steps
             val selectedIndex = request.draft?.let { active -> active.steps.indexOfFirst { it.id == active.selectedStepId }.takeIf { it >= 0 } }
@@ -100,9 +106,14 @@ class GeminiCoordinator(
               commands?.let { it.size == 1 && CapabilityCatalog.accepts(decision.choice, it.single()) }
                 ?: drafts?.let { it.size == 1 && it.single().type == (if (decision.choice == "volume_set") "volume" else decision.choice) }
                 ?: false
-            if (!consistent && result !is InterpretationResult.Rejected) InterpretationResult.Rejected("La clasificación y los datos no coinciden. No se ejecutó ni se envió; reformulá el pedido.") else result
+            when {
+              consistent || result is InterpretationResult.Rejected -> result
+              canDeferToInstinct -> InterpretationResult.Query()
+              else -> InterpretationResult.Rejected("La clasificación y los datos no coinciden. No se ejecutó ni se envió; reformulá el pedido.")
+            }
           }
-          else -> InterpretationResult.Rejected("Ese pedido no está disponible o tiene restricciones no admitidas. No se ejecutó ni se envió.")
+          else -> if (canDeferToInstinct) InterpretationResult.Query()
+            else InterpretationResult.Rejected("Ese pedido no está disponible o tiene restricciones no admitidas. No se ejecutó ni se envió.")
         }
       }
     } catch (error: TimeoutCancellationException) {

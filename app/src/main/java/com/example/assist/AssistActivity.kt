@@ -121,7 +121,7 @@ class AssistActivity : ComponentActivity() {
           AlertDialog(
             onDismissRequest = { showGeminiSetup = false },
             title = { Text("Configurá Gemini Decisions") },
-            text = { Text("Falta tu clave de Gemini. Groq transcribe la voz y Gemini Decisions clasifica cada pedido contra las acciones disponibles. Cargá tu clave de Google AI Studio para usar este flujo. Sin configurar Decisions se conserva el pedido y no se ejecutan acciones automáticamente.") },
+            text = { Text("Gemini Decisions ayuda a interpretar pedidos nuevos. Podés configurar la clave ahora o seguir usando las acciones locales y el envío a Instinct.") },
             confirmButton = {
               TextButton(onClick = {
                 showGeminiSetup = false
@@ -191,6 +191,7 @@ class AssistActivity : ComponentActivity() {
           onContinueWorkflow = viewModel::continueFloatingWorkflow,
           onRetryWorkflow = viewModel::retryFloatingWorkflow,
           onCancelWorkflow = viewModel::cancelFloatingWorkflow,
+          onInstinct = { viewModel.openFloatingInstinct { finish() } },
           onDismissOverlay = dismiss,
         )
       }

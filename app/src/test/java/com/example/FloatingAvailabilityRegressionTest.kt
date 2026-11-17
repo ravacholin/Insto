@@ -113,8 +113,13 @@ class FloatingAvailabilityRegressionTest {
       override suspend fun interpret(request: InterpretationRequest) = InterpretationResult.Query()
     })
 
+  @Test fun unavailableTranscriptionStillSharesTheOriginalAudioToInstinctExactlyOnce() = assertAudioQueryDispatchesOnce(
+    "", DecisionClassifier { error("No transcript to classify") },
+    transcriber = AudioTranscriber { error("Transcription unavailable") })
+
   private fun assertAudioQueryDispatchesOnce(transcript: String, classifier: DecisionClassifier,
-    extractor: StructuredCommandExtractor = StructuredCommandExtractor { error("No extraction") }) = runTest {
+    extractor: StructuredCommandExtractor = StructuredCommandExtractor { error("No extraction") },
+    transcriber: AudioTranscriber = AudioTranscriber { transcript }) = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     configureInstinct()
     val disconnect = ConnectedAccessibility.start(app)
@@ -127,7 +132,7 @@ class FloatingAvailabilityRegressionTest {
       override fun cancel() {}
     }
     var sent = 0
-    val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { transcript },
+    val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), transcriber,
       HybridPhoneRouter({ true }, classifier), structuredExtractor = extractor)
     try {
       vm.startFloatingListening { sent++ }; runCurrent(); vm.sendFloatingAudio { sent++ }; advanceUntilIdle()

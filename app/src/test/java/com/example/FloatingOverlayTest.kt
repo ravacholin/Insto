@@ -33,6 +33,19 @@ class FloatingOverlayTest {
 
   @get:Rule val composeRule = createComposeRule()
 
+  @Test fun instinctIconCallsTheDirectActionInsteadOfAutomaticRouting() {
+    var instinctOpened = false
+    composeRule.setContent {
+      PingAssistTheme {
+        AssistOverlayScreen(FloatingAssistantState(mode = FloatingMode.TYPING, text = "Abrí Spotify"),
+          true, true, {}, {}, {}, { fail("The automatic route should not run") }, {},
+          onInstinct = { instinctOpened = true })
+      }
+    }
+    composeRule.onNodeWithTag("overlay_instinct_button").performClick()
+    composeRule.runOnIdle { assertTrue(instinctOpened) }
+  }
+
   @Test fun `enabled but disconnected auto send service still exposes accessibility settings`() {
     composeRule.setContent {
       PingAssistTheme {

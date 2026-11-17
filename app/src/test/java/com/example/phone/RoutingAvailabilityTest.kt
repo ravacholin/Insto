@@ -60,6 +60,24 @@ class RoutingAvailabilityTest {
     }).interpret(InterpretationRequest("hola, buen día"), PhoneRoute.Instinct))
   }
 
+  @Test fun anUnknownClassifierChoiceStillGoesToInstinct() = runTest {
+    val result = coordinator(DecisionClassifier { SemanticDecision("unknown", .99, .99, .99, .99) })
+      .interpret(InterpretationRequest("ayudame con esto"), PhoneRoute.Instinct)
+    assertEquals(InterpretationResult.Query(), result)
+  }
+
+  @Test fun failedParameterExtractionStillGoesToInstinctForAnUnrecognizedRequest() = runTest {
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { SemanticDecision("timer", .99, .99, .99, .99) })
+    val extractor = object : StructuredCommandExtractor {
+      override suspend fun extract(text: String): List<PhoneCommand> = error("Typed result expected")
+      override suspend fun interpret(request: InterpretationRequest) =
+        InterpretationResult.Failure(GeminiFailureKind.INVALID_RESPONSE, "No pude extraer los datos.")
+    }
+    val result = GeminiCoordinator(router, extractor)
+      .interpret(InterpretationRequest("ayudame con esto"), PhoneRoute.Instinct)
+    assertEquals(InterpretationResult.Query(), result)
+  }
+
   @Test fun incompleteLocalCommandAsksForItsFieldWithoutWaitingForGoogle() = runTest {
     val result = coordinator(DecisionClassifier { awaitCancellation() })
       .interpret(InterpretationRequest("poné una alarma"), parser.parse("poné una alarma"))

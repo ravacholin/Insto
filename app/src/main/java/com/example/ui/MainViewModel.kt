@@ -594,7 +594,7 @@ class MainViewModel @JvmOverloads constructor(
     val prefs = runBlockingPrefs(getApplication())
     floatingPrefs = prefs
     floatingReturnPackage = com.example.assist.AutoSendCoordinator.lastKnownForegroundPackage
-    floatingContact = ContextRoutingEngine.resolveRoute(getApplication(), prefs).contact ?: prefs.pinnedContact
+    floatingContact = prefs.pinnedContact
     // Loading routing preferences during a send must not erase the active text/recording state.
     floatingState.value = floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct")
     if (activeWorkflow() != null) {
@@ -844,17 +844,28 @@ class MainViewModel @JvmOverloads constructor(
       val reusedTranscript = pendingTranscript != null
       val transcriptionStarted = monotonicClock()
       val transcript = try {
-        pendingTranscript ?: audioTranscriber.transcribe(audio.file)
+        pendingTranscript ?: audioTranscriber.transcribe(audio.file).also {
+          require(it.isNotBlank()) { "La grabación no produjo una transcripción." }
+        }
       } catch (cancelled: kotlinx.coroutines.CancellationException) {
         if (generation == floatingGeneration) transcribingAudio = false
         if (generation == floatingGeneration) floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY,
           error = "La interpretación se interrumpió. El audio se conserva para reintentar.", status = null)
         return@launch
       } catch (failure: Exception) {
-        if (generation == floatingGeneration) transcribingAudio = false
-        if (generation == floatingGeneration) floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY,
-          status = null, error = (failure as? TranscriptionException)?.message ?: "No se pudo interpretar. El audio se conserva.",
-          needsGroqKey = (failure as? TranscriptionException)?.needsKey == true)
+        if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
+        transcribingAudio = false
+        val transcriptionError = failure as? TranscriptionException
+        floatingState.value = floatingState.value.copy(needsGroqKey = transcriptionError?.needsKey == true)
+        val state = floatingState.value
+        if (state.sourceContext == null && activeWorkflow() == null && workflowLoadError == null &&
+          semanticDraft == null && clarification == null && confirmation == null && pendingQuery == null &&
+          retryLocalCommand == null && state.appOptions.isEmpty() && state.contactOptions.isEmpty() &&
+          !state.needsCamera && !state.needsContacts && !state.needsNotifications) {
+          dispatchFloatingAudio(audio, onDispatched)
+        } else {
+          retainDecisionRequest(transcriptionError?.message ?: "No se pudo interpretar. El audio se conserva.")
+        }
         return@launch
       }
       if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
@@ -881,31 +892,64 @@ class MainViewModel @JvmOverloads constructor(
         dispatchFloatingTextQuery(transcript, onDispatched)
         return@launch
       }
-      prepareFloatingAssistant()
-      val contact = floatingContact
-      val prefs = floatingPrefs
-      if (contact == null || prefs == null) {
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY,
-          error = "Configurá el contacto de WhatsApp antes de enviar.")
-        return@launch
-      }
-      if (WhatsAppDispatcher.resolveTargetPackage(getApplication(), prefs.preferredFlavor) == null) {
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY,
-          error = "Instalá WhatsApp para enviar. El audio se conserva.")
-        return@launch
-      }
-      floatingState.value = floatingState.value.copy(status = "Enviando el audio original a Instinct…")
-      val result = WhatsAppDispatcher.sendWhatsAppAudio(
-        getApplication(), contact.phoneNumber, audio.file, prefs.preferredFlavor,
-        PingAutoSendAccessibilityService.isEnabled(getApplication()), boomerangReturn = true,
-        mimeType = audio.mimeType, recipientName = contact.displayName, returnPackage = floatingReturnPackage)
-      if (result is DispatchResult.Error) {
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, error = result.message, needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
-      } else {
-        pendingFloatingAudio = null // FileProvider/WhatsApp owns the shared file from here.
-        onDispatched()
-      }
+      dispatchFloatingAudio(audio, onDispatched)
     }
+  }
+
+  private fun dispatchFloatingAudio(audio: RecordedAudio, onDispatched: () -> Unit) {
+    prepareFloatingAssistant()
+    val contact = floatingContact
+    val prefs = floatingPrefs
+    if (contact == null || prefs == null) {
+      retainDecisionRequest("Configurá el contacto de Instinct antes de enviar el audio.")
+      return
+    }
+    if (WhatsAppDispatcher.resolveTargetPackage(getApplication(), prefs.preferredFlavor) == null) {
+      retainDecisionRequest("Instalá WhatsApp para enviar. El audio se conserva.")
+      return
+    }
+    floatingState.value = floatingState.value.copy(status = "Enviando el audio original a Instinct…")
+    val result = WhatsAppDispatcher.sendWhatsAppAudio(
+      getApplication(), contact.phoneNumber, audio.file, prefs.preferredFlavor,
+      PingAutoSendAccessibilityService.isEnabled(getApplication()), boomerangReturn = true,
+      mimeType = audio.mimeType, recipientName = contact.displayName, returnPackage = floatingReturnPackage)
+    if (result is DispatchResult.Error) {
+      retainDecisionRequest(result.message)
+      floatingState.value = floatingState.value.copy(needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
+    } else {
+      pendingFloatingAudio = null // FileProvider/WhatsApp owns the shared file from here.
+      floatingState.value = floatingState.value.copy(needsGroqKey = false)
+      onDispatched()
+    }
+  }
+
+  fun openFloatingInstinct(onDispatched: () -> Unit) {
+    val state = floatingState.value
+    if (state.mode == FloatingMode.SENDING) return
+    val app = getApplication<Application>()
+    val prefs = runBlockingPrefs(app)
+    val contact = prefs.pinnedContact
+    if (contact == null) {
+      floatingState.value = state.copy(error = "Configurá el contacto de Instinct para abrir WhatsApp.")
+      return
+    }
+    val result = when {
+      state.text.isBlank() -> WhatsAppDispatcher.openWhatsAppChat(app, contact.phoneNumber, prefs.preferredFlavor)
+      PingAutoSendAccessibilityService.isEnabled(app) && PingAutoSendAccessibilityService.isConnected() ->
+        WhatsAppDispatcher.sendWhatsAppText(app, contact.phoneNumber, state.text, prefs.preferredFlavor,
+          isAutoSendServiceEnabled = true, recipientName = contact.displayName)
+      else -> WhatsAppDispatcher.openWhatsAppTextDraft(app, contact.phoneNumber, state.text, prefs.preferredFlavor)
+    }
+    if (result is DispatchResult.Error) {
+      floatingState.value = state.copy(error = result.message)
+      return
+    }
+    stopFloatingCapture(discard = true)
+    pendingFloatingAudio?.file?.delete()
+    pendingFloatingAudio = null
+    pendingTranscript = null
+    floatingState.value = state.copy(mode = FloatingMode.SENDING, error = null)
+    onDispatched()
   }
 
   fun sendFloatingText(onDispatched: () -> Unit) {

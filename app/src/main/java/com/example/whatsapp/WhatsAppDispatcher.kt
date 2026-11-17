@@ -158,6 +158,21 @@ object WhatsAppDispatcher {
     }
   }
 
+  fun openWhatsAppTextDraft(
+    context: Context,
+    phoneNumber: String,
+    text: String,
+    preferredFlavor: WhatsAppFlavor,
+  ): DispatchResult {
+    val intent = buildSendTextIntent(context, phoneNumber, text, preferredFlavor)
+      ?: return DispatchResult.Error("El mensaje está vacío o el número no es válido.")
+    if (intent.`package` == null) return DispatchResult.Error("Instalá WhatsApp para compartir con Instinct.")
+    return runCatching {
+      context.startActivity(intent)
+      DispatchResult.TextDispatched(autoSendArmed = false)
+    }.getOrElse { DispatchResult.Error("No se pudo abrir el chat de Instinct en WhatsApp.") }
+  }
+
   fun buildSendAudioIntent(
     context: Context,
     phoneNumber: String,
@@ -343,6 +358,7 @@ object WhatsAppDispatcher {
     preferredFlavor: WhatsAppFlavor,
     recipientName: String,
     returnPackage: String?,
+    allowAutoSend: Boolean = true,
   ): DispatchResult {
     val jid = PhoneNumberUtils.toWhatsAppJid(phoneNumber)
       ?: return DispatchResult.Error("El número de contacto no es válido.")
@@ -358,7 +374,7 @@ object WhatsAppDispatcher {
       clipData = ClipData.newUri(context.contentResolver, name, uri)
       addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
     }
-    val autoSend = PingAutoSendAccessibilityService.isEnabled(context) &&
+    val autoSend = allowAutoSend && PingAutoSendAccessibilityService.isEnabled(context) &&
       PingAutoSendAccessibilityService.isConnected()
     if (autoSend) {
       AutoSendCoordinator.arm(pkg, boomerangReturn = true, recipientName = recipientName,
