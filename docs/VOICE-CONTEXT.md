@@ -58,3 +58,12 @@ No hay teléfono conectado en este entorno. Los umbrales están cubiertos por pr
 La rama se actualizó sobre `196685e66560799b2f3c3bdff29fcfd606b44553` antes de publicar. Se conserva el camino rápido de comandos completos y la derivación a Instinct cuando Gemini falla. La aclaración de una fecha con texto de referencia puede usar extracción de Gemini; sin referencia o sin Gemini habilitado se mantiene la aclaración local inmediata. La prueba de calendario contextual falló tras incorporar main y volvió a pasar al integrar ambos caminos.
 
 La entrega actualizada y el APK de Drive se describen en [Insto 1.10.0](releases/Insto-1.10.0-voz-contexto-debug.md). Los tiempos aún requieren validación física.
+
+## Corrección de los fallos detectados por CI
+
+La primera ejecución Android completa del PR #17 ejecutó 325 casos y detectó dos fallos (más una evaluación real omitida):
+
+- `NativePhoneActionLifecycleTest.clockHandoffFinishesEvenWhenTheOverlayStopsBeforeItsNextFrame`: el nuevo receptor de contexto asumía un intent de inicio no nulo. La actividad ahora ignora de forma segura un intent ausente, conservando la prueba de ciclo de vida y la entrega al Reloj.
+- `FloatingContextTest.newReferenceReplacesAPreviouslySelectedAttachment`: el proveedor anónimo se registraba sin adjuntarle contexto Android. La prueba usa ahora el `FileProvider` real del manifest, un archivo temporal permitido y comprueba URI y nombre antes de quitar el adjunto al recibir contexto.
+
+No se deshabilitaron pruebas ni comprobaciones del workflow. La verificación final se documenta en la nota de entrega.

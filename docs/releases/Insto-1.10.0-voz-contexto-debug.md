@@ -15,8 +15,8 @@ Variante debug, código 17. Integrada sobre main `196685e66560799b2f3c3bdff29fcf
 ## APK
 
 - [Descargar en Google Drive](https://drive.google.com/file/d/16Ifgs-T1RjpXdCntmYDtp3lWqJEXijt9/view?usp=drivesdk).
-- Nombre y tamaño verificados por metadatos de Drive: `Insto-1.10.0-voz-adaptativa-contexto-debug.apk`, 18.571.268 bytes, en Mi unidad.
-- SHA-256 local: `a6be2c0ad1f50820003544bbf8215560890bbfce3e2192a3d534d4f691553c2d`.
+- Nombre y tamaño verificados por metadatos de Drive: `Insto-1.10.0-voz-adaptativa-contexto-debug.apk`, 18.653.510 bytes, en Mi unidad.
+- SHA-256 local: `3d255d0297f2e037188fcf34d4f6a962c9acc7f93b1bdec1973b7e25b95b81ef`.
 - Application ID: `com.aistudio.pingassist.qvrtkm`; minSdk 24, targetSdk 36.
 - Firma v2 y alineación ZIP/16 KiB verificadas. Usa una clave debug local nueva, distinta de la entrega 1.9.1: puede no instalarse como actualización sobre el APK anterior. La clave no se publica.
 - La subida inicial de la base 1.9.0 se reemplazó en el mismo archivo de Drive por esta compilación integrada 1.10.0 antes de entregar el enlace.
@@ -31,3 +31,10 @@ Variante debug, código 17. Integrada sobre main `196685e66560799b2f3c3bdff29fcf
 - No hay teléfono conectado: quedan pendientes micrófono y latencia físicos, servicios reales de Gemini/Groq, compartir/seleccionar en otras apps y recepción real en WhatsApp.
 
 [Protocolo de medición y límites](../VOICE-CONTEXT.md).
+
+## Corrección posterior a la primera ejecución Android
+
+- Código corregido: `55c556453fe5da88cc1411a0d2d46d5f3cbd393f`.
+- Se acepta un intent de inicio ausente sin intentar leer contexto; se mantiene la regresión del ciclo de vida del Reloj.
+- La regresión de adjuntos usa el FileProvider real del manifest y comprueba URI/nombre antes del reemplazo. No se omitieron pruebas.
+- APK recompilado, firma v2 y alineación verificadas, mismo nombre y enlace de Drive.
