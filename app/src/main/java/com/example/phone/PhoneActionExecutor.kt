@@ -17,19 +17,34 @@ import java.util.Calendar
 class PhoneActionExecutor(
   private val context: Context,
   private val nowHourMinute: () -> Pair<Int, Int> = { Calendar.getInstance().let { it.get(Calendar.HOUR_OF_DAY) to it.get(Calendar.MINUTE) } },
+  private val dateNow: () -> Calendar = { Calendar.getInstance() },
 ) {
   fun execute(command: PhoneCommand, confirmed: Boolean = false): PhoneActionResult {
     if (context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return PhoneActionResult("Desbloqueá el teléfono para ejecutar este pedido.", outcome = PhoneActionOutcome.REJECTED)
     return try {
+      PhoneCommandCodec.decode(PhoneCommandCodec.encode(command))
+      if(command is PhoneCommand.CalendarEvent && command.beginMillis<=System.currentTimeMillis()) return PhoneActionResult("La fecha del evento ya pasó. No preparé un evento con otra fecha.",outcome=PhoneActionOutcome.REJECTED)
       when (command) {
+        is PhoneCommand.Platform -> PlatformActionExecutor(context).execute(command,confirmed)
         is PhoneCommand.Media -> MediaControllerAdapter(context).execute(command)
         is PhoneCommand.TemporaryMode -> TemporaryModeManager(context).execute(command, confirmed)
         PhoneCommand.EndMode -> TemporaryModeManager(context).end(force = true)
         is PhoneCommand.Navigate, is PhoneCommand.MapSearch, is PhoneCommand.SavePlace,
         is PhoneCommand.Dial, is PhoneCommand.CalendarEvent, is PhoneCommand.Camera,
-        is PhoneCommand.YouTubeSearch, is PhoneCommand.MusicSearch -> EverydayActionExecutor(context).execute(command)
+        is PhoneCommand.YouTubeSearch, is PhoneCommand.SpotifySearch, is PhoneCommand.MusicSearch -> EverydayActionExecutor(context).execute(command)
         is PhoneCommand.Timer, is PhoneCommand.Alarm, is PhoneCommand.ClockList -> {
-          if (command is PhoneCommand.Alarm && command.days.isEmpty() && !confirmed) {
+          if (command is PhoneCommand.Alarm && command.date != null) {
+            val current = dateNow()
+            val next = (current.clone() as Calendar).apply {
+              set(Calendar.HOUR_OF_DAY,command.hour);set(Calendar.MINUTE,command.minute)
+              set(Calendar.SECOND,0);set(Calendar.MILLISECOND,0)
+              if(timeInMillis<=current.timeInMillis) add(Calendar.DAY_OF_MONTH,1)
+            }
+            val nextDate = "%04d-%02d-%02d".format(java.util.Locale.ROOT,next.get(Calendar.YEAR),next.get(Calendar.MONTH)+1,next.get(Calendar.DAY_OF_MONTH))
+            if(nextDate != command.date || command.days.isNotEmpty()) return PhoneActionResult(
+              "El Reloj permite preparar la próxima ocurrencia de esa hora, pero no puedo asegurar la fecha ${command.date}. No creé la alarma. Podés completarla en Reloj.",outcome=PhoneActionOutcome.REJECTED)
+          }
+          if (command is PhoneCommand.Alarm && command.date == null && command.days.isEmpty() && !confirmed) {
             val (hour, minute) = nowHourMinute()
             if (command.hour * 60 + command.minute <= hour * 60 + minute) {
               return PhoneActionResult("Esa hora ya pasó hoy. ¿La preparo para la próxima ocurrencia, mañana?", confirmation = command, outcome = PhoneActionOutcome.NEEDS_INPUT)

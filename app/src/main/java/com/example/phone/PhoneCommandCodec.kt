@@ -8,8 +8,9 @@ object PhoneCommandCodec {
  fun encode(c: PhoneCommand): JSONObject {
   fun obj(type: String, vararg fields: Pair<String, Any?>) = JSONObject().put("type", type).apply { fields.forEach { (k,v) -> if (v != null) put(k,v) } }
   return when(c) {
+   is PhoneCommand.Platform -> obj("platform", "action" to c.action.name, "argument" to c.argument, "percent" to c.percent, "content" to c.content)
    is PhoneCommand.Timer -> obj("timer", "seconds" to c.seconds, "label" to c.label)
-   is PhoneCommand.Alarm -> obj("alarm", "hour" to c.hour, "minute" to c.minute, "days" to JSONArray(c.days), "label" to c.label)
+   is PhoneCommand.Alarm -> obj("alarm", "hour" to c.hour, "minute" to c.minute, "days" to JSONArray(c.days), "label" to c.label, "date" to c.date)
    is PhoneCommand.Volume -> obj("volume", "operation" to c.operation.name, "percent" to c.percent)
    is PhoneCommand.Torch -> obj("torch", "enabled" to c.enabled)
    is PhoneCommand.OpenApp -> obj("open_app", "name" to c.name)
@@ -19,6 +20,7 @@ object PhoneCommandCodec {
    is PhoneCommand.CalendarEvent -> obj("calendar", "title" to c.title, "beginMillis" to c.beginMillis, "endMillis" to c.endMillis)
    is PhoneCommand.Camera -> obj("camera", "video" to c.video)
    is PhoneCommand.YouTubeSearch -> obj("youtube", "query" to c.query)
+   is PhoneCommand.SpotifySearch -> obj("spotify", "query" to c.query)
    is PhoneCommand.MusicSearch -> obj("music", "query" to c.query)
    is PhoneCommand.Stopwatch -> obj("stopwatch", "operation" to c.operation.name)
    is PhoneCommand.ClockList -> obj("clock_list", "alarms" to c.alarms)
@@ -44,8 +46,39 @@ object PhoneCommandCodec {
   }
   fun bool(k: String, default: Boolean? = null): Boolean { val v = if(o.has(k)) o.get(k) else default; require(v is Boolean); return v }
   return when(str("type")) {
+   "platform" -> {
+    fields("action","argument","percent","content")
+    val action = PlatformAction.valueOf(str("action"))
+    val argument = if(o.has("argument")) str("argument") else null
+    val content = if(o.has("content")) str("content") else null
+    val percent = if(o.has("percent")) integer("percent",0..100) else null
+    require((percent != null) == (action == PlatformAction.BRIGHTNESS))
+    val targetActions = setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_SEND,PlatformAction.ROUTINE_RUN,PlatformAction.CALENDAR_QUERY,PlatformAction.CALENDAR_UPDATE,PlatformAction.CALENDAR_DELETE,PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_RENAME,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE,PlatformAction.ALARM_DISMISS,PlatformAction.CONTACT_SEARCH,PlatformAction.CONTACT_PHONES,PlatformAction.APP_SETTINGS,PlatformAction.MESSAGE_OPEN,PlatformAction.MESSAGE_DRAFT,PlatformAction.NOTIFICATION_OPEN,PlatformAction.NOTIFICATION_DISMISS)
+    val optionalTargets=setOf(PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE)
+    require(if(action in optionalTargets) true else (argument != null) == (action in targetActions))
+    val requiredContent=setOf(PlatformAction.MESSAGE_SEND,PlatformAction.MESSAGE_DRAFT,PlatformAction.TEXT_SHARE,PlatformAction.FILE_RENAME)
+    val optionalContent=setOf(PlatformAction.CALENDAR_UPDATE)
+    require(if(action in requiredContent) content != null else action in optionalContent || content == null)
+    if(action==PlatformAction.FILE_RENAME) require(content !in setOf(".","..") && content!!.none {it=='/' || it=='\\' || it.code<32})
+    if(action==PlatformAction.CALENDAR_QUERY) require(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}").matches(argument!!) && java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.ROOT).apply {isLenient=false}.parse(argument)!=null)
+    if(action==PlatformAction.CALENDAR_UPDATE && content!=null) {
+      val changes=JSONObject(content)
+      require(changes.keys().asSequence().toSet().all {it in setOf("beginMillis","durationSeconds")})
+      fun exact(name:String):Long {val n=changes.get(name);require(n is Number && n.toDouble().isFinite() && n.toDouble()==n.toLong().toDouble());return n.toLong()}
+      require(exact("beginMillis")>0)
+      if(changes.has("durationSeconds")) require(exact("durationSeconds") in 1..Int.MAX_VALUE.toLong())
+    }
+    if(action in setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_SEND,PlatformAction.MESSAGE_OPEN,PlatformAction.MESSAGE_DRAFT)) require(PhoneNumbers.canonical(argument!!) == argument)
+    PhoneCommand.Platform(action,argument,percent,content)
+   }
    "timer" -> { fields("seconds","label"); PhoneCommand.Timer(integer("seconds",1..Int.MAX_VALUE), str("label", "")) }
-   "alarm" -> { fields("hour","minute","days","label"); require(!o.has("days") || o.get("days") is JSONArray); val days = o.optJSONArray("days") ?: JSONArray(); require(days.length() <= 7); val values = (0 until days.length()).map { require(days.get(it) is Number); val n=days.getInt(it); require(n in 1..7 && days.getDouble(it) == n.toDouble()); n }; PhoneCommand.Alarm(integer("hour",0..23),integer("minute",0..59),values.distinct(),str("label", "")) }
+   "alarm" -> { fields("hour","minute","days","label","date");
+    val date=if(o.has("date")) str("date").also { value ->
+      require(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}").matches(value))
+      require(java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.ROOT).apply {isLenient=false}.parse(value)!=null)
+    } else null;
+    require(date==null || !o.has("days") || o.getJSONArray("days").length()==0);
+ require(!o.has("days") || o.get("days") is JSONArray); val days = o.optJSONArray("days") ?: JSONArray(); require(days.length() <= 7); val values = (0 until days.length()).map { require(days.get(it) is Number); val n=days.getInt(it); require(n in 1..7 && days.getDouble(it) == n.toDouble()); n }; PhoneCommand.Alarm(integer("hour",0..23),integer("minute",0..59),values.distinct(),str("label", ""),date) }
    "volume" -> { fields("operation","percent"); val op=VolumeOp.valueOf(str("operation"));require(op!=VolumeOp.SET || o.has("percent")); PhoneCommand.Volume(op,integer("percent",0..100,0)) }
    "torch" -> { fields("enabled"); PhoneCommand.Torch(bool("enabled")) }
    "open_app" -> { fields("name"); PhoneCommand.OpenApp(str("name")) }
@@ -55,6 +88,7 @@ object PhoneCommandCodec {
    "calendar" -> { fields("title","beginMillis","endMillis"); val begin=num("beginMillis"); val end=num("endMillis"); require(begin > 0 && end > begin && end-begin <= Int.MAX_VALUE.toLong()*1000); PhoneCommand.CalendarEvent(str("title"),begin,end) }
    "camera" -> { fields("video"); PhoneCommand.Camera(bool("video",false)) }
    "youtube" -> { fields("query"); PhoneCommand.YouTubeSearch(str("query")) }
+   "spotify" -> { fields("query"); PhoneCommand.SpotifySearch(str("query")) }
    "music" -> { fields("query"); PhoneCommand.MusicSearch(str("query")) }
    "stopwatch" -> { fields("operation"); PhoneCommand.Stopwatch(StopwatchOp.valueOf(str("operation"))) }
    "clock_list" -> { fields("alarms"); PhoneCommand.ClockList(bool("alarms")) }
@@ -67,6 +101,17 @@ object PhoneCommandCodec {
   }
  }
  fun summary(command: PhoneCommand): String = when(command) {
+  is PhoneCommand.Platform -> {
+    val content=command.content?.let {raw ->
+      if(command.action==PlatformAction.CALENDAR_UPDATE) {
+        val changes=JSONObject(raw)
+        java.text.DateFormat.getDateTimeInstance().format(java.util.Date(changes.getLong("beginMillis"))) +
+          if(changes.has("durationSeconds")) " · ${changes.getLong("durationSeconds")/60} min" else " · conservar duración"
+      } else raw
+    }
+    (LocalIntentRegistry.default.definitions.firstOrNull { it.accepts(command) }?.description ?: "Acción del dispositivo") +
+      (listOfNotNull(command.argument,command.percent?.let {"$it%"},content).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: "")
+  }
   is PhoneCommand.CalendarEvent -> "Calendario: ${command.title} · ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(java.util.Date(command.beginMillis))} · ${(command.endMillis-command.beginMillis)/60000} min"
   is PhoneCommand.Timer -> "Temporizador: ${command.seconds / 60} min ${command.seconds % 60} s ${command.label}"
   is PhoneCommand.Media -> "Multimedia: ${when(command.operation) { MediaOp.PLAY -> "continuar"; MediaOp.PAUSE -> "pausar"; MediaOp.NEXT -> "siguiente"; MediaOp.PREVIOUS -> "anterior"; MediaOp.STATUS -> "consultar" }}"
@@ -75,7 +120,7 @@ object PhoneCommandCodec {
   is PhoneCommand.Navigate -> "Ruta a ${command.destination} · ${when(command.mode){TravelMode.DRIVING->"en auto";TravelMode.WALKING->"a pie";TravelMode.BICYCLING->"en bicicleta";TravelMode.TRANSIT->"en transporte público"}}"
   is PhoneCommand.Volume -> "Volumen multimedia: ${when(command.operation){VolumeOp.UP->"subir un paso";VolumeOp.DOWN->"bajar un paso";VolumeOp.SET->"${command.percent}%"}}"
   is PhoneCommand.Torch -> if(command.enabled) "Encender linterna" else "Apagar linterna"
-  is PhoneCommand.Alarm -> "Alarma: %02d:%02d".format(command.hour,command.minute) + if(command.days.isNotEmpty()) " · ${command.days.joinToString {listOf("", "domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado").getOrElse(it){"día inválido"}}}" else ""
+  is PhoneCommand.Alarm -> "Alarma: %02d:%02d".format(command.hour,command.minute) + (command.date?.let {" · $it"} ?: "") + if(command.days.isNotEmpty()) " · ${command.days.joinToString {listOf("", "domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado").getOrElse(it){"día inválido"}}}" else ""
   is PhoneCommand.ClockList -> if(command.alarms) "Mostrar alarmas" else "Mostrar temporizadores"
   is PhoneCommand.Stopwatch -> "Cronómetro: ${when(command.operation){StopwatchOp.START->"iniciar";StopwatchOp.PAUSE->"pausar";StopwatchOp.RESUME->"continuar";StopwatchOp.RESET->"reiniciar";StopwatchOp.STATUS->"mostrar"}}"
   is PhoneCommand.MapSearch -> "Buscar en Maps: ${command.query}"
@@ -83,6 +128,7 @@ object PhoneCommandCodec {
   is PhoneCommand.Dial -> "Preparar llamada a ${command.target}"
   is PhoneCommand.Camera -> if(command.video) "Abrir cámara de video" else "Abrir cámara de fotos"
   is PhoneCommand.YouTubeSearch -> "Buscar en YouTube: ${command.query}"
+  is PhoneCommand.SpotifySearch -> "Buscar en Spotify: ${command.query}"
   is PhoneCommand.MusicSearch -> "Buscar música: ${command.query}"
   is PhoneCommand.Settings -> "Abrir ajustes de ${command.kind}"
   PhoneCommand.EndMode -> "Terminar modo temporal y restaurar ahora"

@@ -16,7 +16,7 @@ class GeminiCoordinatorTest {
     assertEquals(InterpretationResult.Direct(PhoneCommand.Volume(VolumeOp.DOWN)), coordinator("volume_down").interpret(InterpretationRequest("un poquito menos de sonido"), PhoneRoute.Instinct))
   }
   @Test fun explanatoryQueriesMayMentionConditionsWithoutBecomingCommands() = runTest {
-    val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Explicit explanation must stay local") })
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { SemanticDecision("instinct", .99, .99, .99, .99) })
     val c = GeminiCoordinator(router, StructuredCommandExtractor { error("No extraction") })
     for (text in listOf("explicame qué pasa cuando uso wifi", "Instinct contame si mañana llueve")) {
       assertEquals(InterpretationResult.Query(), c.interpret(InterpretationRequest(text), PhoneRoute.Instinct))

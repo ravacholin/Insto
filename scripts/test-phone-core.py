@@ -44,20 +44,22 @@ def main():
         jars = list(pool.map(download, ARTIFACTS.items()))
     classpath = os.pathsep.join(jars)
     source = ROOT / "app/src/main/java/com/example/phone"
-    # Explicit boundary: no Android executors, storage or permission adapters.
+    # Explicit boundary: pure command/registry policies and file-based routines,
+    # without Android executors, preferences/storage or permission adapters.
     names = ["PhoneCommand", "PhoneActionResult", "PhoneCommandCodec", "PhoneCommandParser",
              "EverydayCommandParser", "ExtendedCommandParser", "CalendarRequestParser",
              "CommandDuration", "HybridPhoneRouter", "GeminiDecisionsClient", "StructuredCommandClient",
              "ConversationSession", "WorkflowRunner", "TemporaryModePolicy", "MediaSessionPolicy",
              "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "GeminiTransport", "CapabilityCatalog",
-             "Interpretation", "CommandDraft", "RequestSafetyPolicy", "GeminiCoordinator", "GeminiDiagnostics"]
+             "Interpretation", "CommandDraft", "RequestSafetyPolicy", "GeminiCoordinator", "GeminiDiagnostics",
+             "LocalIntentRegistry", "ExtendedLocalIntents", "NativeActionParameters",
+             "DocumentNamePolicy", "ConfiguredRoutineStore"]
     sources = [str(source / (name + ".kt")) for name in names if (source / (name + ".kt")).exists()]
     tests = []
     for path in sorted((ROOT / "app/src/test/java/com/example/phone").glob("*Test.kt")):
         text = path.read_text()
         if any(token in text for token in ("import android.", "import androidx.", "org.robolectric", "com.example.testsupport")):
             continue
-        # Other pure policy tests have dependencies outside this compilation boundary.
         tests.append(path)
     with tempfile.TemporaryDirectory(prefix="insto-core-") as directory:
         classes = str(Path(directory) / "classes")

@@ -24,12 +24,13 @@ class GeminiCorpusTest {
     val entries = corpus()
     assertTrue(entries.size >= 120)
     val parser = PhoneCommandParser(::now)
-    val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Clear local request must not call Google") })
+    val router = HybridPhoneRouter({ false }, DecisionClassifier { error("Local-only mode must not call Google") })
+    val coordinator = GeminiCoordinator(router, StructuredCommandExtractor { error("Local-only mode must not extract") })
     for (item in entries.filter { it.getString("group") in listOf("local", "query") }) {
       val text = item.getString("text")
       val local = parser.parse(text)
-      if (item.getString("group") == "local") assertEquals(text, PhoneRoute.Local(expected(item).single()), router.route(text, local))
-      else assertEquals(text, PhoneRoute.Instinct, router.route(text, local))
+      if (item.getString("group") == "local") assertEquals(text, InterpretationResult.Direct(expected(item).single()), coordinator.interpret(InterpretationRequest(text), local))
+      else assertEquals(text, InterpretationResult.Query(), coordinator.interpret(InterpretationRequest(text), local))
     }
   }
   @Test fun adverseRequestsNeverExecuteOrBecomeInstinctMessages() = runBlocking {

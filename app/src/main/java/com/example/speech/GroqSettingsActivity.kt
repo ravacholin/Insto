@@ -49,15 +49,15 @@ class GroqSettingsActivity : ComponentActivity() {
         }
         Surface(Modifier.fillMaxSize()) {
           Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("Gemini Decisions · híbrido", style = MaterialTheme.typography.headlineSmall)
-            Text("Los pedidos claros se resuelven localmente. Para pedidos no comprendidos, se envía a Google el texto escrito o transcrito. Gemini ayuda a elegir una acción o Instinct y puede proponer parámetros estructurados que se revisan antes de ejecutar; el audio original sigue destinado a Instinct cuando corresponde. No se comparte tu libreta de contactos con Gemini.")
-            Text("Es opcional y requiere internet. El nivel gratuito tiene cuotas y puede usar el contenido para mejorar productos de Google según sus términos. Si falla, se conserva el pedido para reintentar.")
-            Text(if (geminiConfigured) "Hay una clave de Gemini guardada y cifrada en este teléfono." else "Cargá tu clave personal de Google AI Studio para activar el híbrido.")
+            Text("Gemini Decisions · acciones locales", style = MaterialTheme.typography.headlineSmall)
+            Text("Con Gemini activado, Decisions clasifica cada pedido nuevo contra el catálogo de acciones de Insto. Android valida y ejecuta las acciones reconocidas. Las aclaraciones conservan los datos conocidos; si hace falta extracción generativa se revisa el resultado antes de ejecutar. Solo las consultas identificadas van a Instinct. Los pedidos inciertos o fallidos se conservan. No se comparten contactos, archivos ni notificaciones con Gemini.")
+            Text("La interpretación con Gemini requiere una clave activa e internet. Sin Gemini se mantiene el modo local para pedidos reconocidos. El nivel gratuito tiene cuotas y puede usar el texto según los términos de Google. El respaldo generativo siempre requiere confirmación.")
+            Text(if (geminiConfigured) "Hay una clave de Gemini guardada y cifrada en este teléfono." else "Cargá tu clave personal de Google AI Studio para activar Decisions.")
             OutlinedTextField(geminiValue, { geminiValue = it }, label = { Text("Clave de Gemini") }, singleLine = true,
               visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
             Button(onClick = {
               runCatching { gemini.saveKey(geminiValue) }.onSuccess {
-                geminiValue = ""; geminiConfigured = true; hybridEnabled = true; message = "Híbrido activado."; setResult(RESULT_OK); finish()
+                geminiValue = ""; geminiConfigured = true; hybridEnabled = true; message = "Decisions activado."; setResult(RESULT_OK); finish()
               }.onFailure { message = "No se pudo guardar la clave de Gemini." }
             }, enabled = geminiValue.isNotBlank()) { Text("Guardar Gemini y activar") }
             if (geminiConfigured) {
@@ -65,9 +65,9 @@ class GroqSettingsActivity : ComponentActivity() {
                 Switch(checked = hybridEnabled, onCheckedChange = { desired ->
                   probeJob?.cancel(); probing = false
                   runCatching { gemini.setEnabled(desired) }.onSuccess { hybridEnabled = desired }
-                    .onFailure { message = "No se pudo cambiar el modo híbrido." }
+                    .onFailure { message = "No se pudo cambiar la clasificación." }
                 })
-                Text("Usar Gemini para pedidos no comprendidos")
+                Text("Clasificar pedidos con Gemini Decisions")
               }
               Button(enabled = hybridEnabled && !probing, onClick = {
                 probing = true

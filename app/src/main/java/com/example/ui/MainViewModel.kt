@@ -221,7 +221,7 @@ class MainViewModel @JvmOverloads constructor(
   fun cancelFloatingWorkflow() {
     floatingGeneration++; floatingJob?.cancel()
     cancelClockAutomation?.invoke(); cancelClockAutomation = null
-    workflow.cancel(); conversation.clear(); semanticDraft = null; pendingQuery = null; approvedQueryText = null
+    workflow.cancel(); conversation.clear(); clarification=null; clarificationRequest=null; semanticDraft = null; pendingQuery = null; approvedQueryText = null
     confirmation = null; cameraCommand = null; contactsCommand = null; notificationsCommand = null
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, needsConfirmation = false,
       appOptions = emptyList(), contactOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false,
@@ -238,13 +238,14 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private fun finishWorkflow() {
-    conversation.clear(); semanticDraft = null
+    conversation.clear(); semanticDraft = null; clarification = null; clarificationRequest = null
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
       status = "Secuencia finalizada. Las entregas a otras apps se revisan allí.",
       phoneActionCompletion = "Secuencia finalizada.")
     syncWorkflow()
   }
   private var clarification: String? = null
+  private var clarificationRequest: Pair<String,java.util.Calendar>? = null
   private var confirmation: PhoneCommand? = null
   private var cameraCommand: PhoneCommand? = null
   private var contactsCommand: PhoneCommand? = null
@@ -297,8 +298,9 @@ class MainViewModel @JvmOverloads constructor(
     if (option !in floatingState.value.appOptions || floatingState.value.mode == FloatingMode.SENDING) return
     floatingState.value = floatingState.value.copy(appOptions = emptyList())
     val media = appChoiceCommand as? PhoneCommand.Media
+    val settings = (appChoiceCommand as? PhoneCommand.Platform)?.takeIf { it.action == PlatformAction.APP_SETTINGS }
     appChoiceCommand = null
-    runPhoneCommand(media?.copy(packageName = option.packageName) ?: PhoneCommand.OpenApp(option.packageName))
+    runPhoneCommand(media?.copy(packageName = option.packageName) ?: settings?.copy(argument=option.packageName) ?: PhoneCommand.OpenApp(option.packageName))
   }
 
   fun onFloatingCameraPermission(granted: Boolean) {
@@ -332,6 +334,16 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private fun runPhoneCommand(command: PhoneCommand, confirmed: Boolean = false) {
+    if(command is PhoneCommand.Platform && command.action==PlatformAction.ROUTINE_RUN) {
+      try {
+        val routines=ConfiguredRoutineStore(java.io.File(getApplication<Application>().noBackupFilesDir,"configured-routines.json")).read()
+        val routine=routines.singleOrNull {PhoneCommandParser.normalize(it.name)==PhoneCommandParser.normalize(command.argument!!)}
+        if(routine==null) retainDecisionRequest("No encontré esa rutina configurada. Podés consultar tus rutinas o importar plantillas revisadas.")
+        else previewWorkflow(routine.commands)
+      } catch(_:Exception) {retainDecisionRequest("No se pudo leer la configuración de rutinas. No se ejecutó ningún paso.")}
+      return
+    }
+    clarificationRequest = null
     clarification = null
     confirmation = null
     cameraCommand = null
@@ -401,152 +413,100 @@ class MainViewModel @JvmOverloads constructor(
     if (approvedQueryText == text) { approvedQueryText = null; return false }
     pendingQuery?.let {
       if (normalized in listOf("si", "dale", "confirmar", "confirmo", "ok", "no", "cancelar")) {
-        confirmFloatingAction(normalized !in listOf("no", "cancelar"), onDispatched)
-        return true
+        confirmFloatingAction(normalized !in listOf("no", "cancelar"), onDispatched); return true
       }
       pendingQuery = null
       floatingState.value = floatingState.value.copy(queryPreview = false, needsConfirmation = false)
     }
-    if (normalized !in listOf("cancelar", "cancela", "no", "dejalo", "si", "confirmo")) {
-      RequestSafetyPolicy.rejection(text)?.let { retainDecisionRequest(it); return true }
-    }
     if (workflowLoadError != null) {
-      if (normalized in listOf("cancelar", "descartar")) {workflow.clear(); workflowLoadError = null}
-      else {retainDecisionRequest(workflowLoadError + " Decí cancelar para descartar el registro dañado."); return true}
+      if (normalized in listOf("cancelar", "descartar")) { workflow.clear(); workflowLoadError = null }
+      else { retainDecisionRequest(workflowLoadError + " Decí cancelar para descartar el registro dañado."); return true }
+    }
+    if (normalized in listOf("cancelar", "cancela", "dejalo", "olvidalo") || normalized == "no" &&
+      (activeWorkflow() != null || semanticDraft != null || clarification != null || confirmation != null ||
+        floatingState.value.contactOptions.isNotEmpty() || floatingState.value.appOptions.isNotEmpty())) {
+      cancelFloatingWorkflow(); return true
     }
     val active = activeWorkflow()
     if (active != null) {
-      if (normalized in listOf("cancelar", "cancela", "no", "dejalo")) {cancelFloatingWorkflow(); return true}
-      if (!active.confirmed && normalized in listOf("si", "dale", "ejecutar", "confirmar", "confirmo", "ok")) {confirmFloatingAction(true); return true}
-      if (active.confirmed && normalized in listOf("continua", "continuar", "listo", "ya esta", "verificado", "omiti ese paso")) {continueFloatingWorkflow(); return true}
-      if (normalized in listOf("reintenta", "reintentar", "intenta de nuevo")) {retryFloatingWorkflow(); return true}
+      if (!active.confirmed && normalized in listOf("si", "dale", "ejecutar", "confirmar", "confirmo", "ok")) { confirmFloatingAction(true); return true }
+      if (active.confirmed && normalized in listOf("continua", "continuar", "listo", "ya esta", "verificado", "omiti ese paso")) { continueFloatingWorkflow(); return true }
+      if (normalized in listOf("reintenta", "reintentar", "intenta de nuevo")) { retryFloatingWorkflow(); return true }
     }
-    val hasChoice = confirmation != null || floatingState.value.appOptions.isNotEmpty() || floatingState.value.contactOptions.isNotEmpty()
-    var semanticCandidate = false
-    if (semanticDraft != null && !hasChoice && active?.confirmed != true) {
-      if (normalized in listOf("cancelar", "cancela", "no", "dejalo", "olvidalo")) {
-        semanticDraft = null; conversation.clear(); workflow.invalidatePreview(); syncWorkflow()
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = "Pedido cancelado.")
-        return true
-      }
-      val fresh = phoneParser.parse(text)
-      if (fresh is PhoneRoute.Local && !normalized.startsWith("mejor ")) {
-        semanticDraft = null; conversation.clear(); workflow.invalidatePreview(); syncWorkflow()
-      } else {
-        workflow.invalidatePreview(); syncWorkflow()
-        val result = try { semanticDraft!!.reply(text, java.util.Calendar.getInstance()) } catch (_: Exception) {
-          retainDecisionRequest("Ese dato no es válido. Conservé el pedido; corregilo antes de confirmar.")
-          return true
-        }
-        if (result is InterpretationResult.Incomplete && result.draft.selectedStepId != null && hybridRouter.isEnabled()) {
-          semanticDraft = result.draft
-          return interpretWithGemini(text, PhoneRoute.Instinct, semanticDraft)
-        }
-        if (result != null) return applyInterpretation(result, text)
-        if (!hybridRouter.isEnabled()) {
-          retainDecisionRequest(semanticDraft!!.prompt()); return true
-        }
-        return interpretWithGemini(text, PhoneRoute.Instinct, semanticDraft)
-      }
+    if (confirmation != null && normalized in listOf("si", "si confirmo", "confirmo", "dale", "acepto", "no")) {
+      confirmFloatingAction(normalized != "no"); return true
     }
-    if (!hasChoice && (active == null || !active.confirmed)) {
-      when (val conversational = conversation.accept(text, allowSemantic = hybridRouter.isEnabled())) {
-        is ConversationResult.Plan -> { previewWorkflow(conversational.commands); return true }
-        is ConversationResult.Prompt -> {
-          workflow.invalidatePreview()
-          syncWorkflow()
-          retainLocalAudio = true
-          floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = conversational.message, error = null)
-          return true
-        }
-        is ConversationResult.Semantic -> {
-          semanticDraft = conversational.draft
-          semanticCandidate = true
-          workflow.invalidatePreview()
-          syncWorkflow()
-        }
-        ConversationResult.Pass -> {
-          workflow.invalidatePreview()
-          syncWorkflow()
-        }
-      }
-    }
-    if (activeWorkflow() != null && !hasChoice) {
-      retainDecisionRequest("Hay una secuencia pendiente. Podés continuar, reintentar el paso o cancelar."); return true
-    }
-    val retry = retryLocalCommand
-    if (retry != null && retryLocalText?.let(PhoneCommandParser::normalize) == normalized) {
-      runPhoneCommand(retry.first, retry.second)
-      return true
-    }
-    retryLocalCommand = null
-    retryLocalText = null
-    routedRequestText = text
-    if (confirmation != null && normalized in listOf("si", "si confirmo", "confirmo", "dale", "acepto", "no", "cancelar")) {
-      confirmFloatingAction(normalized !in listOf("no", "cancelar"))
-      return true
-    }
+    val local = phoneParser.parse(text)
+    val fresh = local is PhoneRoute.Local || text.trimStart().startsWith("¿") ||
+      Regex("^(?:que|como|por que|donde|cual|instinct|explica|conta|ayuda|necesito|quiero|abri|busca|pone|agenda|llama)\\b").containsMatchIn(normalized)
     val contacts = floatingState.value.contactOptions
     if (contacts.isNotEmpty()) {
       val index = PhoneCommandParser.choiceIndex(normalized)
-      val selected = if (index != null) contacts.getOrNull(index) else contacts.singleOrNull {
-        PhoneCommandParser.normalize(it.name) == normalized ||
-          PhoneNumbers.canonical(text)?.let { number -> number == PhoneNumbers.canonical(it.number) } == true
+      val selected = index?.let(contacts::getOrNull) ?: contacts.singleOrNull {
+        PhoneCommandParser.normalize(it.name) == normalized || PhoneNumbers.canonical(text)?.let { n -> n == PhoneNumbers.canonical(it.number) } == true
       }
       if (selected != null) { chooseFloatingContact(selected); return true }
-      if (normalized != "no" && phoneParser.parse(text) == PhoneRoute.Instinct) {
-        retainLocalAudio = true
-        floatingState.value = floatingState.value.copy(
-          mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING,
-          error = "Elegí una opción por su número, o decí cancelar.", status = null)
-        return true
-      }
+      if (index != null || !fresh) { retainDecisionRequest("Elegí una de las opciones disponibles o decí cancelar."); return true }
     }
     val options = floatingState.value.appOptions
     if (options.isNotEmpty()) {
       val index = PhoneCommandParser.choiceIndex(normalized)
-      val selected = if (index != null) options.getOrNull(index) else options.singleOrNull { PhoneCommandParser.normalize(it.label) == normalized }
+      val selected = index?.let(options::getOrNull) ?: options.singleOrNull { PhoneCommandParser.normalize(it.label) == normalized }
       if (selected != null) { chooseFloatingApp(selected); return true }
+      if (index != null || !fresh) { retainDecisionRequest("Elegí una de las opciones disponibles o decí cancelar."); return true }
     }
-    val pendingContext = clarification
-    val local = if (semanticCandidate) PhoneRoute.Unsupported("Pedido pendiente de interpretación.", recoverable = true)
-      else if (contacts.isNotEmpty() && normalized == "no") PhoneRoute.Cancel
-      else clarification?.let { phoneParser.parseReply(it, text) } ?: phoneParser.parse(text)
-    // Unresolved choices/confirmations stay local; never reinterpret "two" or "maybe" as a fresh request.
-    if ((options.isNotEmpty() || confirmation != null) && local == PhoneRoute.Instinct) {
-      retainLocalAudio = true
-      floatingState.value = floatingState.value.copy(
-        mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING,
-        error = "Elegí una opción, confirmá el pedido o decí cancelar.", status = null)
-      return true
-    }
-    if ((pendingContext == null || semanticCandidate) && hybridRouter.needsDecision(text, local)) {
-      return interpretWithGemini(text, local, semanticDraft)
-    }
-    val route = local
-    // A new complete request replaces any earlier clarification/confirmation.
-    clarification = null
-    confirmation = null
-    cameraCommand = null
-    contactsCommand = null
-    notificationsCommand = null
-    retryLocalCommand = null
-    retryLocalText = null
-    floatingState.value = floatingState.value.copy(needsConfirmation = false, appOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false, contactOptions = emptyList())
-    when (route) {
-      is PhoneRoute.Local -> runPhoneCommand(route.command)
-      is PhoneRoute.Clarify -> {
-        clarification = route.context
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = route.prompt, error = null)
+    if (confirmation != null && !fresh) { retainDecisionRequest("Confirmá el pedido o decí cancelar."); return true }
+    if (active?.confirmed == true) { retainDecisionRequest("Hay una secuencia en curso. Continuá o cancelala antes de iniciar otra acción."); return true }
+    val retry = retryLocalCommand
+    if (retry != null && retryLocalText == text) { runPhoneCommand(retry.first,retry.second); return true }
+    retryLocalCommand = null; retryLocalText = null
+    RequestSafetyPolicy.rejection(text)?.let { retainDecisionRequest(it); return true }
+    val correction = Regex("^(?:mejor|cambia|cambiale|que dure|durante|a las?|de la|el segundo|la segunda|el primero|la primera)\\b").containsMatchIn(normalized)
+    if (semanticDraft != null && (local !is PhoneRoute.Local || correction)) {
+      workflow.invalidatePreview(); syncWorkflow()
+      val result = try { semanticDraft!!.reply(text, java.util.Calendar.getInstance()) } catch (_: Exception) {
+        retainDecisionRequest("Ese dato no es válido. Conservé el pedido; corregilo antes de confirmar."); return true
       }
-      is PhoneRoute.Unsupported -> {
-        retainLocalAudio = true
-        floatingState.value = floatingState.value.copy(mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING, status = null, error = route.message)
+      if (result is InterpretationResult.Incomplete && result.draft.selectedStepId != null && hybridRouter.isEnabled()) {
+        semanticDraft = result.draft; return interpretWithGemini(text, PhoneRoute.Instinct, semanticDraft)
       }
-      PhoneRoute.Cancel -> floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = "Pedido cancelado.", error = null)
-      PhoneRoute.Instinct -> return false
+      if (result != null) return applyInterpretation(result,text)
+      if (!hybridRouter.isEnabled()) { retainDecisionRequest(semanticDraft!!.prompt()); return true }
+      return interpretWithGemini(text,PhoneRoute.Instinct,semanticDraft)
     }
-    return true
+    val context = clarification
+    if (context != null && !fresh || context == "intent:calendar" && correction) {
+      if (context == "intent:calendar" || !context!!.startsWith("intent:")) {
+        when (val reply = conversation.accept(text, allowSemantic=hybridRouter.isEnabled())) {
+          is ConversationResult.Plan -> { previewWorkflow(reply.commands); return true }
+          is ConversationResult.Prompt -> {
+            workflow.invalidatePreview(); syncWorkflow(); retainLocalAudio = true
+            floatingState.value = floatingState.value.copy(mode=FloatingMode.IDLE,text="",status=reply.message,error=null); return true
+          }
+          is ConversationResult.Semantic -> { semanticDraft=reply.draft; return interpretWithGemini(text,PhoneRoute.Instinct,reply.draft) }
+          ConversationResult.Pass -> Unit
+        }
+      } else {
+        val reply = if (context!!.startsWith("intent:")) hybridRouter.reply(context,text,clarificationRequest)
+          else phoneParser.parseReply(context,text).takeUnless { it == PhoneRoute.Instinct }
+        if (reply != null) return applyResolvedRoute(reply,text)
+      }
+    }
+    // A new request has one classification gateway. Continuations above retain their selected intent.
+    semanticDraft = null; conversation.clear(); clarification = null; clarificationRequest = null
+    confirmation=null; cameraCommand=null; contactsCommand=null; notificationsCommand=null; appChoiceCommand=null
+    workflow.invalidatePreview(); syncWorkflow()
+    floatingState.value = floatingState.value.copy(needsConfirmation=false,appOptions=emptyList(),contactOptions=emptyList(),needsCamera=false,needsContacts=false,needsNotifications=false)
+    routedRequestText = text
+    return interpretWithGemini(text,local,null)
+  }
+
+  private fun applyResolvedRoute(route: PhoneRoute, text: String): Boolean = when (route) {
+    is PhoneRoute.Local -> applyInterpretation(InterpretationResult.Direct(route.command),text)
+    is PhoneRoute.Clarify -> applyInterpretation(InterpretationResult.Clarification(route.prompt,route.context),text)
+    is PhoneRoute.Unsupported -> { retainDecisionRequest(route.message); true }
+    PhoneRoute.Cancel -> { cancelFloatingWorkflow(); true }
+    PhoneRoute.Instinct -> false
   }
 
   private suspend fun interpretWithGemini(text: String, local: PhoneRoute, draft: DraftPlan?): Boolean {
@@ -582,9 +542,20 @@ class MainViewModel @JvmOverloads constructor(
           needsConfirmation = true, queryPreview = true, error = null)
       }
       is InterpretationResult.Direct -> {
-        semanticDraft = null; conversation.clear(); clarification = null
+        semanticDraft = null; conversation.clear(); clarification = null; clarificationRequest = null
         routedRequestText = text
-        runPhoneCommand(result.command)
+        if (result.command is PhoneCommand.CalendarEvent) {
+          conversation.accept(text)
+          clarification = "intent:calendar"; clarificationRequest = text to java.util.Calendar.getInstance()
+          previewWorkflow(listOf(result.command))
+        } else runPhoneCommand(result.command)
+      }
+      is InterpretationResult.Clarification -> {
+        clarification = result.context
+        if (clarificationRequest == null) clarificationRequest = text to java.util.Calendar.getInstance()
+        conversation.accept(text)
+        retainLocalAudio = true
+        floatingState.value = floatingState.value.copy(mode=FloatingMode.IDLE,text="",status=result.prompt,error=null)
       }
       is InterpretationResult.Plan -> {
         clarification = null; conversation.clear()

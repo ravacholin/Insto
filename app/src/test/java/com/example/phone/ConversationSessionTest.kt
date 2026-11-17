@@ -27,10 +27,19 @@ class ConversationSessionTest {
     val result = s.accept("a eso de las cinco de la tarde", allowSemantic = true) as ConversationResult.Semantic
     val step = result.draft!!.steps.single().json()
     assertEquals("reunión", step.getString("title"))
-    assertEquals("manana", step.getString("date"))
+    assertEquals("17/11/2026", step.getString("date"))
     assertFalse(step.has("time"))
   }
   private fun session() = ConversationSession { Calendar.getInstance().apply { set(2026, 10, 16, 12, 0, 0) } }
+  @Test fun relativeDayIsAnchoredBeforeAReplyAfterMidnight() {
+    val clock=Calendar.getInstance().apply {set(2026,10,16,23,0,0)}
+    val s=ConversationSession {clock.clone() as Calendar}
+    s.accept("agendá reunión mañana")
+    clock.add(Calendar.DAY_OF_MONTH,1);clock.set(Calendar.HOUR_OF_DAY,0)
+    val plan=s.accept("a las 17:00") as ConversationResult.Plan
+    val event=plan.commands.single() as PhoneCommand.CalendarEvent
+    assertEquals(17,Calendar.getInstance().apply {timeInMillis=event.beginMillis}.get(Calendar.DAY_OF_MONTH))
+  }
   @Test fun calendarRetainsFieldsAcrossAnswersAndCorrections() {
     val s = session()
     assertTrue(s.accept("Agendá reunión con Laura mañana") is ConversationResult.Prompt)

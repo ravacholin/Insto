@@ -26,6 +26,44 @@ import org.robolectric.Shadows.shadowOf
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class FloatingHybridRoutingTest {
+  @Test fun explicitSearchAudioLaunchesAndroidInsteadOfSendingTheOriginalToInstinct() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    com.example.testsupport.installNativeHandler(app, Intent.ACTION_VIEW, "https")
+    try {
+      for ((transcript, url) in listOf(
+        "buscar rebord en YouTube" to "https://www.youtube.com/results?search_query=rebord",
+        "buscar rebord en spotify" to "https://open.spotify.com/search/rebord")) {
+        val file = File.createTempFile("search-original", ".m4a", app.cacheDir).apply { writeText("original audio") }
+        var decisions = 0
+        val capture = object : FloatingAudioCapture {
+          override val snapshot get() = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1500, .5f)
+          override fun start() = Result.success(Unit)
+          override fun finish() = RecordedAudio(file, "audio/mp4")
+          override fun cancel() {}
+        }
+        val vm = MainViewModel(app, capture, UnconfinedTestDispatcher(testScheduler), AudioTranscriber { transcript },
+          HybridPhoneRouter({ true }, DecisionClassifier {
+            decisions++; SemanticDecision("instinct", .99, .99, .99, .99)
+          }))
+        try {
+          vm.startFloatingListening { fail("Search must stay on Android") }
+          runCurrent()
+          vm.sendFloatingAudio { fail("Search audio must not be sent to Instinct") }
+          advanceUntilIdle()
+          val launched = shadowOf(app).nextStartedActivity
+          assertNotNull(transcript, launched)
+          assertEquals(Intent.ACTION_VIEW, launched.action)
+          assertEquals(url, launched.dataString)
+          assertEquals(1, decisions)
+          assertNotNull(vm.consumePhoneActionCompletion())
+          assertFalse(file.exists())
+          assertNull(shadowOf(app).nextStartedActivity)
+        } finally { vm.dismissFloatingAssistant(); file.delete() }
+      }
+    } finally { Dispatchers.resetMain() }
+  }
+
   @Test fun semanticLocalActionWorksWithoutWhatsAppAndCompletesOnce() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
@@ -44,6 +82,64 @@ class FloatingHybridRoutingTest {
       vm.sendFloatingText { fail("Already completed") }
       assertEquals(1, calls)
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
+  }
+
+  @Test fun lowConfidenceForPhoneCommandRetainsExactOriginalWithoutExecutingOrSending() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    val disconnect = ConnectedAccessibility.start(app)
+    val audio = app.getSystemService(android.media.AudioManager::class.java)
+    val before = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+    var calls = 0
+    val original = "¿Podés bajar el volumen, por favor?"
+    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { text ->
+      calls++; assertEquals(original, text); SemanticDecision("volume_down", .60, .60, .99, .99)
+    }))
+    try {
+      withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
+      shadowOf(app.packageManager).installPackage(PackageInfo().apply {
+        packageName = "com.whatsapp"
+        applicationInfo = ApplicationInfo().apply {packageName="com.whatsapp"}
+      })
+      var dispatched = 0
+      vm.updateFloatingText(original); vm.sendFloatingText {dispatched++}; runCurrent()
+      assertEquals(1, calls)
+      assertEquals(0, dispatched)
+      assertEquals(before, audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC))
+      assertNull(vm.consumePhoneActionCompletion())
+      assertEquals(original,vm.floatingAssistant.value.text)
+      assertNotNull(vm.floatingAssistant.value.error)
+      assertNull(shadowOf(app).nextStartedActivity)
+    } finally {vm.dismissFloatingAssistant();disconnect();Dispatchers.resetMain()}
+  }
+
+  @Test fun recognizedExecutionFailureNeverFallsBackToInstinct() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    var calls=0
+    val vm = MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {
+      calls++; SemanticDecision("camera_photo",.99,.99,.99,.99)
+    }))
+    try {
+      vm.updateFloatingText("abrí la cámara");vm.sendFloatingText {fail("Execution errors must stay local")}
+      assertEquals(1,calls)
+      assertNotNull(vm.floatingAssistant.value.error)
+      assertEquals("abrí la cámara",vm.floatingAssistant.value.text)
+      assertNull(vm.consumePhoneActionCompletion())
+    } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
+  }
+
+  @Test fun editingFailedRequestRequiresClassificationEvenWhenOnlyPunctuationChanged() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app=ApplicationProvider.getApplicationContext<Application>()
+    var calls=0
+    val vm=MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {calls++;SemanticDecision("app_open",.99,.99,.99,.99)}))
+    try {
+      vm.updateFloatingText("abrí AplicacionInexistente");vm.sendFloatingText {fail("No dispatch")}
+      assertEquals(1,calls)
+      vm.updateFloatingText("abrí AplicacionInexistente!");vm.sendFloatingText {fail("No dispatch")}
+      assertEquals(2,calls)
+    } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
   }
 
   @Test fun semanticQuerySharesTheOriginalAudioExactlyOnce() = runTest {
@@ -87,8 +183,9 @@ class FloatingHybridRoutingTest {
   @Test fun clarificationRepliesStayLocalEvenWithHybridEnabled() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
+    var calls = 0
     val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
-      fail("Pending alarm must resolve locally"); error("unreachable")
+      calls++; SemanticDecision("alarm", .99, .99, .99, .99)
     }))
     try {
       vm.updateFloatingText("poné una alarma")
@@ -97,6 +194,7 @@ class FloatingHybridRoutingTest {
       vm.updateFloatingText("a las siete de la mañana")
       vm.sendFloatingText { fail("No WhatsApp") }
       assertFalse(vm.floatingAssistant.value.status.orEmpty().contains("Gemini"))
+      assertEquals(1, calls)
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
   }
 

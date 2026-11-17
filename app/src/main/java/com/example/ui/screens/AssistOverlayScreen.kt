@@ -151,7 +151,9 @@ fun AssistOverlayScreen(
           }
         }
         state.accessSettingsAction?.let { action ->
-          TextButton(onClick = { context.startActivity(android.content.Intent(action)) }, enabled = !busy) { Text("Habilitar acceso en Ajustes") }
+          TextButton(onClick = { context.startActivity(android.content.Intent(action).apply {
+            if (action == android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS) data = android.net.Uri.fromParts("package", context.packageName, null)
+          }) }, enabled = !busy) { Text("Habilitar acceso en Ajustes") }
         }
         if (!busy && !recording && !listening) {
           TextButton(onClick = { showExamples = !showExamples }) {
@@ -164,7 +166,7 @@ fun AssistOverlayScreen(
               "Agendá reunión mañana a las 17:00 durante una hora\n" +
               "Abrí la cámara para grabar · Buscá jazz en YouTube\n" +
               "Poné música de Soda Stereo · Pausá la música\n" +
-              "Bajá el volumen y abrí Spotify\n" +
+              "Qué tengo mañana · Mostrá mis rutinas\n" +
               "Silenciá el teléfono durante una hora\n" +
               "Las llamadas y eventos se revisan en su propia app.",
             color = secondary, style = MaterialTheme.typography.bodySmall)

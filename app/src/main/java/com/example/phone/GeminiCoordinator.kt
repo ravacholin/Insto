@@ -20,7 +20,7 @@ class GeminiCoordinator(
     if (!router.needsDecision(request.text, local)) return when (local) {
       is PhoneRoute.Local -> InterpretationResult.Direct(local.command)
       PhoneRoute.Instinct -> request.draft?.let { InterpretationResult.Incomplete(it) } ?: InterpretationResult.Query()
-      is PhoneRoute.Clarify -> InterpretationResult.Rejected(local.prompt)
+      is PhoneRoute.Clarify -> InterpretationResult.Clarification(local.prompt, local.context)
       is PhoneRoute.Unsupported -> InterpretationResult.Rejected(local.message)
       PhoneRoute.Cancel -> InterpretationResult.Rejected("Pedido cancelado.")
     }
@@ -40,7 +40,24 @@ class GeminiCoordinator(
         }
         currentCoroutineContext().ensureActive()
         val scores = listOf(decision.probability, decision.confidence, decision.unconditional, decision.safetyConfidence)
-        if (scores.any { !it.isFinite() || it !in .95..1.0 }) return@withTimeout InterpretationResult.Rejected("No pude decidir con suficiente certeza. El pedido se conserva; reformulalo.")
+        if (scores.any { !it.isFinite() || it !in .95..1.0 }) {
+          if (request.draft == null) router.recoverSearch(request.text)?.let { return@withTimeout InterpretationResult.Direct(it.command) }
+          return@withTimeout InterpretationResult.Rejected("No pude decidir con suficiente certeza. El pedido se conserva; reformulalo.")
+        }
+        if (request.draft == null && decision.choice in setOf("instinct", "unsupported"))
+          router.recoverSearch(request.text)?.let { return@withTimeout InterpretationResult.Direct(it.command) }
+        if (request.draft == null && router.hasIntent(decision.choice)) {
+          when (val registered = router.resolve(decision.choice, request.text)) {
+            is PhoneRoute.Local -> return@withTimeout InterpretationResult.Direct(registered.command)
+            is PhoneRoute.Unsupported -> return@withTimeout InterpretationResult.Rejected(registered.message)
+            is PhoneRoute.Clarify -> {
+              val type = when (decision.choice) { "volume_set" -> "volume"; "app_open" -> "open_app"; else -> decision.choice }
+              if (type !in CapabilityCatalog.specs || local is PhoneRoute.Clarify)
+                return@withTimeout InterpretationResult.Clarification(registered.prompt, registered.context)
+            }
+            else -> Unit
+          }
+        }
         when {
           decision.choice == "instinct" -> if (request.draft != null || local is PhoneRoute.Unsupported)
             InterpretationResult.Rejected("Hay un pedido del teléfono pendiente. Completalo o cancelalo; no se envió a Instinct.")
@@ -49,7 +66,7 @@ class GeminiCoordinator(
             if (RequestSafetyPolicy.fixedActionHasExtraParameters(request.text)) InterpretationResult.Rejected("La acción simple no representa todos los datos del pedido. No se ejecutó ni se envió.")
             else InterpretationResult.Direct(CapabilityCatalog.fixed.getValue(decision.choice))
           }
-          decision.choice in CapabilityCatalog.parameterChoices || request.draft != null && decision.choice in CapabilityCatalog.fixed -> {
+          decision.choice in CapabilityCatalog.parameterChoices || decision.choice in setOf("app_open", "spotify") || request.draft != null && router.hasIntent(decision.choice) || request.draft != null && decision.choice in CapabilityCatalog.fixed -> {
             stage("Completando los datos con Gemini…")
             val result = extract(request, fallback = false)
             val commands = (result as? InterpretationResult.Plan)?.commands

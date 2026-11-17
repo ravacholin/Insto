@@ -123,7 +123,13 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
     val draft = calendarDraft ?: return ConversationResult.Pass
     val syntax = if(fresh) FoldedRequest.of(maskQuotes(raw)).text else folded.text
     val date = Regex("\\b(pasado manana|manana|hoy|(?:el )?[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?)\\b").findAll(syntax).firstOrNull { !syntax.substring(0,it.range.first).endsWith("de la ") }
-    if (date != null) draft.date = date.value
+    if (date != null) {
+      draft.date = if(date.value in listOf("hoy","manana","pasado manana")) {
+        val anchored=now().clone() as Calendar
+        anchored.add(Calendar.DAY_OF_MONTH,when(date.value){"manana"->1;"pasado manana"->2;else->0})
+        "%02d/%02d/%04d".format(java.util.Locale.ROOT,anchored.get(Calendar.DAY_OF_MONTH),anchored.get(Calendar.MONTH)+1,anchored.get(Calendar.YEAR))
+      } else date.value
+    }
     if (fresh) {
       val head = Regex("^(?:agenda|agendar|agendame|programa|crea (?:un )?evento)\\s+").find(folded.text)
       if (head != null) {

@@ -40,6 +40,7 @@ object CapabilityCatalog {
     spec("calendar", "title date time", "title" to text(), "date" to text(), "time" to text(), "durationSeconds" to integer(1)),
     spec("camera", "video", "video" to Field("boolean")),
     spec("youtube", "query", "query" to text()),
+    spec("spotify", "query", "query" to text()),
     spec("music", "query", "query" to text()),
     spec("stopwatch", "operation", "operation" to text("START", "PAUSE", "RESUME", "RESET", "STATUS")),
     spec("clock_list", "alarms", "alarms" to Field("boolean")),
@@ -73,7 +74,7 @@ object CapabilityCatalog {
     "temporary_mode" to "Aplicar volumen multimedia/silencio/No molestar por duración explícita y restaurar.",
     "workflow" to "Secuencia explícita de dos a diez acciones admitidas para hacer ahora; sin condiciones ni pasos omitidos.",
   )
-  val choices: Map<String, String> = linkedMapOf("instinct" to "Consulta general o mensaje a Instinct, sin orden de control del teléfono.").apply {
+  val choices: Map<String, String> = LinkedHashMap(LocalIntentRegistry.default.choices).apply {
     fixed.forEach { (key, command) -> put(key, PhoneCommandCodec.summary(command) + "; sin parámetros ni condiciones adicionales.") }
     putAll(parameterChoices)
     put("unsupported", "Fuera del catálogo, negación, condición o detalles no representables. Un dato faltante conserva la categoría de acción para pedir aclaración.")
@@ -83,7 +84,8 @@ object CapabilityCatalog {
     choice == "workflow" -> true
     choice in fixed -> fixed[choice] == command
     choice == "volume_set" -> command is PhoneCommand.Volume && command.operation == VolumeOp.SET
-    else -> PhoneCommandCodec.encode(command).getString("type") == choice
+    else -> LocalIntentRegistry.default.definitions.firstOrNull { it.id == choice }?.accepts?.invoke(command)
+      ?: (PhoneCommandCodec.encode(command).getString("type") == choice)
   }
 
   fun commandSchema(partial: Boolean = false): JSONObject {

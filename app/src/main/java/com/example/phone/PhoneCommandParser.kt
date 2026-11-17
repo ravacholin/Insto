@@ -16,9 +16,11 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     if (normalized.startsWith("instinct")) return PhoneRoute.Instinct
     if (Regex("^(?:(?:como|que|por que|conta)\\b|(?:me )?expli)").containsMatchIn(normalized)) return PhoneRoute.Instinct
     when (context) {
+      "app" -> return parse("abrí $text")
       "navigate" -> return parse("llevame a $text")
       "dial" -> return parse("llamá a $text")
       "youtube" -> return parse("buscá en YouTube $text")
+      "spotify" -> return parse("buscá en Spotify $text")
       "maps" -> return parse("buscá en Maps $text")
       "music" -> return parse("poné música de $text")
       "calendar" -> return PhoneRoute.Clarify("Repetí el evento con título, fecha y hora: agendá reunión mañana a las 17:00.", "calendar")
@@ -40,6 +42,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel
     if (s == "que esta sonando") return PhoneRoute.Local(PhoneCommand.Media(MediaOp.STATUS))
     if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |(?:me )?expli|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
+    if (Regex("^(?:borra|limpia|pone en cero) (?:el )?(?:tiempo del )?cronometro(?: para empezar de cero)?$").matches(s)) return PhoneRoute.Local(PhoneCommand.Stopwatch(StopwatchOp.RESET))
     ExtendedCommandParser.parse(s)?.let { return it }
     EverydayCommandParser(calendarNow).parse(text)?.let { return it }
     val commandPrefix = "(?:(?:me pones|poneme|ponme|pone|pon|poner|quiero|necesito|configura|crea|crear|programa|programar|inicia|iniciar|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"
@@ -103,7 +106,14 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
   }
 
   private fun alarm(input: String): PhoneRoute {
-    val body = input.trim()
+    var body = input.trim()
+    var requestedDate: String? = null
+    Regex("^(?:para )?(hoy|manana)\\b\\s*(.*)$").matchEntire(body)?.let { match ->
+      val day = calendarNow().clone() as java.util.Calendar
+      if (match.groupValues[1] == "manana") day.add(java.util.Calendar.DAY_OF_MONTH, 1)
+      requestedDate = "%04d-%02d-%02d".format(java.util.Locale.ROOT,day.get(java.util.Calendar.YEAR),day.get(java.util.Calendar.MONTH)+1,day.get(java.util.Calendar.DAY_OF_MONTH))
+      body = match.groupValues[2]
+    }
     val datePart = body.replace("de la manana", "")
     if (Regex("\\b(?:manana|pasado|hoy|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\\b|[0-9]+[/-][0-9]+|\\bel [0-9]+").containsMatchIn(datePart)) {
       return PhoneRoute.Unsupported("Para una fecha específica, abrí las alarmas del Reloj y completá la fecha allí.")
@@ -133,7 +143,8 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     if (period == "de la noche") hour = if (hour == 12) 0 else hour % 12 + 12
     if (period in listOf("de la manana", "am")) hour %= 12
     val label = time.groupValues[6]
-    return PhoneRoute.Local(PhoneCommand.Alarm(hour, minutes, days, label))
+    if (requestedDate != null && days.isNotEmpty()) return PhoneRoute.Unsupported("Indicá una fecha o una repetición, sin combinar ambas.")
+    return PhoneRoute.Local(PhoneCommand.Alarm(hour, minutes, days, label, requestedDate))
   }
 
   companion object {

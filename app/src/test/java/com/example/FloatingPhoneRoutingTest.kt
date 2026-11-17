@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.testsupport.localActionDecisions
+
 import android.app.Application
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -36,7 +38,7 @@ class FloatingPhoneRoutingTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     try {
-      val vm = MainViewModel(app)
+      val vm = MainViewModel(app, hybridRouter = localActionDecisions())
       vm.updateFloatingText("iniciá el cronómetro")
       vm.sendFloatingText { fail("Phone request must not send WhatsApp") }
       assertEquals("com.android.deskclock.action.START_STOPWATCH", shadowOf(app).nextStartedActivity.action)
@@ -56,7 +58,7 @@ class FloatingPhoneRoutingTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     try {
-      val vm = MainViewModel(app)
+      val vm = MainViewModel(app, hybridRouter = localActionDecisions())
       vm.updateFloatingText("pausá el cronómetro")
       vm.sendFloatingText { fail("Phone request must not send WhatsApp") }
       assertEquals("pausá el cronómetro", vm.floatingAssistant.value.text)
@@ -75,7 +77,7 @@ class FloatingPhoneRoutingTest {
     val app = ApplicationProvider.getApplicationContext<Application>()
     installGoogleClock(app, listOf("com.android.deskclock.action.RESET_STOPWATCH"))
     try {
-      val vm = MainViewModel(app)
+      val vm = MainViewModel(app, hybridRouter = localActionDecisions())
       vm.updateFloatingText("reiniciá el cronómetro")
       vm.sendFloatingText { fail("Phone request must not send WhatsApp") }
       assertTrue(vm.floatingAssistant.value.needsConfirmation)
@@ -101,7 +103,7 @@ class FloatingPhoneRoutingTest {
     val app = ApplicationProvider.getApplicationContext<Application>()
     try {
       val audio = app.getSystemService(android.media.AudioManager::class.java)
-      val vm = MainViewModel(app)
+      val vm = MainViewModel(app, hybridRouter = localActionDecisions())
       vm.updateFloatingText("poné el volumen al cincuenta por ciento")
       vm.sendFloatingText { fail("Phone request must not send WhatsApp") }
       assertEquals(audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) / 2,
@@ -126,7 +128,7 @@ class FloatingPhoneRoutingTest {
       })
       var dispatched = 0
       val capture = Capture(audio)
-      val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "ayudame a estudiar" })
+      val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "ayudame a estudiar" }, hybridRouter = localActionDecisions())
       vm.startFloatingListening { dispatched++ }
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent(); vm.sendFloatingAudio { dispatched++ }; advanceUntilIdle()
@@ -154,7 +156,7 @@ class FloatingPhoneRoutingTest {
     val audio = File.createTempFile("route-audio", ".m4a").apply { writeText("original") }
     try {
       val capture = Capture(audio)
-      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "iniciá el cronómetro" })
+      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "iniciá el cronómetro" }, hybridRouter = localActionDecisions())
       vm.startFloatingListening { fail("Must not dispatch") }
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent()
@@ -172,7 +174,7 @@ class FloatingPhoneRoutingTest {
     val audio = File.createTempFile("route-audio", ".m4a").apply { writeText("original") }
     try {
       val capture = Capture(audio)
-      val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "quiero que enciendas la linterna" })
+      val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "quiero que enciendas la linterna" }, hybridRouter = localActionDecisions())
       vm.startFloatingListening { fail("Phone action must not reach WhatsApp") }
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent(); vm.sendFloatingAudio { fail("Phone action must not reach WhatsApp") }; advanceUntilIdle()
@@ -190,7 +192,7 @@ class FloatingPhoneRoutingTest {
   @Test fun rejectedLocalTextKeepsDraft() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     try {
-      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), hybridRouter = localActionDecisions())
       vm.updateFloatingText("timer de diez minutos")
       vm.sendFloatingText { fail("No clock installed") }
       assertEquals("timer de diez minutos", vm.floatingAssistant.value.text)
@@ -204,7 +206,7 @@ class FloatingPhoneRoutingTest {
     val audio = File.createTempFile("route-audio", ".m4a").apply { writeText("original") }
     try {
       val capture = Capture(audio)
-      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "timer de diez minutos" })
+      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "timer de diez minutos" }, hybridRouter = localActionDecisions())
       vm.startFloatingListening {}
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent(); vm.sendFloatingAudio { fail("Must not dispatch") }; advanceUntilIdle()
@@ -227,7 +229,7 @@ class FloatingPhoneRoutingTest {
         calls++
         if (calls == 1) withContext(NonCancellable) { release.await() }
         "iniciá el cronómetro"
-      })
+      }, hybridRouter = localActionDecisions())
       vm.startFloatingListening {}
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent(); vm.sendFloatingAudio {}; runCurrent()
@@ -246,7 +248,7 @@ class FloatingPhoneRoutingTest {
     val audio = File.createTempFile("route-audio", ".m4a").apply { writeText("original") }
     try {
       val capture = Capture(audio)
-      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber { throw TranscriptionException("Configure", true) })
+      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber { throw TranscriptionException("Configure", true) }, hybridRouter = localActionDecisions())
       vm.startFloatingListening {}
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent(); vm.sendFloatingAudio { fail("Must not dispatch") }; advanceUntilIdle()
@@ -262,7 +264,7 @@ class FloatingPhoneRoutingTest {
     try {
       val capture = Capture(audio)
       val answer = CompletableDeferred<String>()
-      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber { answer.await() })
+      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler), AudioTranscriber { answer.await() }, hybridRouter = localActionDecisions())
       vm.startFloatingListening {}
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent(); vm.sendFloatingAudio {}; runCurrent(); vm.dismissFloatingAssistant()
