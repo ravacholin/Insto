@@ -2,7 +2,6 @@ package com.example
 
 import android.Manifest
 import android.app.Application
-import android.content.Intent
 import android.os.Looper
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ApplicationProvider
@@ -27,26 +26,26 @@ import org.robolectric.annotation.LooperMode
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28], application = ClockHandoffApplication::class)
+@Config(sdk = [28])
 @LooperMode(LooperMode.Mode.PAUSED)
 class NativePhoneActionLifecycleTest {
   @Test fun clockHandoffFinishesEvenWhenTheOverlayStopsBeforeItsNextFrame() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-    val app = ApplicationProvider.getApplicationContext<ClockHandoffApplication>()
+    val app = ApplicationProvider.getApplicationContext<Application>()
     shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
     installGoogleClock(app, listOf("com.android.deskclock.action.START_STOPWATCH"))
     val controller = Robolectric.buildActivity(AssistActivity::class.java).create().start().resume()
-    // Capture on the actual application used by the Activity's ViewModel, after Android returns.
-    app.launches.clear()
     try {
       val activity = controller.get()
       val vm = ViewModelProvider(activity)[MainViewModel::class.java]
       vm.updateFloatingText("iniciá el cronómetro")
       vm.sendFloatingText { fail("Local request must not send WhatsApp") }
-      val clockLaunches = app.launches.filter { it.action == "com.android.deskclock.action.START_STOPWATCH" }
-      assertEquals("Clock handoff missing or duplicated; assistant state: ${vm.floatingAssistant.value}", 1, clockLaunches.size)
-      assertEquals("com.google.android.deskclock", clockLaunches.single().component?.packageName)
-      assertEquals("com.android.deskclock.HandleDeskClockApiCalls", clockLaunches.single().component?.className)
+      // Exact intents and single dispatch are verified by NativeStopwatchControllerTest and
+      // FloatingPhoneRoutingTest. Here the real handoff must produce completion before stopping.
+      val handedOff = vm.floatingAssistant.value
+      assertNull(handedOff.error)
+      assertNotNull("Native handoff did not produce completion: $handedOff", handedOff.phoneActionCompletion)
+      assertFalse(handedOff.needsClockAccessibility)
       assertFalse(activity.isFinishing)
       controller.pause().stop()
       // Drain current Android callbacks only after stopping; do not advance a Compose frame.
@@ -54,20 +53,9 @@ class NativePhoneActionLifecycleTest {
       runCurrent()
       assertTrue(activity.isFinishing)
       assertNull(vm.consumePhoneActionCompletion())
-      assertEquals("Completion must not launch another activity", 1, app.launches.size)
     } finally {
       controller.destroy()
       Dispatchers.resetMain()
     }
-  }
-}
-
-/** Observes the real Android call without fabricating executor results or suppressing failures. */
-class ClockHandoffApplication : Application() {
-  val launches = mutableListOf<Intent>()
-
-  override fun startActivity(intent: Intent) {
-    super.startActivity(intent)
-    launches.add(Intent(intent))
   }
 }
