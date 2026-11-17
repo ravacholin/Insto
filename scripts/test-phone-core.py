@@ -52,7 +52,7 @@ def main():
              "ConversationSession", "WorkflowRunner", "TemporaryModePolicy", "MediaSessionPolicy",
              "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "GeminiTransport", "CapabilityCatalog",
              "Interpretation", "CommandDraft", "RequestSafetyPolicy", "GeminiCoordinator", "GeminiDiagnostics",
-             "LocalIntentRegistry", "ExtendedLocalIntents", "NativeActionParameters",
+             "LocalIntentRegistry", "LocalIntentPhrases", "ExtendedLocalIntents", "NativeActionParameters",
              "DocumentNamePolicy", "ConfiguredRoutineStore"]
     sources = [str(source / (name + ".kt")) for name in names if (source / (name + ".kt")).exists()]
     sources += [str(ROOT / "app/src/main/java/com/example/audio/VoiceSessionPolicy.kt")]

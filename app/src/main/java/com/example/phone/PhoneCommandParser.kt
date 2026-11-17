@@ -40,13 +40,26 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     val original = normalize(text)
     val s = canonicalRequest(original)
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel
-    if (s == "que esta sonando") return PhoneRoute.Local(PhoneCommand.Media(MediaOp.STATUS))
-    if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |(?:me )?expli|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
+    val registry = LocalIntentRegistry.default
+    val phrase = registry.matchPhrase(s)
+    if (phrase is PhoneRoute.Local) return phrase
+    if (s.isBlank() || (!RequestSafetyPolicy.isDoNotDisturbRequest(s) &&
+        Regex("^(no |nunca |si |(?:me )?expli|conta|instinct)").containsMatchIn(s))) return PhoneRoute.Instinct
+    val request = FoldedRequest.of(text)
+    if (RequestSafetyPolicy.hasJoinedActions(request.text))
+      return PhoneRoute.Unsupported("Pedime una acción por vez para interpretar todos sus detalles.")
+    val command = request.withCommandHead()
     if (Regex("^(?:borra|limpia|pone en cero) (?:el )?(?:tiempo del )?cronometro(?: para empezar de cero)?$").matches(s)) return PhoneRoute.Local(PhoneCommand.Stopwatch(StopwatchOp.RESET))
     ExtendedCommandParser.parse(s)?.let { return it }
-    EverydayCommandParser(calendarNow).parse(text)?.let { return it }
-    val commandPrefix = "(?:(?:me pones|poneme|ponme|pone|pon|poner|quiero|necesito|configura|crea|crear|programa|programar|inicia|iniciar|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"
-    val timer = Regex("^${commandPrefix}(?:timer|temporizador|cuenta regresiva)\\b(.*)$").matchEntire(s)
+    val everyday = EverydayCommandParser(calendarNow).parse(command)
+    // An explicit platform search must not be read as a contact or document search for its title.
+    if (everyday is PhoneRoute.Local && (everyday.command is PhoneCommand.SpotifySearch || everyday.command is PhoneCommand.YouTubeSearch))
+      return everyday
+    if (RequestSafetyPolicy.rejection(text) == null) registry.matchParameters(command)?.let { return it }
+    if (Regex("^(que |como |por que )").containsMatchIn(s)) return PhoneRoute.Instinct
+    if (everyday != null) return everyday
+    val commandPrefix = "(?:(?:pone|configura|crea|programa|inicia|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"
+    val timer = Regex("^${commandPrefix}(?:timer|temporizador|cuenta regresiva|cuenta atras)\\b(.*)$").matchEntire(s)
     if (timer != null) {
       val body = timer.groupValues[1].trim().removePrefix("de ")
       val duration = body.substringBefore(" para ").substringBefore(" llamado ")
@@ -55,7 +68,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       val label = when { " para " in body -> body.substringAfter(" para "); " llamado " in body -> body.substringAfter(" llamado "); else -> "" }
       return PhoneRoute.Local(PhoneCommand.Timer(seconds, label))
     }
-    val alarm = Regex("^(?:${commandPrefix}alarma\\b|despertame\\b)(.*)$").matchEntire(s)
+    val alarm = Regex("^(?:${commandPrefix}(?:alarma|despertador)\\b|despertame\\b)(.*)$").matchEntire(s)
     if (alarm != null) return alarm(alarm.groupValues[1])
     if (Regex("^(?:mostra|ver|abrir|abri|muestra) (?:las |los |mis )?(alarmas|timers|temporizadores)$").matches(s)) {
       return PhoneRoute.Local(PhoneCommand.ClockList(s.endsWith("alarmas")))
@@ -70,17 +83,20 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     }))
     val torch = Regex("^(prende|prender|prendeme|enciende|encende|encender|encendeme|activa|activar|apaga|apagar|apagame|desactiva|desactivar) (?:la )?linterna$").matchEntire(s)
     if (torch != null) return PhoneRoute.Local(PhoneCommand.Torch(torch.groupValues[1] !in listOf("apaga", "apagar", "apagame", "desactiva", "desactivar")))
-    if (Regex("^(subi|subir|sube|aumenta) (?:el )?volumen$").matches(s)) return PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.UP))
-    if (Regex("^(baja|bajar) (?:el )?volumen$").matches(s)) return PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.DOWN))
-    val volume = Regex("^(?:pone|pon|fija|ajusta) (?:el )?volumen (?:al? )?(.+?)(?: por ciento|%)?$").matchEntire(s)
+    if (Regex("^(subi|aumenta) (?:el )?volumen$").matches(s)) return PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.UP))
+    if (Regex("^(baja|reduce) (?:el )?volumen$").matches(s)) return PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.DOWN))
+    val volume = Regex("^(?:pone|fija|ajusta|subi|baja|reduce|aumenta) (?:el )?(?:volumen(?: multimedia)?|sonido) (?:al? )?(.+?)(?: por ciento|%)?$").matchEntire(s)
     if (volume != null) {
       val n = number(volume.groupValues[1])
       return if (n != null && n in 0..100) PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.SET, n))
         else PhoneRoute.Clarify("Indicá un volumen entre cero y cien por ciento.", "volume")
     }
-    val setting = Regex("^(?:abri|abrir|activa|activar|desactiva|apaga|encende|enciende|prende|configura) (?:el |los |la )?(?:ajustes de )?(wifi|wi fi|bluetooth|conectividad|internet|ajustes)$").matchEntire(s)
-    if (setting != null) return PhoneRoute.Local(PhoneCommand.Settings(setting.groupValues[1].replace("wi fi", "wifi")))
-    val app = Regex("^(?:abri|abrir|abre) (?:la (?:app|aplicacion) )?(.+)$").matchEntire(s)
+    val setting = Regex("^(?:abri|activa|desactiva|apaga|enciende|prende|configura|conecta) (?:el |los |la )?(?:ajustes de )?(wifi|wi fi|wi-fi|bluetooth|conectividad|internet|ajustes)$").matchEntire(s)
+    if (setting != null) return PhoneRoute.Local(PhoneCommand.Settings(setting.groupValues[1].replace("wi fi", "wifi").replace("wi-fi", "wifi")))
+    if (phrase != null) return phrase
+    if (Regex("^(?:abri|lanza)(?: (?:la |una )?(?:app|aplicacion))?$").matches(s))
+      return PhoneRoute.Clarify("¿Qué aplicación querés abrir?", "app")
+    val app = Regex("^(?:abri|lanza|inicia) (?:(?:la )?(?:app|aplicacion) )?(.+)$").matchEntire(s)
     if (app != null) return PhoneRoute.Local(PhoneCommand.OpenApp(app.groupValues[1]))
     // Recognized requests outside our executor must never silently become a message to Instinct.
     if (Regex("^(?:cancela|cancelar|elimina|borra|pausa|pausar|reinicia|desactiva|cambia|modifica|apaga|pone|pon|activa|prende|enciende|inicia|crea|programa)\\b.*\\b(?:alarmas?|timers?|temporizador(?:es)?|cronometro|linterna|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
@@ -89,20 +105,11 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     if (Regex("^(?:necesito|quiero|me|pone|pon|encende|encender|encendeme|enciende|prende|prender|prendeme|apaga|apagar|apagame|activa|activar|inicia|iniciar|configura)\\b.*\\b(?:linterna|alarma|timer|temporizador|cronometro|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
       return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.", recoverable = true)
     }
-    if (requestPrefix.containsMatchIn(original.removePrefix("por favor ")) &&
+    if (requestHeadStart(original) != 0 &&
       Regex("\\b(?:linterna|alarmas?|timers?|temporizadores?|cronometro|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
       return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.", recoverable = true)
     }
     return PhoneRoute.Instinct
-  }
-
-  /** Normalize only the leading request and verb; keep every parameter and qualifier intact. */
-  private fun canonicalRequest(text: String): String {
-    var request = text.removePrefix("por favor ").removeSuffix(" por favor").trim()
-    requestPrefix.find(request)?.let { request = request.substring(it.range.last + 1).trim().removePrefix("por favor ") }
-    val head = Regex("^(?:me )?([a-z]+)\\b").find(request) ?: return request
-    val verb = requestVerbs[head.groupValues[1]] ?: return request
-    return verb + request.substring(head.range.last + 1)
   }
 
   private fun alarm(input: String): PhoneRoute {
@@ -148,22 +155,29 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
   }
 
   companion object {
-    private val requestPrefix = Regex("^(?:(?:quiero|necesito|deseo|quisiera|me gustaria)(?: que)?|(?:me )?(?:podes|puedes|podrias|podras))\\s+")
+    private const val COURTESY = "(?:por (?:favor|fa)|porfa)"
+    private val politeness = Regex("^$COURTESY[,\\s]+[¿¡]*\\s*")
+    internal val courtesySuffix = Regex("[,\\s]+$COURTESY[.!?]*$", RegexOption.IGNORE_CASE)
+    private val requestPrefix = Regex(
+      "^(?:(?:quiero|necesito|deseo|quisiera|me gustaria)(?:\\s+que)?|(?:me\\s+)?(?:podes|puedes|podrias|podras|podria|puede))[,\\s]+[¿¡]*\\s*"
+    )
+    internal val leadingWord = Regex("^(?:me\\s+)?([a-z]+)\\b")
     private val requestVerbs = mapOf(
-      "enciende" to "enciendas encienda enciendan encender enciende encende encendeme",
+      "enciende" to "enciendas encienda enciendan encender enciende encende encendeme enciendeme",
       "prende" to "prendas prenda prendan prender prende prendeme",
       "apaga" to "apagues apague apaguen apagar apaga apagame",
       "activa" to "actives active activen activar activa",
       "desactiva" to "desactives desactive desactiven desactivar desactiva",
       "pone" to "pongas ponga pongan poner pon pone poneme ponme pones",
-      "configura" to "configures configure configurar configura",
+      "ponlo" to "ponlo ponelo ponerlo pongaslo pongalo",
+      "configura" to "configures configure configurar configura configurame",
       "programa" to "programes programe programar programa",
       "crea" to "crees cree crear crea",
       "inicia" to "inicies inicie iniciar inicia",
       "arranca" to "arranques arranque arrancar arranca",
       "pausa" to "pauses pause pausar pausa",
       "para" to "pares pare parar para",
-      "detene" to "detengas detenga detener detene",
+      "detene" to "detengas detenga detener detene detente deten",
       "continua" to "continues continue continuar continua",
       "reanuda" to "reanudes reanude reanudar reanuda",
       "reinicia" to "reinicies reinicie reiniciar reinicia",
@@ -173,10 +187,79 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       "aumenta" to "aumentes aumente aumentar aumenta",
       "ajusta" to "ajustes ajuste ajustar ajusta",
       "fija" to "fijes fije fijar fija",
-      "abri" to "abras abra abran abrir abre abri",
-      "mostra" to "muestres muestre mostrar muestra mostra",
-      "ver" to "veas vea ver"
+      "abri" to "abras abra abran abrir abre abri abrime abreme",
+      "mostra" to "muestres muestre mostrar muestra mostra mostrarme mostrame muestrame mostras",
+      "ver" to "veas vea ver",
+      "silencia" to "silenciar silencia silencies silencie silenciame",
+      "deja" to "dejar deja dejes deje",
+      "dejalo" to "dejarlo dejalo",
+      "quita" to "quitar quita quites quite",
+      "volve" to "volver volve vuelve vuelvas vuelva",
+      "consulta" to "consultar consulta consultes consulte",
+      "decime" to "decir dime decime digas digame",
+      "despertame" to "despertame despiertame despertarme despiertes",
+      "agenda" to "agendar agenda agendes agende agendame",
+      "pospone" to "posponer pospone pospon aplaza aplazar",
+      "cancela" to "cancelar cancela canceles cancele",
+      "descarta" to "descartar descarta descartes descarte",
+      "cambia" to "cambiar cambia cambies cambie",
+      "edita" to "editar edita edites edite",
+      "modifica" to "modificar modifica modifiques modifique",
+      "reduce" to "reducir reduce reduzcas",
+      "conecta" to "conectar conecta conectes conecte",
+      "busca" to "buscar busca busques busque buscarme buscame",
+      "encontra" to "encontrar encontra encuentra encuentres encuentre",
+      "llama" to "llamar llama llames llame llamame llamala llamalo",
+      "marca" to "marcar marca marques marque marcame",
+      "lanza" to "lanzar lanza lances lance",
+      "navega" to "navegar navega navegues navegue",
+      "llevame" to "llevame llevarme lleves",
+      "guiame" to "guiar guiame guiarme guies",
+      "guarda" to "guardar guarda guardes guarde",
+      "recorda" to "recordar recorda recuerda recuerdes",
+      "reproduci" to "reproducir reproduci reproduce reproduzcas reproduzca",
+      "pasa" to "pasar pasa pases pase",
+      "salta" to "saltar salta saltes salte",
+      "saca" to "sacame sacarme sacar saca saques saque",
+      "toma" to "tomar toma tomame tomes",
+      "hace" to "hacer hace haz hazme haceme hagas",
+      "captura" to "capturar captura captures",
+      "graba" to "grabar graba grabame grabes",
+      "manda" to "mandar manda mandame mandarme mandes mande",
+      "envia" to "enviar envia enviame enviarme envies envie",
+      "redacta" to "redactar redacta redactes",
+      "prepara" to "preparar prepara prepares",
+      "comparti" to "compartir comparte comparti compartas",
+      "borra" to "borrar borra borres borre",
+      "elimina" to "eliminar elimina elimines suprimi suprimir",
+      "copia" to "copiar copia copies",
+      "move" to "mover mueve move muevas",
+      "renombra" to "renombrar renombra renombres",
+      "reprograma" to "reprogramar reprograma reprogrames",
+      "ejecuta" to "ejecutar ejecuta ejecutes",
+      "importa" to "importar importa importes",
+      "lista" to "listar lista listes",
+      "lee" to "leer lee leeme leas",
+      "termina" to "terminar termina termines",
+      "restaura" to "restaurar restaura restaures"
     ).flatMap { (canonical, variants) -> variants.split(' ').map { it to canonical } }.toMap()
+
+    internal fun requestHeadStart(text: String): Int {
+      val start = politeness.find(text)?.value?.length ?: 0
+      val wrapper = requestPrefix.find(text.substring(start)) ?: return start
+      val afterWrapper = start + wrapper.value.length
+      return afterWrapper + (politeness.find(text.substring(afterWrapper))?.value?.length ?: 0)
+    }
+
+    internal fun canonicalVerb(word: String): String? = requestVerbs[word]
+
+    /** Fold command syntax without changing the stored text of literal parameters. */
+    internal fun canonicalRequest(text: String): String {
+      val request = text.substring(requestHeadStart(text)).replace(courtesySuffix, "").trim()
+      val head = leadingWord.find(request) ?: return request
+      val verb = canonicalVerb(head.groupValues[1]) ?: return request
+      return verb + request.substring(head.value.length)
+    }
     fun normalize(text: String): String = Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFD)
       .replace(Regex("\\p{M}+"), "").replace(Regex("[¿?¡!,.;]"), " ").replace(Regex("\\s+"), " ").trim()
     private val words = listOf("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce", "trece", "catorce", "quince", "dieciseis", "diecisiete", "dieciocho", "diecinueve", "veinte", "veintiuno", "veintidos", "veintitres", "veinticuatro", "veinticinco", "veintiseis", "veintisiete", "veintiocho", "veintinueve")

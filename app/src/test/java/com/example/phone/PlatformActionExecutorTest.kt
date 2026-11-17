@@ -31,7 +31,13 @@ class PlatformActionExecutorTest {
     shadowOf(app.getSystemService(Vibrator::class.java)).setHasVibrator(true)
     val executor = PhoneActionExecutor(app)
     val parser = PhoneCommandParser()
-    for ((phrase, mode) in listOf("Poner en silenciar" to AudioManager.RINGER_MODE_SILENT, "Modo vibrar" to AudioManager.RINGER_MODE_VIBRATE)) {
+    for ((phrase, mode) in listOf(
+      "Poner en silenciar" to AudioManager.RINGER_MODE_SILENT,
+      "Modo vibrar" to AudioManager.RINGER_MODE_VIBRATE,
+      "Silenciar." to AudioManager.RINGER_MODE_SILENT,
+      "Modo normal" to AudioManager.RINGER_MODE_NORMAL,
+      "Modo Silenciar" to AudioManager.RINGER_MODE_SILENT,
+    )) {
       val command = (parser.parse(phrase) as PhoneRoute.Local).command
       assertEquals(PhoneActionOutcome.COMPLETED, executor.execute(command).outcome)
       assertEquals(mode, audio.ringerMode)

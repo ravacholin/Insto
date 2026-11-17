@@ -4,16 +4,19 @@ import com.example.testsupport.localActionDecisions
 
 import android.Manifest
 import android.app.Application
+import android.app.NotificationManager
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Intent
 import android.database.Cursor
 import android.database.MatrixCursor
+import android.media.AudioManager
 import android.net.Uri
 import android.provider.ContactsContract.CommonDataKinds.Phone
 import androidx.test.core.app.ApplicationProvider
 import com.example.audio.*
 import com.example.phone.ContactOption
+import com.example.phone.HybridPhoneRouter
 import com.example.speech.AudioTranscriber
 import com.example.testsupport.installNativeHandler
 import com.example.ui.*
@@ -34,6 +37,31 @@ import org.robolectric.shadows.ShadowContentResolver
 @Config(sdk = [28])
 class FloatingEverydayRoutingTest {
   private val app: Application get() = ApplicationProvider.getApplicationContext()
+
+  @Test fun shortSilenceVoiceCommandChangesRingerModeWithoutGemini() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    shadowOf(app.getSystemService(NotificationManager::class.java)).setNotificationPolicyAccessGranted(true)
+    val audioManager = app.getSystemService(AudioManager::class.java)
+    audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+    val audio = File.createTempFile("silence", ".m4a").apply { writeText("original") }
+    val capture = Capture(audio)
+    val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "Modo Silenciar" },
+      hybridRouter = HybridPhoneRouter({ false }, { error("Gemini is disabled") }))
+    try {
+      vm.startFloatingListening { fail("Must not dispatch to Instinct") }
+      capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
+      runCurrent()
+      vm.sendFloatingAudio { fail("Must not dispatch to Instinct") }
+      advanceUntilIdle()
+      assertEquals(AudioManager.RINGER_MODE_SILENT, audioManager.ringerMode)
+      assertNotNull(vm.consumePhoneActionCompletion())
+      assertFalse(audio.exists())
+    } finally {
+      vm.dismissFloatingAssistant()
+      audio.delete()
+      Dispatchers.resetMain()
+    }
+  }
 
   @Test fun navigationVoiceHandsOffWithoutWhatsAppAndReleasesOnlyAfterSuccess() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
