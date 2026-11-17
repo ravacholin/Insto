@@ -586,13 +586,12 @@ class MainViewModel @JvmOverloads constructor(
 
   fun prepareFloatingAssistant() {
     runCatching {TemporaryModeManager(getApplication()).reconcile()}
-    val initialized = floatingPrefs != null
     val prefs = runBlockingPrefs(getApplication())
     floatingPrefs = prefs
     floatingReturnPackage = com.example.assist.AutoSendCoordinator.lastKnownForegroundPackage
     floatingContact = ContextRoutingEngine.resolveRoute(getApplication(), prefs).contact ?: prefs.pinnedContact
-    floatingState.value = if (initialized) floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct")
-      else FloatingAssistantState(contactName = floatingContact?.displayName ?: "Instinct")
+    // Loading routing preferences during a send must not erase the active text/recording state.
+    floatingState.value = floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct")
     if (activeWorkflow() != null) {
       syncWorkflow()
       floatingState.value = floatingState.value.copy(status = "Hay una secuencia pendiente. Revisá los pasos antes de continuar.")

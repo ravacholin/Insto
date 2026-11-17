@@ -29,16 +29,16 @@ class FloatingWorkflowTest {
    assertNull(vm.consumePhoneActionCompletion())
   } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
  }
- @Test fun classifiedCalendarCanBeCompletedWithoutRepeatingTitle() = runTest {
+ @Test fun localCalendarCanBeCompletedWithoutRepeatingTitleOrWaitingForGoogle() = runTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()
   var calls=0
   val vm=MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {calls++;SemanticDecision("calendar",.99,.99,.99,.99)}))
   try {
    vm.updateFloatingText("agendá reunión mañana");vm.sendFloatingText {fail("No WhatsApp")}
-   assertEquals(1,calls)
+   assertEquals(0,calls)
    vm.updateFloatingText("a las 17:00");vm.sendFloatingText {fail("No WhatsApp")}
-   assertEquals(1,calls)
+   assertEquals(0,calls)
    assertTrue(vm.floatingAssistant.value.needsConfirmation)
    assertTrue(vm.floatingAssistant.value.workflowLines.single().contains("reunión"))
   } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
@@ -51,7 +51,7 @@ class FloatingWorkflowTest {
    withContext(NonCancellable) {gate.await()};SemanticDecision("calendar",.99,.99,.99,.99)
   }))
   try {
-   vm.updateFloatingText("agendá reunión mañana a las 17:00");vm.sendFloatingText {fail("No WhatsApp")}
+   vm.updateFloatingText("reservame un encuentro mañana a eso de las cinco");vm.sendFloatingText {fail("No WhatsApp")}
    runCurrent();assertTrue(vm.floatingAssistant.value.deciding)
    vm.updateFloatingText("otro pedido");gate.complete(Unit);advanceUntilIdle()
    assertFalse(vm.floatingAssistant.value.workflowActive)

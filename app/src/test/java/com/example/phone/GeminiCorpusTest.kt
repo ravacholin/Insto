@@ -41,7 +41,7 @@ class GeminiCorpusTest {
       val text = item.getString("text")
       val local = parser.parse(text)
       val result = coordinator.interpret(InterpretationRequest(text, now = now()), local)
-      assertTrue("Unsafe route for: $text -> $result", result is InterpretationResult.Rejected)
+      assertTrue("Unsafe route for: $text -> $result", result is InterpretationResult.Rejected || result is InterpretationResult.Clarification)
     }
   }
   @Test fun contextCasesPreserveFieldsAndResolveTheCorrectStep() {

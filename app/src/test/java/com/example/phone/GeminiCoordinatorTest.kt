@@ -46,14 +46,14 @@ class GeminiCoordinatorTest {
       val result = GeminiCoordinator(router, extractor).interpret(InterpretationRequest("ayudame a estudiar"), PhoneRoute.Instinct)
       if (kind == GeminiFailureKind.UNAVAILABLE) {
         assertEquals(InterpretationResult.Query(true), result); assertEquals(1, calls)
-      } else { assertTrue(result is InterpretationResult.Failure); assertEquals(0, calls) }
+      } else { assertEquals(InterpretationResult.Query(), result); assertEquals(0, calls) }
     }
   }
 
   @Test fun lowConfidenceAndLocalRestrictionsCannotBeBypassed() = runTest {
     val router = HybridPhoneRouter({ true }, DecisionClassifier { SemanticDecision("torch_on", .94, .94, .99, .99) })
     val c = GeminiCoordinator(router, StructuredCommandExtractor { error("Must not extract") })
-    assertTrue(c.interpret(InterpretationRequest("iluminá acá"), PhoneRoute.Instinct) is InterpretationResult.Rejected)
+    assertEquals(InterpretationResult.Query(), c.interpret(InterpretationRequest("iluminá acá"), PhoneRoute.Instinct))
     for (text in listOf("no prendas la linterna", "prendé la linterna cuando llegue", "llevame a Retiro sin peajes")) {
       assertTrue(text, coordinator("torch_on").interpret(InterpretationRequest(text), PhoneRoute.Instinct) is InterpretationResult.Rejected)
     }
@@ -64,7 +64,7 @@ class GeminiCoordinatorTest {
     val c = GeminiCoordinator(router, StructuredCommandExtractor { delay(9000); listOf(PhoneCommand.Timer(1)) })
     val start = currentTime
     val result = c.interpret(InterpretationRequest("avisame más tarde"), PhoneRoute.Instinct)
-    assertTrue(result is InterpretationResult.Failure)
+    assertEquals(InterpretationResult.Query(), result)
     assertTrue(currentTime - start <= 12000)
   }
 

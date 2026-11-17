@@ -29,6 +29,6 @@ class CompatibleIntentPipelineTest {
   @Test fun pendingFieldsReturnAClarificationInsteadOfAProviderFailure() = runTest {
     val result = coordinator("spotify").interpret(InterpretationRequest("buscar en Spotify"), PhoneRoute.Clarify("query", "spotify"))
     assertTrue(result is InterpretationResult.Clarification)
-    assertEquals("intent:spotify", (result as InterpretationResult.Clarification).context)
+    assertEquals("spotify", (result as InterpretationResult.Clarification).context)
   }
 }

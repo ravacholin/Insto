@@ -1,14 +1,14 @@
-## Flujo vigente: Decisions primero (1.8.1 / código 14)
+## Flujo vigente: disponibilidad local e Instinct (1.9.1 / código 16)
 
-Toda solicitud nueva escrita o transcripta se clasifica primero con Gemini Decisions contra el catálogo. Un intent reconocido se valida y ejecuta en Android; si no hay coincidencia confiable, el texto o M4A original completo va a Instinct. No hay una segunda llamada generativa. Sin clave o ante un error técnico de clasificación se conserva el pedido, sin ejecutar por el parser como sustitución silenciosa.
+Un comando completo reconocido por el parser local se valida y ejecuta en Android sin esperar a Gemini. Los campos faltantes se piden localmente y conservan el contexto. Las consultas explícitas a Instinct tampoco dependen de Google. Los pedidos con varios pasos y las redacciones no reconocidas pueden usar Decisions y extracción tipada con revisión antes de ejecutar.
 
+Si Gemini tarda, falla, no alcanza el umbral o no encuentra un intent para un pedido no reconocido localmente, el texto original o M4A original se deriva a Instinct. Los borradores activos, las restricciones explícitas y los rechazos de ejecución de Android permanecen en el flujo local: no se omiten datos ni se repiten efectos inciertos. Cancelar, editar y pausar invalidan respuestas tardías.
 
-Las búsquedas explícitas «buscar rebord en YouTube» y «buscar rebord en Spotify» permanecen en Android aunque Decisions derive a Instinct, devuelva `unsupported` o no alcance 0,95. Después de consultar Decisions, se valida localmente la orden completa y su consulta; esta recuperación solo admite búsquedas de esas dos plataformas. No se aplica a consultas generales, negaciones, condiciones ni acciones encadenadas, ni sustituye errores técnicos o la falta de clave. Las demás acciones conservan el umbral anterior.
+Esta política corrige la regresión de 1.9.0: «abrir spotify» quedaba bloqueado por un timeout y «prender linterna» por baja confianza. La especificación anterior de Decisions obligatorio queda como historial; ya no controla los comandos reconocidos.
 
-Se prefiere la app YouTube/Spotify instalada para abrir sus resultados mediante `ACTION_VIEW`; si no resuelve la búsqueda, se abre la misma URL pública en una app compatible. Si no hay handler, el pedido queda en Insto con un error, sin enviar el audio a Instinct. Buscar no garantiza reproducción automática.
-El [catálogo de intents](LOCAL-INTENTS.md) detalla parámetros, equivalencias, permisos, resultados y límites reales. Archivos usan selección SAF; agenda usa permisos y entidades reales; cámara/grabadora usa interfaces y resultados nativos. Rutinas se importan y revisan desde JSON: [ejemplo](examples/routines.json). Los efectos externos y selecciones siguen siendo entregas a otra app hasta que se verifiquen allí.
+Se prefiere la app YouTube/Spotify instalada para abrir resultados mediante `ACTION_VIEW`; si no los resuelve se usa la misma URL pública en una app compatible. Sin handler, el pedido queda local con un error. Buscar no garantiza reproducción automática.
 
-Las secciones de versiones anteriores más abajo son historial. La [especificación vigente](superpowers/specs/2026-11-16-decisions-first-design.md) reemplaza el orden híbrido y la extracción generativa descritos en esas versiones.
+El [catálogo de intents](LOCAL-INTENTS.md) detalla parámetros, permisos y límites. Las secciones de versiones anteriores de este documento son historial. La entrega vigente está en [Insto 1.9.1](releases/Insto-1.9.1-disponibilidad-debug.md).
 
 # Instinct floating assistant
 

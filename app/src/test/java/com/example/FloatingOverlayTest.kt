@@ -18,6 +18,16 @@ import org.robolectric.annotation.Config
 class FloatingOverlayTest {
   @get:Rule val composeRule = createComposeRule()
 
+  @Test fun `enabled but disconnected auto send service still exposes accessibility settings`() {
+    composeRule.setContent {
+      PingAssistTheme {
+        AssistOverlayScreen(FloatingAssistantState(mode = FloatingMode.TYPING,
+          needsWhatsAppAccessibility = true), true, true, {}, {}, {}, {}, {})
+      }
+    }
+    composeRule.onNodeWithTag("overlay_enable_auto_send").performScrollTo().assertIsDisplayed()
+  }
+
   @Test fun `text remains editable while Gemini decides but sending stays disabled`() {
     composeRule.setContent {
       PingAssistTheme {

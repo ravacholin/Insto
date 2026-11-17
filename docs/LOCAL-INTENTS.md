@@ -1,6 +1,6 @@
 # Catálogo de intents locales de Insto
 
-Generado desde `LocalIntentRegistry`, `NativeActionParameters` y `ExtendedLocalIntents`. Los ejemplos son equivalencias semánticas para Decisions. Los parámetros se validan localmente después de clasificar; no se invoca otro modelo.
+Generado desde `LocalIntentRegistry`, `NativeActionParameters` y `ExtendedLocalIntents`. Los ejemplos describen órdenes equivalentes. Los comandos completos reconocidos se validan localmente sin esperar a Decisions; los pedidos no resueltos pueden usar clasificación y extracción tipada con revisión. El fallo de Gemini no bloquea las consultas a Instinct.
 
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 
