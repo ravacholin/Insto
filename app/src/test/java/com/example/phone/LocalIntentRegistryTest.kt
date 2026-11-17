@@ -56,6 +56,7 @@ class LocalIntentRegistryTest {
     assertEquals(PhoneRoute.Local(PhoneCommand.Platform(PlatformAction.BRIGHTNESS,percent=40)), registry.reply("brightness_set","cuarenta por ciento"))
     assertEquals(PhoneRoute.Local(PhoneCommand.Platform(PlatformAction.CONTACT_SEARCH,"José Pérez")), registry.reply("contact_search","José Pérez"))
     assertNull(registry.reply("brightness_set","explicame por qué cambia el brillo"))
+    assertTrue(registry.reply("call_direct", "Ana") is PhoneRoute.Clarify)
   }
   @Test fun newQuestionDuringNativeFieldPromptIsNotConsumedAsAParameter() {
     assertNull(registry.reply("brightness_set","hola"))

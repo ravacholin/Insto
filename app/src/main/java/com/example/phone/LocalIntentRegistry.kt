@@ -1,6 +1,5 @@
 package com.example.phone
 
-/** Examples describe semantic equivalence. They are not a literal matching table. */
 enum class IntentCategory {
   CLOCK, CALENDAR, CALLS, MESSAGING, APPLICATIONS, ANDROID, MEDIA,
   NAVIGATION, CONTACTS, FILES, CAMERA_RECORDING, NOTIFICATIONS, DEVICE, AUTOMATION
@@ -22,12 +21,26 @@ data class LocalIntentDefinition(
   val fixed: PhoneCommand? = null,
   val accepts: (PhoneCommand) -> Boolean = { it == fixed },
   val unavailable: String? = null,
-  val parseParameters: ((String) -> PhoneRoute?)? = null,
+  val parseParameters: ((FoldedRequest) -> PhoneRoute?)? = null,
   val replyPrefix: String? = null,
+  val localSyntax: Regex? = null,
 )
 
 class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
   private val byId = definitions.associateBy { it.id }
+  private val parameterDefinitions = definitions.filter { it.parseParameters != null }
+  private val wifiSpelling = Regex("\\bwi[ -]fi\\b")
+  private val phrases = buildMap {
+    for (definition in definitions) {
+      if (definition.fixed == null && definition.unavailable == null) continue
+      for (phrase in definition.examples + LocalIntentPhrases.alternatives[definition.id].orEmpty()) {
+        val syntax = PhoneCommandParser.canonicalRequest(PhoneCommandParser.normalize(phrase)).replace(wifiSpelling, "wifi")
+        val previous = put(syntax, definition)
+        require(previous == null || previous.id == definition.id ||
+          previous.fixed != null && previous.fixed == definition.fixed) { "Variante ambigua: $phrase" }
+      }
+    }
+  }
   init {
     require(definitions.size == byId.size) { "IDs de intents duplicados" }
     definitions.forEach {
@@ -39,7 +52,8 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
     }
   }
   val choices: Map<String, String> = byId.mapValues { (_, d) ->
-    "${d.category}: ${d.description} Equivalentes: ${d.examples.joinToString(" / ")}. " +
+    val samples = (d.examples + LocalIntentPhrases.alternatives[d.id].orEmpty().take(2)).distinct()
+    "${d.category}: ${d.description} Equivalentes: ${samples.joinToString(" / ")}. " +
       "Campos: ${d.parameters.joinToString { "${it.name}: ${it.type}${if (it.required) " obligatorio" else " opcional"}; ${it.description}" }}. " +
       "Alcance: ${d.expectedResult}. No descartar condiciones ni detalles adicionales."
   } + mapOf(
@@ -47,15 +61,34 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
     "unsupported" to "Sin coincidencia suficientemente clara con los intents del catálogo; pedido ambiguo, citado, negado, hipotético o con condiciones no representables.",
   )
 
+  internal fun matchPhrase(syntax: String): PhoneRoute? {
+    val definition = phrases[syntax] ?: phrases[syntax.replace(wifiSpelling, "wifi")] ?: return null
+    return definition.fixed?.let { PhoneRoute.Local(it) }
+      ?: definition.unavailable?.let { PhoneRoute.Unsupported(it) }
+  }
+
+  internal fun matchParameters(request: FoldedRequest): PhoneRoute? =
+    parameterDefinitions.firstNotNullOfOrNull { definition ->
+      if (definition.localSyntax?.containsMatchIn(request.text) == false) null
+      else definition.parseParameters?.invoke(request)
+    }
+
   fun resolve(id: String, text: String): PhoneRoute {
     val d = byId[id] ?: throw DecisionException("Intent ajeno al catálogo. El pedido se conserva.")
     d.unavailable?.let { return PhoneRoute.Unsupported(it) }
-    val normalized=PhoneCommandParser.normalize(text)
-    if (d.fixed != null && (Regex("^(?:no |nunca |explica|conta|como |que es )").containsMatchIn(normalized) ||
-        Regex("\\b(?:si|cuando|durante|hasta que|despues|luego|manana|hoy)\\b").containsMatchIn(normalized))) {
-      return PhoneRoute.Unsupported("El pedido incluye una negación, consulta o condición que esta acción no representa. No se ejecutó.")
+    RequestSafetyPolicy.rejection(text)?.let { return PhoneRoute.Unsupported(it) }
+    val request = FoldedRequest.of(text)
+    val syntax = PhoneCommandParser.canonicalRequest(PhoneCommandParser.normalize(text))
+    if (matchPhrase(syntax) == null && RequestSafetyPolicy.hasJoinedActions(request.text))
+      return PhoneRoute.Unsupported("Pedime una acción por vez para interpretar todos sus detalles.")
+    val parsed = if (d.parseParameters != null) d.parseParameters.invoke(request.withCommandHead())
+      else PhoneCommandParser().parse(text)
+    if (d.fixed != null && (RequestSafetyPolicy.fixedActionHasExtraParameters(syntax) ||
+        Regex("\\b(?:despues|luego|manana|hoy)\\b").containsMatchIn(syntax) ||
+        (parsed !is PhoneRoute.Local && (text.trimStart().firstOrNull() in listOf('¿', '"', '“', '«') || RequestSafetyPolicy.isQuestion(syntax) ||
+          RequestSafetyPolicy.isExplicitQuery(syntax) || Regex("^(?:no |nunca |explica|conta|como |que es )").containsMatchIn(syntax))))) {
+      return PhoneRoute.Unsupported("El pedido incluye datos que esta acción no representa. No se ejecutó.")
     }
-    val parsed = d.parseParameters?.invoke(text) ?: PhoneCommandParser().parse(text)
     return when {
       parsed is PhoneRoute.Local && d.accepts(parsed.command) -> parsed
       // An explicit restriction or conflicting local interpretation cannot be erased by a fixed choice.
@@ -95,8 +128,10 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
       val sourceWithDate=Regex("\\b(?:hoy|manana)\\b").containsMatchIn(PhoneCommandParser.normalize(source.first).replace("de la manana",""))
       if(sourceWithDate) return PhoneRoute.Clarify("Conservé que pediste una fecha. Indicá día y hora completos, por ejemplo mañana a las siete de la mañana.","intent:$id")
     }
-    val route = if(d.parseParameters != null && d.replyPrefix != null) d.parseParameters.invoke("${d.replyPrefix} $text")
-      else d.parameterContext?.let { parser.parseReply(it, text) }
+    val route = if (d.parseParameters != null && d.replyPrefix != null) {
+      d.parseParameters.invoke(FoldedRequest.of("${d.replyPrefix} $text").withCommandHead())
+        ?: PhoneRoute.Clarify(d.prompt, "intent:$id")
+    } else d.parameterContext?.let { parser.parseReply(it, text) }
     return when {
       route is PhoneRoute.Local && d.accepts(route.command) -> route
       route is PhoneRoute.Clarify -> route.copy(context = "intent:$id")

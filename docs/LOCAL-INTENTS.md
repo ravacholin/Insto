@@ -1,6 +1,8 @@
 # Catálogo de intents locales de Insto
 
-Generado desde `LocalIntentRegistry`, `NativeActionParameters` y `ExtendedLocalIntents`. Los ejemplos describen órdenes equivalentes. Los comandos completos reconocidos se validan localmente sin esperar a Decisions; los pedidos no resueltos pueden usar clasificación y extracción tipada con revisión. El fallo de Gemini no bloquea las consultas a Instinct.
+El catálogo reúne `LocalIntentRegistry`, `LocalIntentPhrases`, `NativeActionParameters` y `ExtendedLocalIntents`. Las órdenes completas se reconocen localmente con verbos en infinitivo, tuteo o voseo y fórmulas como «¿podés…?» o «quiero que…». Los pedidos que requieren interpretación adicional pueden usar Gemini con revisión. El fallo de Gemini no bloquea las consultas a Instinct.
+
+Podés decir «Modo silenciar», «Cuenta atrás de cinco minutos», «Más volumen», «Siguiente canción» o «Guíame hasta Córdoba en bici». Con «Modo silencio por veinte minutos», Insto programa la restauración del ajuste anterior.
 
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 
@@ -516,7 +518,7 @@ Desactivar Bluetooth.
 
 Silenciar llamadas y notificaciones.
 
-- Equivalentes: silenciar / poner en silenciar
+- Equivalentes: silenciar / modo silenciar / poner en modo silencioso / dejá el teléfono en silencio
 - Parámetros: ninguno
 - Permisos: android.permission.ACCESS_NOTIFICATION_POLICY; android.permission.MODIFY_AUDIO_SETTINGS
 - Ejecución: AudioManager.ringerMode

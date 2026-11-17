@@ -3,9 +3,9 @@ package com.example.phone
 import java.util.Calendar
 
 internal class CalendarRequestParser(private val now: () -> Calendar) {
-  fun parse(request: FoldedRequest, prefix: String): PhoneRoute? {
-    val m = Regex("^$prefix(?:agenda|agendar|agendes|programa|programes|crea|crees)\\s+(.+?)\\s+(hoy|pasado manana|manana|(?:el\\s+)?[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?)\\s+a\\s+las?\\s+(.+)$").matchEntire(request.text)
-    if (m == null) return if (Regex("^$prefix(?:agenda|agendar|agendes|(?:crea|crees) (?:un )?evento)\\b").containsMatchIn(request.text))
+  fun parse(request: FoldedRequest): PhoneRoute? {
+    val m = Regex("^(?:agenda|programa|crea)\\s+(.+?)\\s+(hoy|pasado manana|manana|(?:el\\s+)?[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?)\\s+a\\s+las?\\s+(.+)$").matchEntire(request.text)
+    if (m == null) return if (Regex("^(?:agenda|crea (?:un )?evento)\\b").containsMatchIn(request.text))
       PhoneRoute.Clarify("Indicá título, fecha y hora: agendá reunión mañana a las 17:00.", "calendar") else null
     val title = request.capture(m, 1)
     val timeAndDuration = m.groupValues[3].split(" durante ", limit = 2)

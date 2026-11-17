@@ -900,8 +900,14 @@
     "text": "silenciá el teléfono durante un rato"
   },
   {
-    "group": "negative",
-    "text": "activá no molestar"
+    "group": "local",
+    "text": "activá no molestar",
+    "expected": [
+      {
+        "type": "platform",
+        "action": "DND_ON"
+      }
+    ]
   },
   {
     "group": "negative",
