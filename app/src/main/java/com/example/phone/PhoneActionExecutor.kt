@@ -31,7 +31,7 @@ class PhoneActionExecutor(
         PhoneCommand.EndMode -> TemporaryModeManager(context).end(force = true)
         is PhoneCommand.Navigate, is PhoneCommand.MapSearch, is PhoneCommand.SavePlace,
         is PhoneCommand.Dial, is PhoneCommand.CalendarEvent, is PhoneCommand.Camera,
-        is PhoneCommand.YouTubeSearch, is PhoneCommand.MusicSearch -> EverydayActionExecutor(context).execute(command)
+        is PhoneCommand.YouTubeSearch, is PhoneCommand.SpotifySearch, is PhoneCommand.MusicSearch -> EverydayActionExecutor(context).execute(command)
         is PhoneCommand.Timer, is PhoneCommand.Alarm, is PhoneCommand.ClockList -> {
           if (command is PhoneCommand.Alarm && command.date != null) {
             val current = dateNow()

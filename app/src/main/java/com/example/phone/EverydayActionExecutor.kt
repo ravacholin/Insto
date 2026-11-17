@@ -50,7 +50,11 @@ internal class EverydayActionExecutor(private val context: Context) {
       setDataAndType(spec.dataUri?.let(Uri::parse), spec.mimeType)
       spec.stringExtras.forEach { (key, value) -> putExtra(key, value) }
       spec.longExtras.forEach { (key, value) -> putExtra(key, value) }
+      setPackage(spec.preferredPackage)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    if (spec.preferredPackage != null && intent.resolveActivity(context.packageManager) == null) {
+      intent.setPackage(null) // Same search URL in a browser when the requested app is unavailable.
     }
     if (intent.resolveActivity(context.packageManager) == null) {
       return PhoneActionResult("No hay una aplicación compatible para completar este pedido.", outcome = PhoneActionOutcome.REJECTED)
@@ -61,6 +65,7 @@ internal class EverydayActionExecutor(private val context: Context) {
       is PhoneCommand.CalendarEvent -> "Evento preparado. Revisá la fecha, duración y guardalo en Calendario."
       is PhoneCommand.Camera -> if (resolved.video) "Cámara abierta en modo video." else "Cámara abierta para sacar una foto."
       is PhoneCommand.YouTubeSearch -> "Búsqueda abierta en YouTube."
+      is PhoneCommand.SpotifySearch -> "Búsqueda abierta en Spotify."
       is PhoneCommand.MusicSearch -> "Pedido de música enviado a la aplicación compatible."
       is PhoneCommand.Navigate -> "Ruta solicitada en Maps."
       else -> "Búsqueda abierta en Maps."

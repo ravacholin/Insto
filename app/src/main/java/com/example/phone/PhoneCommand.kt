@@ -27,6 +27,7 @@ sealed interface PhoneCommand {
   data class CalendarEvent(val title: String, val beginMillis: Long, val endMillis: Long) : PhoneCommand
   data class Camera(val video: Boolean = false) : PhoneCommand
   data class YouTubeSearch(val query: String) : PhoneCommand
+  data class SpotifySearch(val query: String) : PhoneCommand
   data class MusicSearch(val query: String) : PhoneCommand
   data class Timer(val seconds: Int, val label: String = "") : PhoneCommand
   data class Alarm(val hour: Int, val minute: Int, val days: List<Int> = emptyList(), val label: String = "", val date: String? = null) : PhoneCommand

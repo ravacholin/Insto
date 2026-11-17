@@ -20,6 +20,7 @@ object PhoneCommandCodec {
    is PhoneCommand.CalendarEvent -> obj("calendar", "title" to c.title, "beginMillis" to c.beginMillis, "endMillis" to c.endMillis)
    is PhoneCommand.Camera -> obj("camera", "video" to c.video)
    is PhoneCommand.YouTubeSearch -> obj("youtube", "query" to c.query)
+   is PhoneCommand.SpotifySearch -> obj("spotify", "query" to c.query)
    is PhoneCommand.MusicSearch -> obj("music", "query" to c.query)
    is PhoneCommand.Stopwatch -> obj("stopwatch", "operation" to c.operation.name)
    is PhoneCommand.ClockList -> obj("clock_list", "alarms" to c.alarms)
@@ -87,6 +88,7 @@ object PhoneCommandCodec {
    "calendar" -> { fields("title","beginMillis","endMillis"); val begin=num("beginMillis"); val end=num("endMillis"); require(begin > 0 && end > begin && end-begin <= Int.MAX_VALUE.toLong()*1000); PhoneCommand.CalendarEvent(str("title"),begin,end) }
    "camera" -> { fields("video"); PhoneCommand.Camera(bool("video",false)) }
    "youtube" -> { fields("query"); PhoneCommand.YouTubeSearch(str("query")) }
+   "spotify" -> { fields("query"); PhoneCommand.SpotifySearch(str("query")) }
    "music" -> { fields("query"); PhoneCommand.MusicSearch(str("query")) }
    "stopwatch" -> { fields("operation"); PhoneCommand.Stopwatch(StopwatchOp.valueOf(str("operation"))) }
    "clock_list" -> { fields("alarms"); PhoneCommand.ClockList(bool("alarms")) }
@@ -126,6 +128,7 @@ object PhoneCommandCodec {
   is PhoneCommand.Dial -> "Preparar llamada a ${command.target}"
   is PhoneCommand.Camera -> if(command.video) "Abrir cámara de video" else "Abrir cámara de fotos"
   is PhoneCommand.YouTubeSearch -> "Buscar en YouTube: ${command.query}"
+  is PhoneCommand.SpotifySearch -> "Buscar en Spotify: ${command.query}"
   is PhoneCommand.MusicSearch -> "Buscar música: ${command.query}"
   is PhoneCommand.Settings -> "Abrir ajustes de ${command.kind}"
   PhoneCommand.EndMode -> "Terminar modo temporal y restaurar ahora"

@@ -60,4 +60,29 @@ class HybridPhoneRouterTest {
     try { hybrid.route("pedido", PhoneRoute.Instinct); fail("Must retain request") }
     catch (_: DecisionException) { }
   }
+  @Test fun explicitPlatformSearchesStayLocalAfterUncertainOrUnmatchedDecisions() = runBlocking {
+    for ((text, type) in listOf("buscar rebord en YouTube" to "youtube", "buscar rebord en spotify" to "spotify")) {
+      for (hybrid in listOf(router("instinct"), router("unsupported"), router("youtube", .8))) {
+        val route = hybrid.route(text)
+        assertTrue("$text must not forward to Instinct: $route", route is PhoneRoute.Local)
+        val encoded = PhoneCommandCodec.encode((route as PhoneRoute.Local).command)
+        assertEquals(type, encoded.getString("type"))
+        assertEquals("rebord", encoded.getString("query"))
+      }
+    }
+  }
+  @Test fun searchRecoveryDoesNotExecuteNegationsQueriesConditionsOrOtherActions() = runBlocking {
+    for (text in listOf("no buscar rebord en YouTube", "cómo buscar rebord en spotify", "si tengo wifi buscar rebord en YouTube", "buscar rebord en YouTube y apagá la linterna", "Instinct buscar rebord en YouTube", "buscá rebord si hay wifi en YouTube", "prendé la linterna")) {
+      assertEquals(text, PhoneRoute.Instinct, router("instinct").route(text))
+    }
+  }
+  @Test fun recognizedSearchStillNeedsAQueryAndKeepsItsPlatform() = runBlocking {
+    val hybrid = router("spotify")
+    assertTrue(hybrid.route("buscar en spotify") is PhoneRoute.Clarify)
+    val reply = hybrid.reply("intent:spotify", "rebord")
+    assertTrue(reply is PhoneRoute.Local)
+    assertEquals("spotify", PhoneCommandCodec.encode((reply as PhoneRoute.Local).command).getString("type"))
+    assertFalse(router("youtube").route("buscar rebord en spotify") is PhoneRoute.Local)
+  }
+
 }
