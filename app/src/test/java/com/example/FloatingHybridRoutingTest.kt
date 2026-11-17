@@ -55,7 +55,7 @@ class FloatingHybridRoutingTest {
           assertNotNull(transcript, launched)
           assertEquals(Intent.ACTION_VIEW, launched.action)
           assertEquals(url, launched.dataString)
-          assertEquals(1, decisions)
+          assertEquals(0, decisions)
           assertNotNull(vm.consumePhoneActionCompletion())
           assertFalse(file.exists())
           assertNull(shadowOf(app).nextStartedActivity)
@@ -84,7 +84,7 @@ class FloatingHybridRoutingTest {
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
   }
 
-  @Test fun lowConfidenceForPhoneCommandRetainsExactOriginalWithoutExecutingOrSending() = runTest {
+  @Test fun recognizedPhoneCommandExecutesWithoutWaitingForModelConfidence() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     val disconnect = ConnectedAccessibility.start(app)
@@ -103,12 +103,12 @@ class FloatingHybridRoutingTest {
       })
       var dispatched = 0
       vm.updateFloatingText(original); vm.sendFloatingText {dispatched++}; runCurrent()
-      assertEquals(1, calls)
+      assertEquals(0, calls)
       assertEquals(0, dispatched)
-      assertEquals(before, audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC))
-      assertNull(vm.consumePhoneActionCompletion())
-      assertEquals(original,vm.floatingAssistant.value.text)
-      assertNotNull(vm.floatingAssistant.value.error)
+      assertTrue(audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) < before)
+      assertNotNull(vm.consumePhoneActionCompletion())
+      assertEquals("",vm.floatingAssistant.value.text)
+      assertNull(vm.floatingAssistant.value.error)
       assertNull(shadowOf(app).nextStartedActivity)
     } finally {vm.dismissFloatingAssistant();disconnect();Dispatchers.resetMain()}
   }
@@ -122,23 +122,26 @@ class FloatingHybridRoutingTest {
     }))
     try {
       vm.updateFloatingText("abrí la cámara");vm.sendFloatingText {fail("Execution errors must stay local")}
-      assertEquals(1,calls)
+      assertEquals(0,calls)
       assertNotNull(vm.floatingAssistant.value.error)
       assertEquals("abrí la cámara",vm.floatingAssistant.value.text)
       assertNull(vm.consumePhoneActionCompletion())
     } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
   }
 
-  @Test fun editingFailedRequestRequiresClassificationEvenWhenOnlyPunctuationChanged() = runTest {
+  @Test fun editingFailedNativeRequestStillValidatesTheNewAppNameLocally() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app=ApplicationProvider.getApplicationContext<Application>()
     var calls=0
     val vm=MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {calls++;SemanticDecision("app_open",.99,.99,.99,.99)}))
     try {
       vm.updateFloatingText("abrí AplicacionInexistente");vm.sendFloatingText {fail("No dispatch")}
-      assertEquals(1,calls)
+      assertEquals(0,calls)
       vm.updateFloatingText("abrí AplicacionInexistente!");vm.sendFloatingText {fail("No dispatch")}
-      assertEquals(2,calls)
+      assertEquals(0,calls)
+      assertNotNull(vm.floatingAssistant.value.error)
+      assertEquals("abrí AplicacionInexistente!", vm.floatingAssistant.value.text)
+      assertNull(shadowOf(app).nextStartedActivity)
     } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
   }
 
@@ -194,7 +197,7 @@ class FloatingHybridRoutingTest {
       vm.updateFloatingText("a las siete de la mañana")
       vm.sendFloatingText { fail("No WhatsApp") }
       assertFalse(vm.floatingAssistant.value.status.orEmpty().contains("Gemini"))
-      assertEquals(1, calls)
+      assertEquals(0, calls)
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
   }
 
@@ -215,7 +218,7 @@ class FloatingHybridRoutingTest {
       runCurrent()
       assertEquals(FloatingMode.TYPING, vm.floatingAssistant.value.mode)
       assertEquals("iluminá acá", vm.floatingAssistant.value.text)
-      assertTrue(vm.floatingAssistant.value.error!!.contains("cuota"))
+      assertTrue(vm.floatingAssistant.value.error!!.contains("contacto"))
       vm.sendFloatingText { fail("No dispatch") }
       runCurrent()
       assertEquals(FloatingMode.SENDING, vm.floatingAssistant.value.mode)

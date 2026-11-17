@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.example.ui.theme.PingAssistTheme
 import com.example.phone.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -50,7 +51,7 @@ class GroqSettingsActivity : ComponentActivity() {
         Surface(Modifier.fillMaxSize()) {
           Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Gemini Decisions · acciones locales", style = MaterialTheme.typography.headlineSmall)
-            Text("Con Gemini activado, Decisions clasifica cada pedido nuevo contra el catálogo de acciones de Insto. Android valida y ejecuta las acciones reconocidas. Las aclaraciones conservan los datos conocidos; si hace falta extracción generativa se revisa el resultado antes de ejecutar. Solo las consultas identificadas van a Instinct. Los pedidos inciertos o fallidos se conservan. No se comparten contactos, archivos ni notificaciones con Gemini.")
+            Text("Los comandos reconocidos se resuelven en el teléfono sin esperar a Gemini. Decisions ayuda con pedidos que el modo local no entiende; las propuestas generativas se revisan antes de ejecutar. Las consultas a Instinct siguen disponibles si Gemini tarda, falla o no decide con confianza. Los pedidos con datos pendientes conservan su contexto. No se comparten contactos, archivos ni notificaciones con Gemini.")
             Text("La interpretación con Gemini requiere una clave activa e internet. Sin Gemini se mantiene el modo local para pedidos reconocidos. El nivel gratuito tiene cuotas y puede usar el texto según los términos de Google. El respaldo generativo siempre requiere confirmación.")
             Text(if (geminiConfigured) "Hay una clave de Gemini guardada y cifrada en este teléfono." else "Cargá tu clave personal de Google AI Studio para activar Decisions.")
             OutlinedTextField(geminiValue, { geminiValue = it }, label = { Text("Clave de Gemini") }, singleLine = true,
@@ -73,15 +74,13 @@ class GroqSettingsActivity : ComponentActivity() {
                 probing = true
                 probeJob = scope.launch {
                   try {
-                    val coordinator = GeminiCoordinator(HybridPhoneRouter(gemini::isEnabled, GeminiDecisionsClient(gemini::readKey)), StructuredCommandClient(gemini::readKey))
-                    // Fixed synthetic text; interpretation only, never dispatched to an executor.
-                    val result = coordinator.interpret(InterpretationRequest("ayudame a estudiar geografía"), PhoneRoute.Instinct)
-                    message = when (result) {
-                      is InterpretationResult.Failure -> result.message
-                      is InterpretationResult.Rejected -> "Gemini respondió, pero rechazó la frase de prueba."
-                      is InterpretationResult.Query -> if (result.needsConfirmation) "Conexión disponible mediante Gemini de respaldo. No se envió ninguna consulta." else "Decisions respondió correctamente. No se ejecutó ninguna acción."
-                      else -> "Gemini respondió. La prueba no ejecuta ni envía acciones."
-                    }
+                    // Probe the provider itself: an offline routing fallback is not a successful connection.
+                    GeminiDecisionsClient(gemini::readKey).classify("ayudame a estudiar geografía")
+                    message = "Decisions respondió correctamente. No se ejecutó ni envió ninguna acción."
+                  } catch (_: TimeoutCancellationException) {
+                    message = "Gemini tardó demasiado. Los comandos locales y el envío a Instinct siguen disponibles."
+                  } catch (failure: DecisionException) {
+                    message = failure.message ?: "No se pudo conectar con Gemini."
                   } catch (cancelled: CancellationException) { throw cancelled
                   } finally { probing = false; diagnostics = GeminiDiagnostics.snapshot() }
                 }

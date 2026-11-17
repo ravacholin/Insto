@@ -17,6 +17,16 @@ class GeminiCoordinator(
     stage: (String) -> Unit = {},
   ): InterpretationResult {
     RequestSafetyPolicy.rejection(request.text)?.let { return InterpretationResult.Rejected(it) }
+    // Google may be slow, unavailable or uncertain. It must not gate a fully parsed request.
+    // Multi-step requests still go through planning so that no trailing action is discarded.
+    if (request.draft == null && ConversationSession.splitSteps(request.text).size == 1) {
+      when (local) {
+        is PhoneRoute.Local -> return InterpretationResult.Direct(local.command)
+        is PhoneRoute.Clarify -> return InterpretationResult.Clarification(local.prompt, local.context)
+        PhoneRoute.Instinct -> if (RequestSafetyPolicy.isExplicitQuery(request.text)) return InterpretationResult.Query()
+        else -> Unit
+      }
+    }
     if (!router.needsDecision(request.text, local)) return when (local) {
       is PhoneRoute.Local -> InterpretationResult.Direct(local.command)
       PhoneRoute.Instinct -> request.draft?.let { InterpretationResult.Incomplete(it) } ?: InterpretationResult.Query()
@@ -42,7 +52,8 @@ class GeminiCoordinator(
         val scores = listOf(decision.probability, decision.confidence, decision.unconditional, decision.safetyConfidence)
         if (scores.any { !it.isFinite() || it !in .95..1.0 }) {
           if (request.draft == null) router.recoverSearch(request.text)?.let { return@withTimeout InterpretationResult.Direct(it.command) }
-          return@withTimeout InterpretationResult.Rejected("No pude decidir con suficiente certeza. El pedido se conserva; reformulalo.")
+          return@withTimeout unavailableRoute(request, local, GeminiFailureKind.INVALID_RESPONSE,
+            "No pude decidir con suficiente certeza. El pedido se conserva; reformulalo.")
         }
         if (request.draft == null && decision.choice in setOf("instinct", "unsupported"))
           router.recoverSearch(request.text)?.let { return@withTimeout InterpretationResult.Direct(it.command) }
@@ -59,6 +70,7 @@ class GeminiCoordinator(
           }
         }
         when {
+          decision.choice == "unsupported" && request.draft == null && local == PhoneRoute.Instinct -> InterpretationResult.Query()
           decision.choice == "instinct" -> if (request.draft != null || local is PhoneRoute.Unsupported)
             InterpretationResult.Rejected("Hay un pedido del teléfono pendiente. Completalo o cancelalo; no se envió a Instinct.")
             else InterpretationResult.Query()
@@ -88,16 +100,20 @@ class GeminiCoordinator(
     } catch (error: TimeoutCancellationException) {
       currentCoroutineContext().ensureActive()
       failure = GeminiFailureKind.TIMEOUT
-      return InterpretationResult.Failure(failure, "Gemini tardó demasiado. El pedido se conserva para reintentar.")
+      return unavailableRoute(request, local, failure, "Gemini tardó demasiado. El pedido se conserva para reintentar.")
     } catch (error: CancellationException) { throw error
     } catch (error: DecisionException) {
       failure = error.kind
-      return InterpretationResult.Failure(error.kind, error.message ?: "Gemini no pudo interpretar. El pedido se conserva.")
+      return unavailableRoute(request, local, error.kind, error.message ?: "Gemini no pudo interpretar. El pedido se conserva.")
     } catch (_: Exception) {
       failure = GeminiFailureKind.INVALID_RESPONSE
-      return InterpretationResult.Failure(failure, "No se pudo validar la interpretación de Gemini. El pedido se conserva.")
+      return unavailableRoute(request, local, failure, "No se pudo validar la interpretación de Gemini. El pedido se conserva.")
     } finally { GeminiDiagnostics.finish((System.nanoTime() - start) / 1000000, failure) }
   }
+
+  private fun unavailableRoute(request: InterpretationRequest, local: PhoneRoute, kind: GeminiFailureKind, message: String): InterpretationResult =
+    if (request.draft == null && local == PhoneRoute.Instinct) InterpretationResult.Query()
+    else InterpretationResult.Failure(kind, message)
 
   private suspend fun extract(request: InterpretationRequest, fallback: Boolean): InterpretationResult {
     GeminiDiagnostics.extraction(fallback)
