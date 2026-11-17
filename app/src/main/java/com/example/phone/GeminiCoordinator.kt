@@ -23,10 +23,13 @@ class GeminiCoordinator(
       when (local) {
         is PhoneRoute.Local -> return InterpretationResult.Direct(local.command)
         is PhoneRoute.Clarify -> {
-          // A date-bearing alarm needs the registry continuation's source-date guard.
-          val datedAlarm = local.context == "alarm" && Regex("\\b(?:hoy|manana)\\b")
-            .containsMatchIn(PhoneCommandParser.normalize(request.text).replace("de la manana", ""))
-          return InterpretationResult.Clarification(local.prompt, if (datedAlarm) "intent:alarm" else local.context)
+          // Missing fields may be present in the explicit reference. Otherwise retain the local fast path.
+          if (request.sourceContext == null || !router.isEnabled()) {
+            // A date-bearing alarm needs the registry continuation's source-date guard.
+            val datedAlarm = local.context == "alarm" && Regex("\\b(?:hoy|manana)\\b")
+              .containsMatchIn(PhoneCommandParser.normalize(request.text).replace("de la manana", ""))
+            return InterpretationResult.Clarification(local.prompt, if (datedAlarm) "intent:alarm" else local.context)
+          }
         }
         PhoneRoute.Instinct -> if (RequestSafetyPolicy.isExplicitQuery(request.text)) return InterpretationResult.Query()
         else -> Unit

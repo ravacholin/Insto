@@ -1,6 +1,6 @@
 # Voz adaptativa y contexto explícito
 
-Base: Insto 1.9.0, merge PR #15 (`9fcc034`). Implementación autorizada por el pedido del usuario.
+Base inicial: Insto 1.9.0, merge PR #15 (`9fcc034`). Entrega integrada con PR #16 / main `196685e`, conservando el camino rápido local y el fallback a Instinct. Implementación autorizada por el pedido del usuario.
 
 ## Objetivo
 Reducir la espera al terminar órdenes cortas y permitir pedir acciones sobre texto seleccionado o compartido desde otra app.

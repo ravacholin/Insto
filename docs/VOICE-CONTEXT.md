@@ -1,6 +1,6 @@
 # Voz adaptativa y texto de otras apps
 
-Implementado sobre Insto 1.9.0 / PR #15 (`9fcc034`). Conserva Gemini Decisions, catálogo nativo, borradores revisables y envío a Instinct.
+Insto 1.10.0 (código 17), integrado sobre main `196685e` / PR #16. Incluye la base 1.9.0 / PR #15 (`9fcc034`) y conserva disponibilidad local, Gemini Decisions, catálogo nativo, borradores revisables y envío a Instinct.
 
 ## Grabación
 
@@ -43,7 +43,7 @@ Ejecutar por separado órdenes cortas, intervenciones de 4–12 s y dictados de 
 
 No hay teléfono conectado en este entorno. Los umbrales están cubiertos por pruebas de política, pero todavía no hay medición física ni garantía de mejora extremo a extremo.
 
-## Verificación de esta implementación (2026-11-17)
+## Verificación inicial sobre PR #15 (2026-11-17)
 
 - `python3 scripts/test-phone-core.py`: JUnit informa 167 casos sin fallos; 166 aprobados y la evaluación real opt-in de Gemini omitida por no estar habilitada. Incluye política adaptativa, serialización del contexto y regresión de acciones registradas con referencia adjunta.
 - `assembleDebug compileDebugUnitTestKotlin`: BUILD SUCCESSFUL. Compilan también las pruebas de intents, actividad/rotación, reemplazo, cancelación, consultas contextuales de voz y tiempos. Compilarlas no demuestra su ejecución.
@@ -52,3 +52,9 @@ No hay teléfono conectado en este entorno. Los umbrales están cubiertos por pr
 - APK local: `app/build/outputs/apk/debug/app-debug.apk`, 18941441 bytes, SHA-256 `8a42b75b08e6132d0ec7651547ee647a622293a31e999191dad3b58a7f599d8c`; firma v2 y alineación ZIP/16 KiB verificadas. Usa una clave debug local nueva: no tiene la firma del APK 1.9.0 publicado; no se garantiza instalarlo como actualización sobre ese APK.
 - Revisión independiente: corregidos el bloqueo de acciones registradas al adjuntar contexto, el adjunto anterior conservado al recibir nueva referencia y el texto obsoleto que anunciaba 3 segundos de silencio.
 - Pendiente: ejecución de Robolectric en un entorno con acceso a esas dependencias y validación en teléfono de micrófono, proveedores reales, menú Compartir/selección y entrega en WhatsApp. ADB no detectó dispositivos conectados.
+
+## Integración con PR #16 y entrega
+
+La rama se actualizó sobre `196685e66560799b2f3c3bdff29fcfd606b44553` antes de publicar. Se conserva el camino rápido de comandos completos y la derivación a Instinct cuando Gemini falla. La aclaración de una fecha con texto de referencia puede usar extracción de Gemini; sin referencia o sin Gemini habilitado se mantiene la aclaración local inmediata. La prueba de calendario contextual falló tras incorporar main y volvió a pasar al integrar ambos caminos.
+
+La entrega actualizada y el APK de Drive se describen en [Insto 1.10.0](releases/Insto-1.10.0-voz-contexto-debug.md). Los tiempos aún requieren validación física.

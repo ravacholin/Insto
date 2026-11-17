@@ -33,9 +33,15 @@
 
 ## Resultado y decisiones
 
-- Implementación terminada y revisada sobre `9fcc034`, sin publicar ni fusionar.
+- Implementación inicial revisada sobre `9fcc034`. Actualizada después sobre main `196685e` / PR #16 antes de publicar el PR; sin fusionar en main.
 - 167 casos del núcleo sin fallos (uno opt-in omitido); build APK y compilación de pruebas Android correctos. Suite Robolectric bloqueada antes de ejecutar por dependencia externa HTTP 403.
 - Se conservaron los defaults y la arquitectura actual; no se agrega streaming, lectura de pantalla ni permisos. El usuario autorizó implementar ambas mejoras: las decisiones rutinarias se resolvieron en esta sesión.
 - La revisión independiente detectó una regresión al saltear todos los intents registrados con contexto. Se reprodujo con batería y se corrigió: solo la aclaración con datos extraíbles del contexto pasa al extractor; las acciones existentes conservan el resolver.
 - Al recibir referencia nueva se descarta un adjunto anterior, para evitar que la rama de adjuntos omita el contexto. Se agregó cobertura Android, todavía sin ejecución por el bloqueo documentado.
 - Protocolo y evidencia completa: `docs/VOICE-CONTEXT.md`.
+
+### Integración de disponibilidad local
+- El PR #16 se había integrado mientras se trabajaba. Se rebasó la rama y se reprodujo en rojo la pérdida de extracción del calendario contextual por la nueva aclaración local anticipada.
+- La excepción se limita a aclaraciones con referencia explícita y Gemini habilitado. Los comandos completos siguen sin esperar a Google; las consultas mantienen el fallback de main.
+- La prueba de latencia usa una paráfrasis semántica para medir la etapa del proveedor; las órdenes locales completas conservan sus tiempos inmediatos.
+- Versión de entrega: 1.10.0 / código 17. Firma debug local nueva, advertida en la nota de entrega.
