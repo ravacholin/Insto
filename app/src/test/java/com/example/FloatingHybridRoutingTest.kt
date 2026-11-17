@@ -84,7 +84,7 @@ class FloatingHybridRoutingTest {
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
   }
 
-  @Test fun lowConfidenceForLiteralCommandForwardsExactOriginalTextWithoutExecuting() = runTest {
+  @Test fun lowConfidenceForPhoneCommandRetainsExactOriginalWithoutExecutingOrSending() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     val disconnect = ConnectedAccessibility.start(app)
@@ -104,10 +104,12 @@ class FloatingHybridRoutingTest {
       var dispatched = 0
       vm.updateFloatingText(original); vm.sendFloatingText {dispatched++}; runCurrent()
       assertEquals(1, calls)
-      assertEquals(1, dispatched)
+      assertEquals(0, dispatched)
       assertEquals(before, audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC))
       assertNull(vm.consumePhoneActionCompletion())
-      assertEquals(original, shadowOf(app).nextStartedActivity.data!!.getQueryParameter("text"))
+      assertEquals(original,vm.floatingAssistant.value.text)
+      assertNotNull(vm.floatingAssistant.value.error)
+      assertNull(shadowOf(app).nextStartedActivity)
     } finally {vm.dismissFloatingAssistant();disconnect();Dispatchers.resetMain()}
   }
 

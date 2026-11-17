@@ -216,7 +216,7 @@ fun AssistOverlayScreen(
         state.transcript?.let { Text("Escuché: $it", color = secondary, style = MaterialTheme.typography.bodySmall, maxLines = 3) }
         if (state.needsConfirmation && !busy && !recording && !listening) {
           Row {
-            TextButton(onClick = { onConfirm(true) }) { Text("Confirmar") }
+            TextButton(onClick = { onConfirm(true) }) { Text(if (state.queryPreview) "Enviar consulta a Instinct" else "Confirmar") }
             TextButton(onClick = { onConfirm(false) }) { Text("Cancelar") }
           }
         }

@@ -5,6 +5,37 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationSessionTest {
+  @Test fun alarmPeriodReplyPreservesMinutesRecurrenceAndLabel() {
+    val s = session()
+    assertTrue(s.accept("alarma a las siete y media todos los días llamada Trabajo") is ConversationResult.Prompt)
+    val result = s.accept("de la mañana") as ConversationResult.Plan
+    assertEquals(PhoneCommand.Alarm(7,30,(1..7).toList(),"trabajo"), result.commands.single())
+  }
+  @Test fun incompleteAlarmAndTimerKeepKnownFieldsAcrossShortReplies() {
+    val s = session()
+    assertTrue(s.accept("alarma a las siete") is ConversationResult.Prompt)
+    val alarm = s.accept("de la tarde") as ConversationResult.Plan
+    assertEquals(PhoneCommand.Alarm(19, 0), alarm.commands.single())
+    s.clear()
+    assertTrue(s.accept("temporizador de un rato para Fideos") is ConversationResult.Prompt)
+    val timer = s.accept("diez minutos") as ConversationResult.Plan
+    assertEquals(PhoneCommand.Timer(600, "Fideos"), timer.commands.single())
+  }
+  @Test fun incompleteTemporaryModeKeepsItsKindWithoutNeedingGemini() {
+    val s = session()
+    assertTrue(s.accept("silenciá el teléfono durante un rato") is ConversationResult.Prompt)
+    val plan = s.accept("una hora") as ConversationResult.Plan
+    assertEquals(PhoneCommand.TemporaryMode(ModeKind.SILENT, 3600), plan.commands.single())
+  }
+  @Test fun unresolvedCalendarReplyCanUseSemanticsWithOnlyTheActiveDraft() {
+    val s = session()
+    s.accept("agendá reunión mañana")
+    val result = s.accept("a eso de las cinco de la tarde", allowSemantic = true) as ConversationResult.Semantic
+    val step = result.draft!!.steps.single().json()
+    assertEquals("reunión", step.getString("title"))
+    assertEquals("17/11/2026", step.getString("date"))
+    assertFalse(step.has("time"))
+  }
   private fun session() = ConversationSession { Calendar.getInstance().apply { set(2026, 10, 16, 12, 0, 0) } }
   @Test fun relativeDayIsAnchoredBeforeAReplyAfterMidnight() {
     val clock=Calendar.getInstance().apply {set(2026,10,16,23,0,0)}

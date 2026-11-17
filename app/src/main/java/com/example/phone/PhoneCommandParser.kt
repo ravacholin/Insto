@@ -40,7 +40,9 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     val original = normalize(text)
     val s = canonicalRequest(original)
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel
+    if (s == "que esta sonando") return PhoneRoute.Local(PhoneCommand.Media(MediaOp.STATUS))
     if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |(?:me )?expli|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
+    if (Regex("^(?:borra|limpia|pone en cero) (?:el )?(?:tiempo del )?cronometro(?: para empezar de cero)?$").matches(s)) return PhoneRoute.Local(PhoneCommand.Stopwatch(StopwatchOp.RESET))
     ExtendedCommandParser.parse(s)?.let { return it }
     EverydayCommandParser(calendarNow).parse(text)?.let { return it }
     val commandPrefix = "(?:(?:me pones|poneme|ponme|pone|pon|poner|quiero|necesito|configura|crea|crear|programa|programar|inicia|iniciar|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?"

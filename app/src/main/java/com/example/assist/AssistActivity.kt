@@ -182,7 +182,7 @@ class AssistActivity : ComponentActivity() {
             viewModel.pauseFloatingAssistant()
             startActivity(Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_PROMPT_CONTACT_SETUP, true))
           },
-          onConfirm = viewModel::confirmFloatingAction,
+          onConfirm = { accepted -> viewModel.confirmFloatingAction(accepted) { finish() } },
           onChooseApp = viewModel::chooseFloatingApp,
           onChooseContact = viewModel::chooseFloatingContact,
           onContinueWorkflow = viewModel::continueFloatingWorkflow,

@@ -13,6 +13,7 @@ import com.example.data.AssistantPreferencesRepository
 import org.robolectric.Shadows.shadowOf
 import org.junit.Before
 import androidx.test.core.app.ApplicationProvider
+import androidx.core.content.FileProvider
 import com.example.audio.*
 import com.example.speech.AudioTranscriber
 import com.example.speech.TranscriptionException
@@ -24,6 +25,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Robolectric
 import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -33,6 +35,8 @@ class FloatingPhoneRoutingTest {
   @Before fun installClock() {
     val app = ApplicationProvider.getApplicationContext<Application>()
     installGoogleClock(app, listOf("com.android.deskclock.action.START_STOPWATCH"))
+    // Each test has a fresh cacheDir; attach the provider to refresh its cached roots.
+    Robolectric.buildContentProvider(FileProvider::class.java).create()
   }
   @Test fun nativeTextHandsOffOnceAndCompletionIsConsumedOnce() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))

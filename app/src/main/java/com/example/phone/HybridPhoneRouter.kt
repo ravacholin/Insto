@@ -5,6 +5,7 @@ import kotlinx.coroutines.ensureActive
 
 fun interface DecisionClassifier {
   suspend fun classify(text: String): SemanticDecision
+  suspend fun classify(request: InterpretationRequest): SemanticDecision = classify(request.modelInput())
 }
 
 data class SemanticDecision(
@@ -15,7 +16,6 @@ data class SemanticDecision(
   val safetyConfidence: Double,
 )
 
-class DecisionException(message: String) : Exception(message)
 
 /** Every NEW request is classified before local parameter parsing. No generative second pass. */
 class HybridPhoneRouter(
@@ -23,6 +23,16 @@ class HybridPhoneRouter(
   private val classifier: DecisionClassifier,
   private val registry: LocalIntentRegistry = LocalIntentRegistry.default,
 ) {
+  fun isEnabled(): Boolean = enabled()
+  fun needsDecision(text: String, local: PhoneRoute): Boolean = enabled() && local != PhoneRoute.Cancel
+  suspend fun classify(request: InterpretationRequest): SemanticDecision = classifier.classify(request)
+  fun resolve(choice: String, text: String): PhoneRoute = registry.resolve(choice, text)
+  fun hasIntent(choice: String): Boolean = choice in registry.choices && choice !in LocalIntentRegistry.fallbackIds
+  fun recoverSearch(text: String): PhoneRoute.Local? {
+    val command = (PhoneCommandParser().parse(text) as? PhoneRoute.Local)?.command ?: return null
+    val id = when (command) { is PhoneCommand.YouTubeSearch -> "youtube"; is PhoneCommand.SpotifySearch -> "spotify"; else -> return null }
+    return if (registry.definitions.any { it.id == id } && NativeIntentSpec.forCommand(command) != null) registry.resolve(id,text) as? PhoneRoute.Local else null
+  }
   suspend fun route(text: String): PhoneRoute {
     if (!enabled()) throw DecisionException("Configurá y activá Gemini Decisions en IA. El pedido se conserva.")
     val result = classifier.classify(text)

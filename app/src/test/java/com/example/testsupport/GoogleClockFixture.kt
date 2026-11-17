@@ -39,8 +39,11 @@ fun installGoogleClock(
   pm.installPackage(PackageInfo().apply {
     packageName = appInfo.packageName
     applicationInfo = appInfo
-    activities = arrayOf(handler, launcher)
   })
+  // Register components through the shadow API so their intent-filter entries exist too.
+  // Passing activities to installPackage alone only populates PackageInfo in Robolectric.
+  pm.addOrUpdateActivity(handler)
+  pm.addOrUpdateActivity(launcher)
   val handlerName = ComponentName(handler.packageName, handler.name)
   pm.clearIntentFilterForActivity(handlerName)
   actions.forEach { action ->

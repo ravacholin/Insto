@@ -28,6 +28,10 @@ class PlatformActionExecutorTest {
     assertNull(shadowOf(app).nextStartedActivity)
   }
   @Test fun brightnessWithoutSpecialAccessDoesNotChangeTheSetting() {
+    shadowOf(app.getSystemService(android.app.AppOpsManager::class.java)).setMode(
+      android.app.AppOpsManager.OPSTR_WRITE_SETTINGS, android.os.Process.myUid(), app.packageName,
+      android.app.AppOpsManager.MODE_ERRORED)
+    assertFalse(Settings.System.canWrite(app))
     val before=Settings.System.getInt(app.contentResolver,Settings.System.SCREEN_BRIGHTNESS,100)
     val result=PhoneActionExecutor(app).execute(PhoneCommand.Platform(PlatformAction.BRIGHTNESS,percent=40))
     assertEquals(PhoneActionOutcome.NEEDS_INPUT,result.outcome)

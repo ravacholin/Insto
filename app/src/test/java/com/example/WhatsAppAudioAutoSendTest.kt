@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
+import androidx.core.content.FileProvider
 import androidx.test.core.app.ApplicationProvider
 import com.example.assist.AutoSendCoordinator
 import com.example.assist.PingAutoSendAccessibilityService
@@ -13,8 +14,10 @@ import com.example.whatsapp.DispatchResult
 import com.example.whatsapp.WhatsAppDispatcher
 import java.io.File
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
@@ -22,6 +25,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class WhatsAppAudioAutoSendTest {
+  @Before fun attachFileProviderToCurrentApplication() {
+    // FileProvider caches roots by authority, while Robolectric gives each test a new cacheDir.
+    // Its normal attachInfo lifecycle invalidates any roots left by a previous test.
+    Robolectric.buildContentProvider(FileProvider::class.java).create()
+  }
+
   private fun installWhatsApp(app: Application) {
     shadowOf(app.packageManager).installPackage(PackageInfo().apply {
       packageName = "com.whatsapp"

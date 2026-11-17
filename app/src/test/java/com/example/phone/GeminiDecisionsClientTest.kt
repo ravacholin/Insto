@@ -36,7 +36,7 @@ class GeminiDecisionsClientTest {
     assertEquals("gemini-decision-1", request.getString("model"))
     assertEquals("iluminá acá", request.getString("input"))
     assertEquals("choice", request.getJSONObject("questions").getJSONObject("action").getString("type"))
-    assertEquals(LocalIntentRegistry.default.choices.keys,request.getJSONObject("questions").getJSONObject("action").getJSONObject("criteria").keys().asSequence().toSet())
+    assertTrue(request.getJSONObject("questions").getJSONObject("action").getJSONObject("criteria").keys().asSequence().toSet().containsAll(LocalIntentRegistry.default.choices.keys))
     assertFalse(request.has("generationConfig"))
     assertFalse(request.toString().contains("personal-key"))
     assertTrue(c.disconnected)

@@ -1,0 +1,1351 @@
+[
+  {
+    "group": "local",
+    "text": "prendé la linterna",
+    "expected": [
+      {
+        "type": "torch",
+        "enabled": true
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "apagá la linterna",
+    "expected": [
+      {
+        "type": "torch",
+        "enabled": false
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "subí el volumen",
+    "expected": [
+      {
+        "type": "volume",
+        "operation": "UP"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "bajá el volumen",
+    "expected": [
+      {
+        "type": "volume",
+        "operation": "DOWN"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "poné el volumen al veinte por ciento",
+    "expected": [
+      {
+        "type": "volume",
+        "operation": "SET",
+        "percent": 20
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "poné volumen al cero",
+    "expected": [
+      {
+        "type": "volume",
+        "operation": "SET",
+        "percent": 0
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "poné volumen al cien",
+    "expected": [
+      {
+        "type": "volume",
+        "operation": "SET",
+        "percent": 100
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "iniciá el cronómetro",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "START"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "pausá el cronómetro",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "PAUSE"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "continuá el cronómetro",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "RESUME"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "reiniciá el cronómetro",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "RESET"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "mostrá el cronómetro",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "STATUS"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "mostrá las alarmas",
+    "expected": [
+      {
+        "type": "clock_list",
+        "alarms": true
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "mostrá los temporizadores",
+    "expected": [
+      {
+        "type": "clock_list",
+        "alarms": false
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "temporizador de diez minutos",
+    "expected": [
+      {
+        "type": "timer",
+        "seconds": 600
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "temporizador de dos horas",
+    "expected": [
+      {
+        "type": "timer",
+        "seconds": 7200
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "temporizador de treinta segundos para Fideos",
+    "expected": [
+      {
+        "type": "timer",
+        "seconds": 30,
+        "label": "fideos"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "alarma a las siete de la mañana",
+    "expected": [
+      {
+        "type": "alarm",
+        "hour": 7,
+        "minute": 0
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "alarma a las 19:30",
+    "expected": [
+      {
+        "type": "alarm",
+        "hour": 19,
+        "minute": 30
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "alarma a las 08:00 todos los días",
+    "expected": [
+      {
+        "type": "alarm",
+        "hour": 8,
+        "minute": 0,
+        "days": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ]
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "llevame a Retiro",
+    "expected": [
+      {
+        "type": "navigate",
+        "destination": "Retiro"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "llevame a pie a Plaza de Mayo",
+    "expected": [
+      {
+        "type": "navigate",
+        "destination": "Plaza de Mayo",
+        "mode": "WALKING"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "llevame a Retiro en bicicleta",
+    "expected": [
+      {
+        "type": "navigate",
+        "destination": "Retiro",
+        "mode": "BICYCLING"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "buscá en Maps farmacias",
+    "expected": [
+      {
+        "type": "maps",
+        "query": "farmacias"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "buscá farmacias cerca",
+    "expected": [
+      {
+        "type": "maps",
+        "query": "farmacias cerca"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "llamá a Ana",
+    "expected": [
+      {
+        "type": "dial",
+        "target": "Ana"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "llamá al +541112345678",
+    "expected": [
+      {
+        "type": "dial",
+        "target": "+541112345678"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "abrí la cámara",
+    "expected": [
+      {
+        "type": "camera",
+        "video": false
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "abrí la cámara de video",
+    "expected": [
+      {
+        "type": "camera",
+        "video": true
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "buscá jazz en YouTube",
+    "expected": [
+      {
+        "type": "youtube",
+        "query": "jazz"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "buscá en YouTube tango",
+    "expected": [
+      {
+        "type": "youtube",
+        "query": "tango"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "poné música de Soda Stereo",
+    "expected": [
+      {
+        "type": "music",
+        "query": "Soda Stereo"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "reproducí música de jazz",
+    "expected": [
+      {
+        "type": "music",
+        "query": "jazz"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "abrí Spotify",
+    "expected": [
+      {
+        "type": "open_app",
+        "name": "spotify"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "abrí la aplicación Calculadora",
+    "expected": [
+      {
+        "type": "open_app",
+        "name": "calculadora"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "pausá la música",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "PAUSE"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "continuá la música",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "PLAY"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "pasá al siguiente tema",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "NEXT"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "volvé al anterior tema",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "PREVIOUS"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "qué está sonando",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "STATUS"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "silenciá el teléfono durante una hora",
+    "expected": [
+      {
+        "type": "temporary_mode",
+        "kind": "SILENT",
+        "seconds": 3600
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "activá no molestar durante dos horas",
+    "expected": [
+      {
+        "type": "temporary_mode",
+        "kind": "DND",
+        "seconds": 7200
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "poné el volumen al veinte por ciento durante treinta minutos",
+    "expected": [
+      {
+        "type": "temporary_mode",
+        "kind": "MEDIA_VOLUME",
+        "seconds": 1800,
+        "percent": 20
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "restaurá ahora",
+    "expected": [
+      {
+        "type": "end_mode"
+      }
+    ]
+  },
+  {
+    "group": "local",
+    "text": "abrí ajustes de wifi",
+    "expected": [
+      {
+        "type": "settings",
+        "kind": "wifi"
+      }
+    ]
+  },
+  {
+    "group": "paraphrase",
+    "text": "necesito luz acá",
+    "expected": [
+      {
+        "type": "torch",
+        "enabled": true
+      }
+    ],
+    "choice": "torch_on"
+  },
+  {
+    "group": "paraphrase",
+    "text": "dejá de iluminar",
+    "expected": [
+      {
+        "type": "torch",
+        "enabled": false
+      }
+    ],
+    "choice": "torch_off"
+  },
+  {
+    "group": "paraphrase",
+    "text": "un poquito menos de sonido",
+    "expected": [
+      {
+        "type": "volume",
+        "operation": "DOWN"
+      }
+    ],
+    "choice": "volume_down"
+  },
+  {
+    "group": "paraphrase",
+    "text": "un poquito más de sonido",
+    "expected": [
+      {
+        "type": "volume",
+        "operation": "UP"
+      }
+    ],
+    "choice": "volume_up"
+  },
+  {
+    "group": "paraphrase",
+    "text": "quiero ver mis despertadores",
+    "expected": [
+      {
+        "type": "clock_list",
+        "alarms": true
+      }
+    ],
+    "choice": "alarms_show"
+  },
+  {
+    "group": "paraphrase",
+    "text": "mostrame mis cuentas regresivas",
+    "expected": [
+      {
+        "type": "clock_list",
+        "alarms": false
+      }
+    ],
+    "choice": "timers_show"
+  },
+  {
+    "group": "paraphrase",
+    "text": "empezá a contar el tiempo transcurrido",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "START"
+      }
+    ],
+    "choice": "stopwatch_start"
+  },
+  {
+    "group": "paraphrase",
+    "text": "detené el conteo del cronómetro",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "PAUSE"
+      }
+    ],
+    "choice": "stopwatch_pause"
+  },
+  {
+    "group": "paraphrase",
+    "text": "seguí contando el tiempo",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "RESUME"
+      }
+    ],
+    "choice": "stopwatch_resume"
+  },
+  {
+    "group": "paraphrase",
+    "text": "borrá el tiempo del cronómetro para empezar de cero",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "RESET"
+      }
+    ],
+    "choice": "stopwatch_reset"
+  },
+  {
+    "group": "paraphrase",
+    "text": "mostrame cuánto va el cronómetro",
+    "expected": [
+      {
+        "type": "stopwatch",
+        "operation": "STATUS"
+      }
+    ],
+    "choice": "stopwatch_show"
+  },
+  {
+    "group": "paraphrase",
+    "text": "quiero preparar una foto con la cámara",
+    "expected": [
+      {
+        "type": "camera",
+        "video": false
+      }
+    ],
+    "choice": "camera_photo"
+  },
+  {
+    "group": "paraphrase",
+    "text": "mostrame la cámara en video",
+    "expected": [
+      {
+        "type": "camera",
+        "video": true
+      }
+    ],
+    "choice": "camera_video"
+  },
+  {
+    "group": "paraphrase",
+    "text": "pará lo que estoy escuchando",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "PAUSE"
+      }
+    ],
+    "choice": "media_pause"
+  },
+  {
+    "group": "paraphrase",
+    "text": "seguí con lo que estaba escuchando",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "PLAY"
+      }
+    ],
+    "choice": "media_play"
+  },
+  {
+    "group": "paraphrase",
+    "text": "saltá esta canción",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "NEXT"
+      }
+    ],
+    "choice": "media_next"
+  },
+  {
+    "group": "paraphrase",
+    "text": "volvé a la canción previa",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "PREVIOUS"
+      }
+    ],
+    "choice": "media_previous"
+  },
+  {
+    "group": "paraphrase",
+    "text": "decime qué canción está puesta",
+    "expected": [
+      {
+        "type": "media",
+        "operation": "STATUS"
+      }
+    ],
+    "choice": "media_status"
+  },
+  {
+    "group": "paraphrase",
+    "text": "avisame en diez minutos",
+    "expected": [
+      {
+        "type": "timer",
+        "seconds": 600
+      }
+    ],
+    "choice": "timer"
+  },
+  {
+    "group": "paraphrase",
+    "text": "despertador para las siete de la mañana",
+    "expected": [
+      {
+        "type": "alarm",
+        "hour": 7,
+        "minute": 0
+      }
+    ],
+    "choice": "alarm"
+  },
+  {
+    "group": "paraphrase",
+    "text": "guiame hasta Retiro caminando",
+    "expected": [
+      {
+        "type": "navigate",
+        "destination": "Retiro",
+        "mode": "WALKING"
+      }
+    ],
+    "choice": "navigate"
+  },
+  {
+    "group": "paraphrase",
+    "text": "encontrá farmacias por acá",
+    "expected": [
+      {
+        "type": "maps",
+        "query": "farmacias cerca"
+      }
+    ],
+    "choice": "maps"
+  },
+  {
+    "group": "paraphrase",
+    "text": "prepará el marcador para Ana",
+    "expected": [
+      {
+        "type": "dial",
+        "target": "Ana"
+      }
+    ],
+    "choice": "dial"
+  },
+  {
+    "group": "paraphrase",
+    "text": "quiero buscar jazz en videos de YouTube",
+    "expected": [
+      {
+        "type": "youtube",
+        "query": "jazz"
+      }
+    ],
+    "choice": "youtube"
+  },
+  {
+    "group": "paraphrase",
+    "text": "encontrá canciones de Soda Stereo",
+    "expected": [
+      {
+        "type": "music",
+        "query": "Soda Stereo"
+      }
+    ],
+    "choice": "music"
+  },
+  {
+    "group": "paraphrase",
+    "text": "dejá el audio multimedia al veinte por ciento",
+    "expected": [
+      {
+        "type": "volume",
+        "operation": "SET",
+        "percent": 20
+      }
+    ],
+    "choice": "volume_set"
+  },
+  {
+    "group": "paraphrase",
+    "text": "necesito entrar a Spotify",
+    "expected": [
+      {
+        "type": "open_app",
+        "name": "Spotify"
+      }
+    ],
+    "choice": "open_app"
+  },
+  {
+    "group": "paraphrase",
+    "text": "mostrame la configuración del wifi",
+    "expected": [
+      {
+        "type": "settings",
+        "kind": "wifi"
+      }
+    ],
+    "choice": "settings"
+  },
+  {
+    "group": "paraphrase",
+    "text": "necesito silencio por una hora con restauración",
+    "expected": [
+      {
+        "type": "temporary_mode",
+        "kind": "SILENT",
+        "seconds": 3600
+      }
+    ],
+    "choice": "temporary_mode"
+  },
+  {
+    "group": "paraphrase",
+    "text": "terminá este modo temporal y volvé al estado anterior",
+    "expected": [
+      {
+        "type": "end_mode"
+      }
+    ],
+    "choice": "end_mode"
+  },
+  {
+    "group": "negative",
+    "text": "no prendas la linterna"
+  },
+  {
+    "group": "negative",
+    "text": "nunca apagues la linterna"
+  },
+  {
+    "group": "negative",
+    "text": "si llego prendé la linterna"
+  },
+  {
+    "group": "negative",
+    "text": "prendé la linterna cuando llegue"
+  },
+  {
+    "group": "negative",
+    "text": "prendé la linterna hasta que vuelva"
+  },
+  {
+    "group": "negative",
+    "text": "prendé la linterna a menos que llueva"
+  },
+  {
+    "group": "negative",
+    "text": "encendé la linterna siempre que haya oscuridad"
+  },
+  {
+    "group": "negative",
+    "text": "llevame a Retiro sin peajes"
+  },
+  {
+    "group": "negative",
+    "text": "llevame a Córdoba evitando peajes"
+  },
+  {
+    "group": "negative",
+    "text": "llevame a Retiro sin autopistas"
+  },
+  {
+    "group": "negative",
+    "text": "llevame a Retiro evitando autopistas"
+  },
+  {
+    "group": "negative",
+    "text": "llevame a Retiro pasando por Palermo"
+  },
+  {
+    "group": "negative",
+    "text": "llevame a Retiro con una parada"
+  },
+  {
+    "group": "negative",
+    "text": "poné una alarma mañana a las siete"
+  },
+  {
+    "group": "negative",
+    "text": "poné una alarma el 20/11/2026 a las siete"
+  },
+  {
+    "group": "negative",
+    "text": "apagá todas las alarmas"
+  },
+  {
+    "group": "negative",
+    "text": "borrá los temporizadores"
+  },
+  {
+    "group": "negative",
+    "text": "cambiá la alarma de las ocho"
+  },
+  {
+    "group": "negative",
+    "text": "poné una alarma"
+  },
+  {
+    "group": "negative",
+    "text": "llevame"
+  },
+  {
+    "group": "negative",
+    "text": "llamá"
+  },
+  {
+    "group": "negative",
+    "text": "buscá en YouTube"
+  },
+  {
+    "group": "negative",
+    "text": "poné música"
+  },
+  {
+    "group": "negative",
+    "text": "silenciá el teléfono durante un rato"
+  },
+  {
+    "group": "negative",
+    "text": "activá no molestar"
+  },
+  {
+    "group": "negative",
+    "text": "poné el volumen al doscientos por ciento"
+  },
+  {
+    "group": "negative",
+    "text": "alarma a las 99:00"
+  },
+  {
+    "group": "negative",
+    "text": "temporizador de cero minutos"
+  },
+  {
+    "group": "negative",
+    "text": "no bajes el volumen"
+  },
+  {
+    "group": "negative",
+    "text": "si llueve pausá la música"
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "timer",
+        "label": "Fideos"
+      }
+    ],
+    "turns": [
+      "diez minutos"
+    ],
+    "expected": [
+      {
+        "type": "timer",
+        "seconds": 600,
+        "label": "Fideos"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "timer",
+        "seconds": 30,
+        "label": "Té"
+      }
+    ],
+    "turns": [
+      "mejor un minuto"
+    ],
+    "expected": [
+      {
+        "type": "timer",
+        "seconds": 60,
+        "label": "Té"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "volume",
+        "operation": "SET"
+      }
+    ],
+    "turns": [
+      "veinte por ciento"
+    ],
+    "expected": [
+      {
+        "type": "volume",
+        "operation": "SET",
+        "percent": 20
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "navigate",
+        "destination": "Retiro"
+      }
+    ],
+    "turns": [
+      "mejor a pie"
+    ],
+    "expected": [
+      {
+        "type": "navigate",
+        "destination": "Retiro",
+        "mode": "WALKING"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "navigate",
+        "mode": "WALKING"
+      }
+    ],
+    "turns": [
+      "Plaza de Mayo"
+    ],
+    "expected": [
+      {
+        "type": "navigate",
+        "destination": "Plaza de Mayo",
+        "mode": "WALKING"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "dial"
+      }
+    ],
+    "turns": [
+      "Ana"
+    ],
+    "expected": [
+      {
+        "type": "dial",
+        "target": "Ana"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "maps"
+      }
+    ],
+    "turns": [
+      "farmacias cerca"
+    ],
+    "expected": [
+      {
+        "type": "maps",
+        "query": "farmacias cerca"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "music"
+      }
+    ],
+    "turns": [
+      "Soda Stereo"
+    ],
+    "expected": [
+      {
+        "type": "music",
+        "query": "Soda Stereo"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "youtube"
+      }
+    ],
+    "turns": [
+      "jazz"
+    ],
+    "expected": [
+      {
+        "type": "youtube",
+        "query": "jazz"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "open_app"
+      }
+    ],
+    "turns": [
+      "Spotify"
+    ],
+    "expected": [
+      {
+        "type": "open_app",
+        "name": "Spotify"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "alarm",
+        "hour": 7,
+        "minute": 0
+      }
+    ],
+    "turns": [
+      "de la mañana"
+    ],
+    "expected": [
+      {
+        "type": "alarm",
+        "hour": 7,
+        "minute": 0
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "alarm",
+        "hour": 7,
+        "minute": 30
+      }
+    ],
+    "turns": [
+      "de la tarde"
+    ],
+    "expected": [
+      {
+        "type": "alarm",
+        "hour": 19,
+        "minute": 30
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "timer",
+        "seconds": 600,
+        "label": "uno"
+      },
+      {
+        "type": "timer",
+        "seconds": 900,
+        "label": "dos"
+      }
+    ],
+    "turns": [
+      "mejor veinte minutos",
+      "el segundo"
+    ],
+    "expected": [
+      {
+        "type": "timer",
+        "seconds": 600,
+        "label": "uno"
+      },
+      {
+        "type": "timer",
+        "seconds": 1200,
+        "label": "dos"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "timer",
+        "seconds": 600,
+        "label": "uno"
+      },
+      {
+        "type": "timer",
+        "label": "dos"
+      }
+    ],
+    "turns": [
+      "quince minutos"
+    ],
+    "expected": [
+      {
+        "type": "timer",
+        "seconds": 600,
+        "label": "uno"
+      },
+      {
+        "type": "timer",
+        "seconds": 900,
+        "label": "dos"
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "temporary_mode",
+        "kind": "SILENT"
+      }
+    ],
+    "turns": [
+      "una hora"
+    ],
+    "expected": [
+      {
+        "type": "temporary_mode",
+        "kind": "SILENT",
+        "seconds": 3600
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "temporary_mode",
+        "kind": "DND"
+      }
+    ],
+    "turns": [
+      "dos horas"
+    ],
+    "expected": [
+      {
+        "type": "temporary_mode",
+        "kind": "DND",
+        "seconds": 7200
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "temporary_mode",
+        "kind": "MEDIA_VOLUME",
+        "percent": 20
+      }
+    ],
+    "turns": [
+      "treinta minutos"
+    ],
+    "expected": [
+      {
+        "type": "temporary_mode",
+        "kind": "MEDIA_VOLUME",
+        "seconds": 1800,
+        "percent": 20
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "calendar",
+        "title": "Reunión",
+        "date": "18/11/2026"
+      }
+    ],
+    "turns": [
+      "a las 17:00"
+    ],
+    "expected": [
+      {
+        "type": "calendar",
+        "title": "Reunión",
+        "beginMillis": 1795021200000,
+        "endMillis": 1795024800000
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "calendar",
+        "title": "Reunión",
+        "date": "18/11/2026",
+        "time": "17:00"
+      }
+    ],
+    "turns": [
+      "mejor a las 18:00"
+    ],
+    "expected": [
+      {
+        "type": "calendar",
+        "title": "Reunión",
+        "beginMillis": 1795024800000,
+        "endMillis": 1795028400000
+      }
+    ]
+  },
+  {
+    "group": "context",
+    "draft": [
+      {
+        "type": "calendar",
+        "title": "Reunión",
+        "date": "18/11/2026",
+        "time": "cinco"
+      }
+    ],
+    "turns": [
+      "de la tarde"
+    ],
+    "expected": [
+      {
+        "type": "calendar",
+        "title": "Reunión",
+        "beginMillis": 1795021200000,
+        "endMillis": 1795024800000
+      }
+    ]
+  },
+  {
+    "group": "query",
+    "text": "Instinct explicame el clima"
+  },
+  {
+    "group": "query",
+    "text": "explicame cómo funciona el cronómetro"
+  },
+  {
+    "group": "query",
+    "text": "contame una historia"
+  },
+  {
+    "group": "query",
+    "text": "qué es un temporizador"
+  },
+  {
+    "group": "query",
+    "text": "cómo funciona una alarma"
+  }
+]
