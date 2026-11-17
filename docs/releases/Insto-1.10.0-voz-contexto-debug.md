@@ -32,11 +32,10 @@ Variante debug, código 17. Integrada sobre main `196685e66560799b2f3c3bdff29fcf
 
 [Protocolo de medición y límites](../VOICE-CONTEXT.md).
 
-## Corrección posterior a la primera ejecución Android
+## Correcciones de CI
 
-- Código corregido: `55c556453fe5da88cc1411a0d2d46d5f3cbd393f`.
-- Se acepta defensivamente un intent de inicio ausente sin intentar leer contexto. La regresión de ciclo de vida comprueba la finalización pendiente del handoff real y su consumo al detener el flotante.
-- La regresión de adjuntos usa el FileProvider real del manifest y comprueba URI/nombre antes del reemplazo. No se omitieron pruebas.
-- APK recompilado, firma v2 y alineación verificadas, mismo nombre y enlace de Drive.
-
-Las trazas completas se imprimen automáticamente en CI si falla una prueba. Se aisló FileProvider por caso en las pruebas de audio. La regresión de ciclo de vida conserva la detención del flotante antes del siguiente frame. El intent exacto del Reloj y el envío único siguen comprobándose en `NativeStopwatchControllerTest` y `FloatingPhoneRoutingTest`, que permanecen en la suite completa.
+- Código de aplicación corregido: `55c556453fe5da88cc1411a0d2d46d5f3cbd393f`; APK recompilado, firma v2 y alineación verificadas, mismo enlace de Drive.
+- El receptor ignora un intent de inicio ausente. El fixture de adjuntos usa el FileProvider real y las pruebas de audio renuevan sus raíces por caso.
+- Se reprodujo una caché de `AndroidViewModelFactory` que conservaba una Application anterior. Las pruebas de actividad la reinician antes/después de cada caso y una regresión dedicada verifica el reemplazo.
+- El caso de ciclo de vida comprueba la Application correcta, el intent y componente exactos, la ausencia de duplicados y el cierre al detenerse antes del próximo frame.
+- Las trazas completas de fallos aparecen en el log de CI. Ninguna prueba ni check fue deshabilitado; consultar el resultado final en el PR.

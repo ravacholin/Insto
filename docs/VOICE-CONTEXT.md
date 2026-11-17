@@ -61,13 +61,12 @@ La entrega actualizada y el APK de Drive se describen en [Insto 1.10.0](releases
 
 ## Corrección de los fallos detectados por CI
 
-La primera ejecución Android completa del PR #17 ejecutó 325 casos y detectó dos fallos (más una evaluación real omitida):
+Las regresiones Android revelaron tres problemas de aislamiento de las pruebas:
 
-- `NativePhoneActionLifecycleTest.clockHandoffFinishesEvenWhenTheOverlayStopsBeforeItsNextFrame`: la aserción usaba una cola auxiliar de instrumentación vacía, aunque el ejecutor real había producido HANDOFF. La prueba comprueba ahora la finalización pendiente y el cierre tras stop; el intent exacto y la ausencia de duplicados siguen cubiertos por las pruebas del ejecutor y del enrutador.
-- `FloatingContextTest.newReferenceReplacesAPreviouslySelectedAttachment`: el proveedor anónimo se registraba sin adjuntarle contexto Android. La prueba usa ahora el `FileProvider` real del manifest, un archivo temporal permitido y comprueba URI y nombre antes de quitar el adjunto al recibir contexto.
+- El proveedor anónimo del caso de adjuntos no tenía contexto Android adjunto. Se reemplazó por el FileProvider real del manifest y se verifican URI/nombre antes de quitar el adjunto al recibir contexto.
+- FileProvider conserva raíces por autoridad, mientras Robolectric cambia de directorio temporal en cada caso. Las pruebas de audio adjuntan ahora el proveedor por prueba.
+- AndroidX 2.8.7 conserva la primera Application en `AndroidViewModelFactory._instance`, incluso al pedir una fábrica con otra Application. Esto se reprodujo directamente con la dependencia fijada y explica el HANDOFF registrado desde un contexto anterior. Los tests de actividad restablecen esa fábrica antes y después de cada caso. Una regresión dedicada reproduce la retención y verifica el cambio de Application después del reset.
 
-No se deshabilitaron pruebas ni comprobaciones del workflow. La verificación final se documenta en la nota de entrega.
+La prueba de ciclo de vida exige identidad entre la Application del test y la del ViewModel, un único lanzamiento al componente exacto del Reloj y la finalización pendiente; detiene el flotante antes del siguiente frame y verifica cierre y consumo único, sin otro lanzamiento. Se restauran las aserciones de intents; no se usan recorders alternativos ni un ejecutor simulado. La actividad también tolera defensivamente un intent de inicio ausente.
 
-La salida completa de XML en CI reveló además una regresión de aislamiento de `FloatingHybridRoutingTest`: el FileProvider reutilizaba raíces de otro directorio temporal. Su fixture ahora se adjunta en cada prueba, como las demás pruebas de audio existentes.
-
-La traza con estado confirmó que el Reloj devolvía HANDOFF, sin error, y la finalización estaba pendiente antes de detener la actividad. La prueba de ciclo de vida comprueba ese resultado real y el cierre/consumo único después de stop, sin avanzar tiempo de un frame. La verificación del intent exacto y el envío único sigue en `NativeStopwatchControllerTest` y `FloatingPhoneRoutingTest`; las tres pruebas se ejecutan en la misma suite. No se fabrica un resultado ni se sustituye el ejecutor. El receptor también tolera defensivamente un intent de inicio ausente.
+CI imprime las trazas completas de XML si falla un caso. No se deshabilitaron pruebas ni comprobaciones del workflow. La verificación final se muestra en los checks del PR.

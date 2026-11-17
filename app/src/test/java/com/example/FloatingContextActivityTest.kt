@@ -5,8 +5,11 @@ import androidx.lifecycle.ViewModelProvider
 import com.example.assist.AssistActivity
 import com.example.context.SharedTextContext
 import com.example.ui.MainViewModel
+import com.example.testsupport.resetApplicationViewModelFactory
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -15,6 +18,8 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class FloatingContextActivityTest {
+  @Before @After fun resetApplicationFactory() { resetApplicationViewModelFactory() }
+
   @Test fun selectedTextSurvivesRecreationAndRepeatedHotkeyButNewShareReplacesIt() {
     val intent = Intent(Intent.ACTION_PROCESS_TEXT).setType("text/plain").putExtra(Intent.EXTRA_PROCESS_TEXT, "Primero")
     val controller = Robolectric.buildActivity(AssistActivity::class.java, intent).setup()
