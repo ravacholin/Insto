@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.testsupport.localActionDecisions
+
 import android.Manifest
 import android.app.Application
 import android.content.ContentProvider
@@ -39,7 +41,7 @@ class FloatingEverydayRoutingTest {
     val audio = File.createTempFile("everyday", ".m4a").apply { writeText("original") }
     try {
       val capture = Capture(audio)
-      val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "Llevame a Plaza de Mayo" })
+      val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "Llevame a Plaza de Mayo" }, hybridRouter = localActionDecisions())
       vm.startFloatingListening { fail("No WhatsApp") }
       capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
       runCurrent(); vm.sendFloatingAudio { fail("No WhatsApp") }; advanceUntilIdle()
@@ -55,7 +57,7 @@ class FloatingEverydayRoutingTest {
   @Test fun missingCameraAppRetainsTheTextRatherThanSendingItAsAQuery() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     try {
-      val vm = MainViewModel(app)
+      val vm = MainViewModel(app, hybridRouter = localActionDecisions())
       vm.updateFloatingText("abrí la cámara para grabar")
       vm.sendFloatingText { fail("No compatible camera") }
       assertEquals("abrí la cámara para grabar", vm.floatingAssistant.value.text)
@@ -69,7 +71,7 @@ class FloatingEverydayRoutingTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     shadowOf(app).denyPermissions(Manifest.permission.READ_CONTACTS)
     try {
-      val vm = MainViewModel(app)
+      val vm = MainViewModel(app, hybridRouter = localActionDecisions())
       vm.updateFloatingText("llamá a Ana")
       vm.sendFloatingText { fail("No WhatsApp") }
       assertTrue(vm.floatingAssistant.value.needsContacts)
@@ -91,7 +93,7 @@ class FloatingEverydayRoutingTest {
     installNativeHandler(app, Intent.ACTION_DIAL, "tel")
     ShadowContentResolver.registerProviderInternal("com.android.contacts", ContactsFixture())
     try {
-      val vm = MainViewModel(app)
+      val vm = MainViewModel(app, hybridRouter = localActionDecisions())
       vm.updateFloatingText("llamá a Ana")
       vm.sendFloatingText { fail("No WhatsApp") }
       assertEquals(2, vm.floatingAssistant.value.contactOptions.size)
@@ -108,6 +110,21 @@ class FloatingEverydayRoutingTest {
       assertNull(shadowOf(app).nextStartedActivity)
       vm.dismissFloatingAssistant()
     } finally { Dispatchers.resetMain() }
+  }
+  @Test fun cancelingAContactSelectionStaysLocalAndDoesNotDispatch() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    shadowOf(app).grantPermissions(Manifest.permission.READ_CONTACTS)
+    ShadowContentResolver.registerProviderInternal("com.android.contacts", ContactsFixture())
+    val vm=MainViewModel(app,hybridRouter=localActionDecisions())
+    try {
+      vm.updateFloatingText("llamá a Ana");vm.sendFloatingText {fail("No dispatch")}
+      assertEquals(2,vm.floatingAssistant.value.contactOptions.size)
+      vm.updateFloatingText("cancelar");vm.sendFloatingText {fail("Cancel selection must not reach Instinct")}
+      assertTrue(vm.floatingAssistant.value.contactOptions.isEmpty())
+      assertEquals("Pedido cancelado.",vm.floatingAssistant.value.status)
+      assertNull(vm.floatingAssistant.value.error)
+      assertNull(shadowOf(app).nextStartedActivity)
+    } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
   }
   private class Capture(val file: File) : FloatingAudioCapture {
     override var snapshot = FloatingVoiceCapture.Snapshot()

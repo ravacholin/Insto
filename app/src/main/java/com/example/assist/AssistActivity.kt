@@ -119,7 +119,7 @@ class AssistActivity : ComponentActivity() {
           AlertDialog(
             onDismissRequest = { showGeminiSetup = false },
             title = { Text("Configurá Gemini Decisions") },
-            text = { Text("Falta tu clave de Gemini. Groq transcribe la voz; Gemini ayuda a entender pedidos que el intérprete local no reconoce. Para activarlo, cargá tu clave personal de Google AI Studio. Los pedidos claros del teléfono funcionan sin Gemini.") },
+            text = { Text("Falta tu clave de Gemini. Groq transcribe la voz y Gemini Decisions clasifica cada pedido contra las acciones disponibles. Cargá tu clave de Google AI Studio para usar este flujo. Sin configurar Decisions se conserva el pedido y no se ejecutan acciones automáticamente.") },
             confirmButton = {
               TextButton(onClick = {
                 showGeminiSetup = false
@@ -136,7 +136,7 @@ class AssistActivity : ComponentActivity() {
                   viewModel.resumeFloatingAssistant()
                   viewModel.startFloatingListening { finish() }
                 }
-              }) { Text("Continuar sin Gemini") }
+              }) { Text("Configurar después") }
             },
           )
         }

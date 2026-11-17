@@ -142,7 +142,6 @@ class MainViewModel @JvmOverloads constructor(
   private val hybridRouter: com.example.phone.HybridPhoneRouter = com.example.phone.HybridPhoneRouter(
     { com.example.phone.GeminiSettings(application).isEnabled() },
     com.example.phone.GeminiDecisionsClient({ com.example.phone.GeminiSettings(application).readKey() })),
-  private val structuredExtractor: StructuredCommandExtractor = StructuredCommandClient({ GeminiSettings(application).readKey() }),
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
@@ -162,7 +161,6 @@ class MainViewModel @JvmOverloads constructor(
   private var floatingPaused = false
 
   fun resumeFloatingAssistant() { floatingPaused = false }
-  private val phoneParser = PhoneCommandParser()
   private val phoneExecutor = PhoneActionExecutor(application)
   private val conversation = ConversationSession()
   private val workflowStore = WorkflowStore(application)
@@ -212,7 +210,7 @@ class MainViewModel @JvmOverloads constructor(
   fun cancelFloatingWorkflow() {
     floatingGeneration++; floatingJob?.cancel()
     cancelClockAutomation?.invoke(); cancelClockAutomation = null
-    workflow.cancel(); conversation.clear()
+    workflow.cancel(); conversation.clear(); clarification=null;clarificationRequest=null
     confirmation = null; cameraCommand = null; contactsCommand = null; notificationsCommand = null
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, needsConfirmation = false,
       appOptions = emptyList(), contactOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false,
@@ -229,13 +227,14 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private fun finishWorkflow() {
-    conversation.clear()
+    conversation.clear(); clarification=null;clarificationRequest=null
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
       status = "Secuencia finalizada. Las entregas a otras apps se revisan allí.",
       phoneActionCompletion = "Secuencia finalizada.")
     syncWorkflow()
   }
   private var clarification: String? = null
+  private var clarificationRequest: Pair<String, java.util.Calendar>? = null
   private var confirmation: PhoneCommand? = null
   private var cameraCommand: PhoneCommand? = null
   private var contactsCommand: PhoneCommand? = null
@@ -269,8 +268,9 @@ class MainViewModel @JvmOverloads constructor(
     if (option !in floatingState.value.appOptions || floatingState.value.mode == FloatingMode.SENDING) return
     floatingState.value = floatingState.value.copy(appOptions = emptyList())
     val media = appChoiceCommand as? PhoneCommand.Media
+    val settings = (appChoiceCommand as? PhoneCommand.Platform)?.takeIf { it.action == PlatformAction.APP_SETTINGS }
     appChoiceCommand = null
-    runPhoneCommand(media?.copy(packageName = option.packageName) ?: PhoneCommand.OpenApp(option.packageName))
+    runPhoneCommand(media?.copy(packageName = option.packageName) ?: settings?.copy(argument = option.packageName) ?: PhoneCommand.OpenApp(option.packageName))
   }
 
   fun onFloatingCameraPermission(granted: Boolean) {
@@ -304,7 +304,17 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private fun runPhoneCommand(command: PhoneCommand, confirmed: Boolean = false) {
+    if(command is PhoneCommand.Platform && command.action==PlatformAction.ROUTINE_RUN) {
+      try {
+        val routines=ConfiguredRoutineStore(java.io.File(getApplication<Application>().noBackupFilesDir,"configured-routines.json")).read()
+        val routine=routines.singleOrNull {PhoneCommandParser.normalize(it.name)==PhoneCommandParser.normalize(command.argument!!)}
+        if(routine==null) retainDecisionRequest("No encontré esa rutina configurada. Podés consultar tus rutinas o importar plantillas revisadas.")
+        else previewWorkflow(routine.commands)
+      } catch(_:Exception) {retainDecisionRequest("No se pudo leer la configuración de rutinas. No se ejecutó ningún paso.")}
+      return
+    }
     clarification = null
+    clarificationRequest = null
     confirmation = null
     cameraCommand = null
     contactsCommand = null
@@ -381,28 +391,8 @@ class MainViewModel @JvmOverloads constructor(
       if (active.confirmed && normalized in listOf("continua", "continuar", "listo", "ya esta", "verificado", "omiti ese paso")) {continueFloatingWorkflow(); return true}
       if (normalized in listOf("reintenta", "reintentar", "intenta de nuevo")) {retryFloatingWorkflow(); return true}
     }
-    val hasChoice = confirmation != null || floatingState.value.appOptions.isNotEmpty() || floatingState.value.contactOptions.isNotEmpty()
-    if (!hasChoice && (active == null || !active.confirmed)) {
-      when (val conversational = conversation.accept(text)) {
-        is ConversationResult.Plan -> { previewWorkflow(conversational.commands); return true }
-        is ConversationResult.Prompt -> {
-          workflow.invalidatePreview()
-          syncWorkflow()
-          retainLocalAudio = true
-          floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = conversational.message, error = null)
-          return true
-        }
-        ConversationResult.Pass -> {
-          workflow.invalidatePreview()
-          syncWorkflow()
-        }
-      }
-    }
-    if (activeWorkflow() != null && !hasChoice) {
-      retainDecisionRequest("Hay una secuencia pendiente. Podés continuar, reintentar el paso o cancelar."); return true
-    }
     val retry = retryLocalCommand
-    if (retry != null && retryLocalText?.let(PhoneCommandParser::normalize) == normalized) {
+    if (retry != null && retryLocalText == text) {
       runPhoneCommand(retry.first, retry.second)
       return true
     }
@@ -413,6 +403,11 @@ class MainViewModel @JvmOverloads constructor(
       confirmFloatingAction(normalized !in listOf("no", "cancelar"))
       return true
     }
+    if ((floatingState.value.contactOptions.isNotEmpty() || floatingState.value.appOptions.isNotEmpty()) && normalized in listOf("cancelar","cancela","no","dejalo")) {
+      clarification=null;clarificationRequest=null;confirmation=null;appChoiceCommand=null;contactsCommand=null
+      floatingState.value=floatingState.value.copy(mode=FloatingMode.IDLE,text="",appOptions=emptyList(),contactOptions=emptyList(),needsConfirmation=false,error=null,status="Pedido cancelado.")
+      return true
+    }
     val contacts = floatingState.value.contactOptions
     if (contacts.isNotEmpty()) {
       val index = PhoneCommandParser.choiceIndex(normalized)
@@ -421,54 +416,29 @@ class MainViewModel @JvmOverloads constructor(
           PhoneNumbers.canonical(text)?.let { number -> number == PhoneNumbers.canonical(it.number) } == true
       }
       if (selected != null) { chooseFloatingContact(selected); return true }
-      if (normalized != "no" && phoneParser.parse(text) == PhoneRoute.Instinct) {
-        retainLocalAudio = true
-        floatingState.value = floatingState.value.copy(
-          mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING,
-          error = "Elegí una opción por su número, o decí cancelar.", status = null)
-        return true
-      }
+      if (index != null) {retainDecisionRequest("Elegí una de las opciones disponibles o decí cancelar."); return true}
     }
     val options = floatingState.value.appOptions
     if (options.isNotEmpty()) {
       val index = PhoneCommandParser.choiceIndex(normalized)
       val selected = if (index != null) options.getOrNull(index) else options.singleOrNull { PhoneCommandParser.normalize(it.label) == normalized }
       if (selected != null) { chooseFloatingApp(selected); return true }
+      if (index != null) {retainDecisionRequest("Elegí una de las opciones disponibles o decí cancelar."); return true}
     }
-    val pendingContext = clarification
-    val local = if (contacts.isNotEmpty() && normalized == "no") PhoneRoute.Cancel
-      else clarification?.let { phoneParser.parseReply(it, text) } ?: phoneParser.parse(text)
-    // Unresolved choices/confirmations stay local; never reinterpret "two" or "maybe" as a fresh request.
-    if ((options.isNotEmpty() || confirmation != null) && local == PhoneRoute.Instinct) {
-      retainLocalAudio = true
-      floatingState.value = floatingState.value.copy(
-        mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING,
-        error = "Elegí una opción, confirmá el pedido o decí cancelar.", status = null)
+    if (clarification == "intent:calendar" && Regex("^(?:a las? |de la |hoy$|manana$|pasado manana$|mejor |que dure |durante |[0-9]{1,2}/)").containsMatchIn(normalized)) {
+      handleCalendarDraft(text)
       return true
     }
+    // Only parameter-shaped continuations inherit an already classified intent.
+    // Every new request, including literal commands, goes to Decisions first.
+    val priorClarificationRequest = clarificationRequest
+    val continuation = clarification?.let { hybridRouter.reply(it, text, priorClarificationRequest) }
     val generation = floatingGeneration
-    if (pendingContext == null && hybridRouter.needsDecision(text, local)) {
-      decidingRequest = true
-      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, status = "Interpretando parámetros con Gemini…", error = null)
-      try {
-        val commands = structuredExtractor.extract(text)
-        if (generation != floatingGeneration || !kotlinx.coroutines.currentCoroutineContext().isActive || floatingPaused) return true
-        previewWorkflow(commands)
-        return true
-      } catch (cancelled: kotlinx.coroutines.CancellationException) {
-        if (generation == floatingGeneration) retainDecisionRequest("Interpretación cancelada. El pedido se conserva.")
-        return true
-      } catch (_: Exception) {
-        // Classification can still route a genuine general query to Instinct.
-      } finally {
-        if (generation == floatingGeneration) {decidingRequest = false; floatingState.value = floatingState.value.copy(deciding = false)}
-      }
-    }
-    val route = if (pendingContext == null && hybridRouter.needsDecision(text, local)) {
+    val route = if (continuation == null) {
       decidingRequest = true
       floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, status = "Decidiendo con Gemini…", error = null)
       try {
-        val result = hybridRouter.route(text, local)
+        val result = hybridRouter.route(text)
         if (generation != floatingGeneration || !kotlinx.coroutines.currentCoroutineContext().isActive || floatingPaused) return true
         result
       } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -484,9 +454,17 @@ class MainViewModel @JvmOverloads constructor(
           floatingState.value = floatingState.value.copy(deciding = false)
         }
       }
-    } else local
+    } else continuation
+    // A new complete request replaces any earlier unconfirmed preview and pending fields.
+    workflow.invalidatePreview()
+    syncWorkflow()
+    if (activeWorkflow()?.confirmed == true && route is PhoneRoute.Local) {
+      retainDecisionRequest("Hay una secuencia en curso. Continuá o cancelala antes de iniciar otra acción.")
+      return true
+    }
     // A new complete request replaces any earlier clarification/confirmation.
     clarification = null
+    clarificationRequest = null
     confirmation = null
     cameraCommand = null
     contactsCommand = null
@@ -495,19 +473,41 @@ class MainViewModel @JvmOverloads constructor(
     retryLocalText = null
     floatingState.value = floatingState.value.copy(needsConfirmation = false, appOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false, contactOptions = emptyList())
     when (route) {
-      is PhoneRoute.Local -> runPhoneCommand(route.command)
+      is PhoneRoute.Local -> if (route.command is PhoneCommand.CalendarEvent) {
+        handleCalendarDraft(text, route.command)
+      } else {conversation.clear(); runPhoneCommand(route.command)}
       is PhoneRoute.Clarify -> {
         clarification = route.context
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = route.prompt, error = null)
+        clarificationRequest = if(continuation!=null) priorClarificationRequest else text to java.util.Calendar.getInstance()
+        if (route.context == "intent:calendar") handleCalendarDraft(text)
+        else {conversation.clear(); retainLocalAudio = true
+          floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = route.prompt, error = null)}
       }
       is PhoneRoute.Unsupported -> {
         retainLocalAudio = true
         floatingState.value = floatingState.value.copy(mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING, status = null, error = route.message)
       }
-      PhoneRoute.Cancel -> floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = "Pedido cancelado.", error = null)
+      PhoneRoute.Cancel -> {conversation.clear(); floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = "Pedido cancelado.", error = null)}
       PhoneRoute.Instinct -> return false
     }
     return true
+  }
+
+  /** Calendar fields belong to an already selected intent, never to a fresh free-form plan. */
+  private fun handleCalendarDraft(text: String, complete: PhoneCommand.CalendarEvent? = null) {
+    workflow.invalidatePreview()
+    syncWorkflow()
+    clarification = "intent:calendar"
+    retainLocalAudio = true
+    when (val result = conversation.accept(text)) {
+      is ConversationResult.Plan -> {
+        if (result.commands.size == 1 && result.commands.single() is PhoneCommand.CalendarEvent) previewWorkflow(result.commands)
+        else retainDecisionRequest("Completá solamente los datos del evento; no se ejecutó ninguna acción.")
+      }
+      is ConversationResult.Prompt -> floatingState.value = floatingState.value.copy(mode=FloatingMode.IDLE,text="",status=result.message,error=null)
+      ConversationResult.Pass -> if (complete != null) previewWorkflow(listOf(complete))
+        else retainDecisionRequest("Indicá título, fecha y hora del evento.")
+    }
   }
 
   private fun retainDecisionRequest(message: String) {
@@ -697,6 +697,7 @@ class MainViewModel @JvmOverloads constructor(
     // Explicit close cancels future steps; effects already handed off are never replayed.
     if (activeWorkflow() != null) workflow.cancel()
     clarification = null
+    clarificationRequest = null
     confirmation = null
     cameraCommand = null
     contactsCommand = null

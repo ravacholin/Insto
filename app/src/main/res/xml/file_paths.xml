@@ -3,4 +3,5 @@
     <cache-path
         name="voice_notes"
         path="voice_notes/" />
+    <files-path name="captures" path="captures/" />
 </paths>

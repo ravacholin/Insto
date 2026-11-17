@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Estudio",
+    "commands": [
+      {"type": "volume", "operation": "SET", "percent": 20},
+      {"type": "timer", "seconds": 1500, "label": "Estudio"},
+      {"type": "open_app", "name": "Spotify"}
+    ]
+  }
+]

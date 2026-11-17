@@ -1,3 +1,11 @@
+## Flujo vigente: Decisions primero (1.8.0 / código 13)
+
+Toda solicitud nueva escrita o transcripta se clasifica primero con Gemini Decisions contra el catálogo. Un intent reconocido se valida y ejecuta en Android; si no hay coincidencia confiable, el texto o M4A original completo va a Instinct. No hay una segunda llamada generativa. Sin clave o ante un error técnico de clasificación se conserva el pedido, sin ejecutar por el parser como sustitución silenciosa.
+
+El [catálogo de intents](LOCAL-INTENTS.md) detalla parámetros, equivalencias, permisos, resultados y límites reales. Archivos usan selección SAF; agenda usa permisos y entidades reales; cámara/grabadora usa interfaces y resultados nativos. Rutinas se importan y revisan desde JSON: [ejemplo](examples/routines.json). Los efectos externos y selecciones siguen siendo entregas a otra app hasta que se verifiquen allí.
+
+Las secciones de versiones anteriores más abajo son historial. La [especificación vigente](superpowers/specs/2026-11-16-decisions-first-design.md) reemplaza el orden híbrido y la extracción generativa descritos en esas versiones.
+
 # Instinct floating assistant
 
 ## Teléfono e Instinct: una sola entrada

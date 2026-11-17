@@ -5,7 +5,18 @@ enum class TravelMode { DRIVING, WALKING, BICYCLING, TRANSIT }
 enum class MediaOp { PLAY, PAUSE, NEXT, PREVIOUS, STATUS }
 enum class ModeKind { MEDIA_VOLUME, SILENT, DND }
 enum class VolumeOp { UP, DOWN, SET }
+enum class PlatformAction {
+  CALL_DIRECT, MESSAGE_SEND,
+  CAPTURE_PHOTO, CAPTURE_VIDEO, CAPTURE_AUDIO,
+  FILE_OPEN, FILE_SEARCH, FILE_SHARE, FILE_RENAME, FILE_COPY, FILE_MOVE, FILE_DELETE,
+  CALENDAR_QUERY, CALENDAR_UPDATE, CALENDAR_DELETE, ROUTINE_RUN, ROUTINE_LIST, ROUTINE_IMPORT,
+  ALARM_DISMISS, ALARM_SNOOZE, TIMER_DISMISS, CALENDAR_AGENDA, DIALER_OPEN,
+  CONTACT_SEARCH, CONTACT_PHONES, APP_SETTINGS, MESSAGE_OPEN, MESSAGE_DRAFT, TEXT_SHARE,
+  FILES_BROWSE, RECORDER_OPEN, BATTERY, BRIGHTNESS, ACCESSIBILITY_SETTINGS, DISPLAY_SETTINGS,
+  SILENT_ON, SILENT_OFF, DND_ON, DND_OFF, NOTIFICATION_LIST, NOTIFICATION_OPEN, NOTIFICATION_DISMISS
+}
 sealed interface PhoneCommand {
+  data class Platform(val action: PlatformAction, val argument: String? = null, val percent: Int? = null, val content: String? = null) : PhoneCommand
   data class Media(val operation: MediaOp, val packageName: String? = null) : PhoneCommand
   data class TemporaryMode(val kind: ModeKind, val seconds: Int, val percent: Int = 0, val approximate: Boolean = false) : PhoneCommand
   data object EndMode : PhoneCommand
@@ -18,7 +29,7 @@ sealed interface PhoneCommand {
   data class YouTubeSearch(val query: String) : PhoneCommand
   data class MusicSearch(val query: String) : PhoneCommand
   data class Timer(val seconds: Int, val label: String = "") : PhoneCommand
-  data class Alarm(val hour: Int, val minute: Int, val days: List<Int> = emptyList(), val label: String = "") : PhoneCommand
+  data class Alarm(val hour: Int, val minute: Int, val days: List<Int> = emptyList(), val label: String = "", val date: String? = null) : PhoneCommand
   data class ClockList(val alarms: Boolean) : PhoneCommand
   data class Stopwatch(val operation: StopwatchOp) : PhoneCommand
   data class OpenApp(val name: String) : PhoneCommand

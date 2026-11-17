@@ -46,6 +46,62 @@ class FloatingHybridRoutingTest {
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
   }
 
+  @Test fun lowConfidenceForLiteralCommandForwardsExactOriginalTextWithoutExecuting() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    val disconnect = ConnectedAccessibility.start(app)
+    val audio = app.getSystemService(android.media.AudioManager::class.java)
+    val before = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+    var calls = 0
+    val original = "¿Podés bajar el volumen, por favor?"
+    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { text ->
+      calls++; assertEquals(original, text); SemanticDecision("volume_down", .60, .60, .99, .99)
+    }))
+    try {
+      withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
+      shadowOf(app.packageManager).installPackage(PackageInfo().apply {
+        packageName = "com.whatsapp"
+        applicationInfo = ApplicationInfo().apply {packageName="com.whatsapp"}
+      })
+      var dispatched = 0
+      vm.updateFloatingText(original); vm.sendFloatingText {dispatched++}; runCurrent()
+      assertEquals(1, calls)
+      assertEquals(1, dispatched)
+      assertEquals(before, audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC))
+      assertNull(vm.consumePhoneActionCompletion())
+      assertEquals(original, shadowOf(app).nextStartedActivity.data!!.getQueryParameter("text"))
+    } finally {vm.dismissFloatingAssistant();disconnect();Dispatchers.resetMain()}
+  }
+
+  @Test fun recognizedExecutionFailureNeverFallsBackToInstinct() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    var calls=0
+    val vm = MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {
+      calls++; SemanticDecision("camera_photo",.99,.99,.99,.99)
+    }))
+    try {
+      vm.updateFloatingText("abrí la cámara");vm.sendFloatingText {fail("Execution errors must stay local")}
+      assertEquals(1,calls)
+      assertNotNull(vm.floatingAssistant.value.error)
+      assertEquals("abrí la cámara",vm.floatingAssistant.value.text)
+      assertNull(vm.consumePhoneActionCompletion())
+    } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
+  }
+
+  @Test fun editingFailedRequestRequiresClassificationEvenWhenOnlyPunctuationChanged() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app=ApplicationProvider.getApplicationContext<Application>()
+    var calls=0
+    val vm=MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {calls++;SemanticDecision("app_open",.99,.99,.99,.99)}))
+    try {
+      vm.updateFloatingText("abrí AplicacionInexistente");vm.sendFloatingText {fail("No dispatch")}
+      assertEquals(1,calls)
+      vm.updateFloatingText("abrí AplicacionInexistente!");vm.sendFloatingText {fail("No dispatch")}
+      assertEquals(2,calls)
+    } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
+  }
+
   @Test fun semanticQuerySharesTheOriginalAudioExactlyOnce() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
@@ -87,8 +143,9 @@ class FloatingHybridRoutingTest {
   @Test fun clarificationRepliesStayLocalEvenWithHybridEnabled() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
+    var calls = 0
     val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
-      fail("Pending alarm must resolve locally"); error("unreachable")
+      calls++; SemanticDecision("alarm", .99, .99, .99, .99)
     }))
     try {
       vm.updateFloatingText("poné una alarma")
@@ -97,6 +154,7 @@ class FloatingHybridRoutingTest {
       vm.updateFloatingText("a las siete de la mañana")
       vm.sendFloatingText { fail("No WhatsApp") }
       assertFalse(vm.floatingAssistant.value.status.orEmpty().contains("Gemini"))
+      assertEquals(1, calls)
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
   }
 

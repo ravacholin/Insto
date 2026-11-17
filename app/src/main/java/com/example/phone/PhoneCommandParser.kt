@@ -16,6 +16,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     if (normalized.startsWith("instinct")) return PhoneRoute.Instinct
     if (Regex("^(?:(?:como|que|por que|conta)\\b|(?:me )?expli)").containsMatchIn(normalized)) return PhoneRoute.Instinct
     when (context) {
+      "app" -> return parse("abrí $text")
       "navigate" -> return parse("llevame a $text")
       "dial" -> return parse("llamá a $text")
       "youtube" -> return parse("buscá en YouTube $text")
@@ -102,7 +103,14 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
   }
 
   private fun alarm(input: String): PhoneRoute {
-    val body = input.trim()
+    var body = input.trim()
+    var requestedDate: String? = null
+    Regex("^(?:para )?(hoy|manana)\\b\\s*(.*)$").matchEntire(body)?.let { match ->
+      val day = calendarNow().clone() as java.util.Calendar
+      if (match.groupValues[1] == "manana") day.add(java.util.Calendar.DAY_OF_MONTH, 1)
+      requestedDate = "%04d-%02d-%02d".format(java.util.Locale.ROOT,day.get(java.util.Calendar.YEAR),day.get(java.util.Calendar.MONTH)+1,day.get(java.util.Calendar.DAY_OF_MONTH))
+      body = match.groupValues[2]
+    }
     val datePart = body.replace("de la manana", "")
     if (Regex("\\b(?:manana|pasado|hoy|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\\b|[0-9]+[/-][0-9]+|\\bel [0-9]+").containsMatchIn(datePart)) {
       return PhoneRoute.Unsupported("Para una fecha específica, abrí las alarmas del Reloj y completá la fecha allí.")
@@ -132,7 +140,8 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     if (period == "de la noche") hour = if (hour == 12) 0 else hour % 12 + 12
     if (period in listOf("de la manana", "am")) hour %= 12
     val label = time.groupValues[6]
-    return PhoneRoute.Local(PhoneCommand.Alarm(hour, minutes, days, label))
+    if (requestedDate != null && days.isNotEmpty()) return PhoneRoute.Unsupported("Indicá una fecha o una repetición, sin combinar ambas.")
+    return PhoneRoute.Local(PhoneCommand.Alarm(hour, minutes, days, label, requestedDate))
   }
 
   companion object {

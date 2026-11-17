@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.testsupport.localActionDecisions
+
 import android.app.Application
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
@@ -30,7 +32,7 @@ class StopwatchAccessibilityRoutingTest {
     val app = ApplicationProvider.getApplicationContext<Application>()
     installGoogleClock(app)
     val disconnect = ConnectedAccessibility.start(app)
-    val vm = MainViewModel(app)
+    val vm = MainViewModel(app, hybridRouter = localActionDecisions())
     try {
       vm.updateFloatingText("iniciar un cronómetro")
       vm.sendFloatingText { fail("A stopwatch must not go to WhatsApp") }
@@ -54,7 +56,7 @@ class StopwatchAccessibilityRoutingTest {
     val app = ApplicationProvider.getApplicationContext<Application>()
     installGoogleClock(app)
     val disconnect = ConnectedAccessibility.start(app)
-    val vm = MainViewModel(app)
+    val vm = MainViewModel(app, hybridRouter = localActionDecisions())
     try {
       vm.updateFloatingText("iniciá el cronómetro")
       vm.sendFloatingText { fail("Local action") }
