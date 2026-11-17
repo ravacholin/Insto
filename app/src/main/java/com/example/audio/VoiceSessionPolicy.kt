@@ -4,7 +4,14 @@ package com.example.audio
 class VoiceSessionPolicy {
   enum class State { LISTENING, RECORDING, SEND, IDLE }
   private var state = State.LISTENING
-  private var lastSpeechMs = 0L
+  private var firstSpeechMs: Long? = null
+  var lastSpeechMs = 0L
+    private set
+  val trailingSilenceMs: Long get() = when (lastSpeechMs - (firstSpeechMs ?: lastSpeechMs)) {
+    in 0 until 4_000L -> 900L
+    in 4_000L until 12_000L -> 1_600L
+    else -> 2_400L
+  }
 
   fun update(elapsedMs: Long, speech: Boolean): State {
     if (state == State.IDLE || state == State.SEND) {
@@ -12,11 +19,12 @@ class VoiceSessionPolicy {
       return state
     }
     if (speech) {
+      if (firstSpeechMs == null) firstSpeechMs = elapsedMs
       lastSpeechMs = elapsedMs
       state = State.RECORDING
     }
     if (state == State.LISTENING && elapsedMs >= INITIAL_LISTEN_MS) state = State.IDLE
-    if (state == State.RECORDING && elapsedMs - lastSpeechMs >= TRAILING_SILENCE_MS) {
+    if (state == State.RECORDING && elapsedMs - lastSpeechMs >= trailingSilenceMs) {
       state = State.SEND
     }
     return state
@@ -35,6 +43,5 @@ class VoiceSessionPolicy {
 
   companion object {
     const val INITIAL_LISTEN_MS = 4_000L
-    const val TRAILING_SILENCE_MS = 3_000L
   }
 }

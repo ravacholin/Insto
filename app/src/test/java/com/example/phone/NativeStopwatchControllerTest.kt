@@ -32,6 +32,8 @@ class NativeStopwatchControllerTest {
       assertNotNull(intent)
       assertEquals(action, intent.action)
       assertEquals("com.google.android.deskclock", intent.`package`)
+      assertEquals("com.google.android.deskclock", intent.component?.packageName)
+      assertEquals("com.android.deskclock.HandleDeskClockApiCalls", intent.component?.className)
       assertFalse(result.retainRequest)
     }
     assertNull(shadowOf(app).nextStartedActivity)

@@ -16,6 +16,21 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class FloatingOverlayTest {
+  @Test fun `reference preview can be removed without sending`() {
+    var removed = false
+    composeRule.setContent {
+      PingAssistTheme {
+        AssistOverlayScreen(FloatingAssistantState(sourceContext = com.example.context.SharedTextContext(
+          "Documento compartido", com.example.context.SharedTextContext.Source.SHARED)), true, true,
+          {}, {}, {}, {}, {}, onRemoveContext = { removed = true })
+      }
+    }
+    composeRule.onNodeWithText("Documento compartido").assertExists()
+    composeRule.onNodeWithTag("overlay_remove_context").performClick()
+    composeRule.runOnIdle { assertTrue(removed) }
+    composeRule.onNodeWithTag("overlay_send_button").assertIsNotEnabled()
+  }
+
   @get:Rule val composeRule = createComposeRule()
 
   @Test fun `enabled but disconnected auto send service still exposes accessibility settings`() {

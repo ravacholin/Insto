@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Android-independent phone tests with the project's pinned Kotlin/JUnit versions.
+"""Run Android-independent command, context and voice tests with pinned Kotlin/JUnit versions.
 
 Downloads Maven artifacts to the OS cache, never edits the Android build or signing.
 Pass JUnit class names to select tests; by default discovers Android-free tests.
@@ -55,7 +55,10 @@ def main():
              "LocalIntentRegistry", "ExtendedLocalIntents", "NativeActionParameters",
              "DocumentNamePolicy", "ConfiguredRoutineStore"]
     sources = [str(source / (name + ".kt")) for name in names if (source / (name + ".kt")).exists()]
-    tests = []
+    sources += [str(ROOT / "app/src/main/java/com/example/audio/VoiceSessionPolicy.kt")]
+    sources += [str(ROOT / "app/src/main/java/com/example/context/SharedTextContext.kt")]
+    tests = [ROOT / "app/src/test/java/com/example/audio/VoiceSessionPolicyTest.kt"]
+    tests += [ROOT / "app/src/test/java/com/example/context/SharedTextContextTest.kt"]
     for path in sorted((ROOT / "app/src/test/java/com/example/phone").glob("*Test.kt")):
         text = path.read_text()
         if any(token in text for token in ("import android.", "import androidx.", "org.robolectric", "com.example.testsupport")):
@@ -67,7 +70,7 @@ def main():
                    "-no-stdlib", "-no-reflect", "-jvm-target", "11", "-classpath", classpath,
                    "-d", classes] + sources + [str(path) for path in tests]
         subprocess.run(command, check=True, cwd=ROOT)
-        selected = sys.argv[1:] or ["com.example.phone." + path.stem for path in tests]
+        selected = sys.argv[1:] or ["com.example." + path.parent.name + "." + path.stem for path in tests]
         resources = str(ROOT / "app/src/test/resources")
         subprocess.run(["java", "-cp", classes + os.pathsep + resources + os.pathsep + classpath,
                         "org.junit.runner.JUnitCore"] + selected, check=True, cwd=ROOT)

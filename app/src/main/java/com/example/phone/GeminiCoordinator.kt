@@ -23,10 +23,13 @@ class GeminiCoordinator(
       when (local) {
         is PhoneRoute.Local -> return InterpretationResult.Direct(local.command)
         is PhoneRoute.Clarify -> {
-          // A date-bearing alarm needs the registry continuation's source-date guard.
-          val datedAlarm = local.context == "alarm" && Regex("\\b(?:hoy|manana)\\b")
-            .containsMatchIn(PhoneCommandParser.normalize(request.text).replace("de la manana", ""))
-          return InterpretationResult.Clarification(local.prompt, if (datedAlarm) "intent:alarm" else local.context)
+          // Missing fields may be present in the explicit reference. Otherwise retain the local fast path.
+          if (request.sourceContext == null || !router.isEnabled()) {
+            // A date-bearing alarm needs the registry continuation's source-date guard.
+            val datedAlarm = local.context == "alarm" && Regex("\\b(?:hoy|manana)\\b")
+              .containsMatchIn(PhoneCommandParser.normalize(request.text).replace("de la manana", ""))
+            return InterpretationResult.Clarification(local.prompt, if (datedAlarm) "intent:alarm" else local.context)
+          }
         }
         PhoneRoute.Instinct -> if (RequestSafetyPolicy.isExplicitQuery(request.text)) return InterpretationResult.Query()
         else -> Unit
@@ -68,7 +71,7 @@ class GeminiCoordinator(
             is PhoneRoute.Unsupported -> return@withTimeout InterpretationResult.Rejected(registered.message)
             is PhoneRoute.Clarify -> {
               val type = when (decision.choice) { "volume_set" -> "volume"; "app_open" -> "open_app"; else -> decision.choice }
-              if (type !in CapabilityCatalog.specs || local is PhoneRoute.Clarify)
+              if (type !in CapabilityCatalog.specs || local is PhoneRoute.Clarify && request.sourceContext == null)
                 return@withTimeout InterpretationResult.Clarification(registered.prompt, registered.context)
             }
             else -> Unit
