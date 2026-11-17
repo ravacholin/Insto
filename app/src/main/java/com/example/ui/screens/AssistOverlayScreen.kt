@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -67,6 +68,7 @@ fun AssistOverlayScreen(
   onContinueWorkflow: () -> Unit = {},
   onRetryWorkflow: () -> Unit = {},
   onCancelWorkflow: () -> Unit = {},
+  onInstinct: () -> Unit = {},
 ) {
   var showExamples by remember { mutableStateOf(false) }
   val context = LocalContext.current
@@ -98,9 +100,18 @@ fun AssistOverlayScreen(
     ) {
       Column(Modifier.heightIn(max = 640.dp).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-          Box(Modifier.size(34.dp).background(Color.White, controlShape),
-            contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Mic, null, tint = Color.Black, modifier = Modifier.size(19.dp))
+          IconButton(
+            onClick = { keyboard?.hide(); onInstinct() },
+            enabled = !busy,
+            modifier = Modifier.testTag("overlay_instinct_button"),
+          ) {
+            Box(Modifier.size(34.dp).background(Color.White, controlShape), contentAlignment = Alignment.Center) {
+              Icon(
+                painterResource(com.example.R.drawable.ic_chat_bubble),
+                if (state.text.isBlank()) "Abrir chat de Instinct" else "Enviar texto a Instinct",
+                tint = Color.Black, modifier = Modifier.size(19.dp),
+              )
+            }
           }
           Spacer(Modifier.width(10.dp))
           Column(Modifier.weight(1f)) {

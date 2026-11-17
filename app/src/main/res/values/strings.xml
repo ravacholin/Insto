@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">PingAssist</string>
+    <string name="app_name">Insto</string>
     <string name="accessibility_service_label">PingAssist Auto-Send &amp; Triggers</string>
     <string name="accessibility_service_description">Asistente de Insto para enviar mensajes y audios por WhatsApp, activar el panel con la burbuja o las teclas de volumen y controlar el cronómetro de Reloj de Google cuando lo pedís. Solo opera las aplicaciones correspondientes a una solicitud activa.</string>
     <string name="widget_description">Tap to open your pinned WhatsApp contact or tap the mic to record &amp; send a voice note.</string>

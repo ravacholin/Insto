@@ -213,10 +213,10 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `app_name matches PingAssist`() {
+  fun `app_name matches Insto`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("PingAssist", appName)
+    assertEquals("Insto", appName)
   }
 
   @Test
