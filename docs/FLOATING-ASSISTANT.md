@@ -403,3 +403,27 @@ aplazadas. Los bloqueos de integración y proveedor descritos arriba permanecen.
 La compilación final de `compileDebugKotlin compileDebugUnitTestKotlin` terminó
 con **BUILD SUCCESSFUL** sobre las fuentes finales (22 tareas, código de salida
 0). Esto verifica compilación, no ejecución de las suites Robolectric bloqueadas.
+
+### Integración compatible 1.9.0 (2026-11-17)
+
+La versión 1.9.0 integra las mejoras de Gemini con main 899c93f, incluidas las
+acciones nativas ampliadas, las rutinas configuradas y Spotify/YouTube. Sustituye
+la entrega separada y los conflictos descritos en las notas históricas de 1.8.0.
+Con Gemini activado, todos los pedidos nuevos pasan por Decisions; los parámetros
+ya reconocidos se resuelven mediante el catálogo existente. La extracción es una
+segunda etapa acotada para capacidades tipadas, y sus resultados se revisan antes
+de ejecutar. Las continuaciones conservan el intent, los campos y el paso elegido.
+En modo local no se consulta la red. Las propuestas inciertas y errores conservan
+el pedido; no se convierten accidentalmente en mensajes a Instinct.
+
+Se añadió CI Android real para ejecutar Robolectric y ensamblar el APK. La primera
+corrida detectó fixtures de actividades que no registraban sus filtros en
+Robolectric 4.16.1, caché de FileProvider entre aplicaciones de prueba y supuestos
+incorrectos sobre permisos y controles fuera de pantalla. Esos casos se corrigen
+sin ampliar los archivos compartidos ni omitir permisos del producto. La
+documentación final de la entrega está en
+`docs/releases/Insto-1.9.0-integrado-debug.md`.
+
+La suite Android integrada terminó sin fallos: 287 casos, 286 aprobados y una
+evaluación real opt-in omitida. El mismo job compiló el APK. Evidencia:
+https://github.com/ravacholin/Insto/actions/runs/44039148156
