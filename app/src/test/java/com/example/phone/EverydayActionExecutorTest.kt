@@ -26,7 +26,8 @@ class EverydayActionExecutorTest {
       applicationInfo = ApplicationInfo().apply { packageName = "phone"; enabled = true }
     }
     val pm = shadowOf(app.packageManager)
-    pm.installPackage(PackageInfo().apply { packageName = "phone"; applicationInfo = info.applicationInfo; activities = arrayOf(info) })
+    pm.installPackage(PackageInfo().apply { packageName = "phone"; applicationInfo = info.applicationInfo })
+    pm.addOrUpdateActivity(info)
     pm.addIntentFilterForActivity(ComponentName("phone", info.name), IntentFilter(Intent.ACTION_DIAL).apply {
       addCategory(Intent.CATEGORY_DEFAULT); addDataScheme("tel")
     })
@@ -41,7 +42,8 @@ class EverydayActionExecutorTest {
         applicationInfo = ApplicationInfo().apply { packageName = pkg; enabled = true }
       }
       val pm = shadowOf(app.packageManager)
-      pm.installPackage(PackageInfo().apply { packageName = pkg; applicationInfo = info.applicationInfo; activities = arrayOf(info) })
+      pm.installPackage(PackageInfo().apply { packageName = pkg; applicationInfo = info.applicationInfo })
+      pm.addOrUpdateActivity(info)
       pm.addIntentFilterForActivity(ComponentName(pkg, info.name), IntentFilter(Intent.ACTION_VIEW).apply {
         addCategory(Intent.CATEGORY_DEFAULT); addDataScheme("https")
       })

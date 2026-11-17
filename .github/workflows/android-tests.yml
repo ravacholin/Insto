@@ -2,9 +2,13 @@ name: Android tests
 
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
   push:
     branches:
       - 'feat/**'
+    paths-ignore:
+      - 'docs/**'
 
 permissions:
   contents: read

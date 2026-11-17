@@ -49,7 +49,7 @@ class FloatingOverlayTest {
       }
     }
     composeRule.onNodeWithTag("overlay_send_button").assertIsNotEnabled()
-    composeRule.onNodeWithTag("overlay_microphone").performClick()
+    composeRule.onNodeWithTag("overlay_microphone").performScrollTo().performClick()
     composeRule.runOnIdle { assertTrue(restarted) }
   }
 

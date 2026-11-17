@@ -15,7 +15,8 @@ fun installNativeHandler(app: Application, action: String, scheme: String? = nul
     applicationInfo = ApplicationInfo().apply { packageName = "native.handler"; enabled = true }
   }
   val pm = shadowOf(app.packageManager)
-  pm.installPackage(PackageInfo().apply { packageName = activity.packageName; applicationInfo = activity.applicationInfo; activities = arrayOf(activity) })
+  pm.installPackage(PackageInfo().apply { packageName = activity.packageName; applicationInfo = activity.applicationInfo })
+  pm.addOrUpdateActivity(activity)
   pm.addIntentFilterForActivity(ComponentName(activity.packageName, activity.name), IntentFilter(action).apply {
     addCategory(Intent.CATEGORY_DEFAULT)
     scheme?.let { addDataScheme(it) }

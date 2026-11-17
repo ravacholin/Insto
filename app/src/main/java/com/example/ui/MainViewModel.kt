@@ -219,13 +219,14 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun cancelFloatingWorkflow() {
+    val hadWorkflow = activeWorkflow() != null
     floatingGeneration++; floatingJob?.cancel()
     cancelClockAutomation?.invoke(); cancelClockAutomation = null
     workflow.cancel(); conversation.clear(); clarification=null; clarificationRequest=null; semanticDraft = null; pendingQuery = null; approvedQueryText = null
     confirmation = null; cameraCommand = null; contactsCommand = null; notificationsCommand = null
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, needsConfirmation = false,
       appOptions = emptyList(), contactOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false,
-      status = "Se detuvieron los pasos pendientes. Los ya realizados no se revierten.", error = null)
+      status = if (hadWorkflow) "Se detuvieron los pasos pendientes. Los ya realizados no se revierten." else "Pedido cancelado.", error = null)
     syncWorkflow()
   }
 
