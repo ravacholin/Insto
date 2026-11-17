@@ -32,26 +32,21 @@ class FloatingContextTest {
   @Test fun newReferenceReplacesAPreviouslySelectedAttachment() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
-    val provider = object : android.content.ContentProvider() {
-      override fun onCreate() = true
-      override fun getType(uri: android.net.Uri) = "text/plain"
-      override fun query(uri: android.net.Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?) =
-        android.database.MatrixCursor(arrayOf(android.provider.OpenableColumns.DISPLAY_NAME)).apply { addRow(arrayOf("anterior.txt")) }
-      override fun openAssetFile(uri: android.net.Uri, mode: String) = android.content.res.AssetFileDescriptor(
-        android.os.ParcelFileDescriptor.open(File.createTempFile("attachment", ".txt", app.cacheDir), android.os.ParcelFileDescriptor.MODE_READ_ONLY), 0, -1)
-      override fun insert(uri: android.net.Uri, values: android.content.ContentValues?) = null
-      override fun delete(uri: android.net.Uri, selection: String?, selectionArgs: Array<out String>?) = 0
-      override fun update(uri: android.net.Uri, values: android.content.ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
-    }
-    org.robolectric.shadows.ShadowContentResolver.registerProviderInternal("context-test", provider)
+    // Use the manifest-backed provider: a raw registered provider has no attached Android context.
+    org.robolectric.Robolectric.buildContentProvider(androidx.core.content.FileProvider::class.java).create()
+    val file = File.createTempFile("context-attachment", ".txt", File(app.cacheDir, "voice_notes").apply { mkdirs() })
+      .apply { writeText("Contenido anterior") }
+    val uri = androidx.core.content.FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", file)
     val vm = MainViewModel(app)
     try {
-      vm.selectFloatingAttachment(android.net.Uri.parse("content://context-test/anterior"))
-      assertNotNull(vm.floatingAssistant.value.attachment)
+      vm.selectFloatingAttachment(uri)
+      assertNull(vm.floatingAssistant.value.error)
+      assertEquals(uri, vm.floatingAssistant.value.attachment?.uri)
+      assertEquals(file.name, vm.floatingAssistant.value.attachment?.name)
       vm.setFloatingContext(reference)
       assertNull(vm.floatingAssistant.value.attachment)
       assertEquals(reference, vm.floatingAssistant.value.sourceContext)
-    } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
+    } finally { vm.dismissFloatingAssistant(); file.delete(); Dispatchers.resetMain() }
   }
 
   @Test fun receivingContextAloneDoesNotInterpretOrExecuteAnything() = runTest {

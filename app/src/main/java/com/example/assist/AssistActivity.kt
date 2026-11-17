@@ -211,8 +211,8 @@ class AssistActivity : ComponentActivity() {
     // A repeated hotkey brings the existing panel forward without destroying its draft.
   }
 
-  private fun receiveSharedText(incoming: Intent) {
-    if (!SharedTextIntents.supports(incoming)) return
+  private fun receiveSharedText(incoming: Intent?) {
+    if (incoming == null || !SharedTextIntents.supports(incoming)) return
     runCatching { SharedTextIntents.read(incoming) }
       .onSuccess { viewModel.setFloatingContext(it) }
       .onFailure { viewModel.setFloatingContext(null, it.message ?: "No se pudo leer el texto compartido.") }
