@@ -31,6 +31,12 @@ class WhatsAppShareDialogRegressionTest {
   private fun screen(window: Int, vararg children: AccessibilityNodeInfo) = node().also { root ->
     ReflectionHelpers.setField(root, "mWindowId", window)
     children.forEach { shadowOf(root).addChild(it) }
+    // Android delivers sealed snapshots to AccessibilityService. Build the tree first,
+    // then seal every node so framework queries exercise that same contract.
+    (children.toList() + root).forEach {
+      ReflectionHelpers.callInstanceMethod<Void>(it, "setSealed",
+        ReflectionHelpers.ClassParameter.from(java.lang.Boolean.TYPE, true))
+    }
   }
 
   @Test fun nativeQuestionWithCustomButtonIdConfirmsOnceThenSendsTheAudioOnce() {
