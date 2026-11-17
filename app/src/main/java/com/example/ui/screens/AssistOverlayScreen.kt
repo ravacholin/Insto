@@ -230,7 +230,7 @@ fun AssistOverlayScreen(
         }
         if (state.needsGroqKey) TextButton(onClick = onConfigureGroq) { Text("Configurar mi clave de Groq") }
         if (state.error?.contains("contacto") == true) TextButton(onClick = onConfigureContact) { Text("Configurar contacto de Instinct") }
-        if (!autoSendEnabled && state.needsWhatsAppAccessibility) {
+          if (state.needsWhatsAppAccessibility) {
           Text("Para enviar sin volver a tocar WhatsApp, activá el servicio de Accesibilidad de PingAssist.",
             color = secondary, style = MaterialTheme.typography.labelSmall)
           TextButton(onClick = {

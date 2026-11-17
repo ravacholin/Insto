@@ -89,6 +89,7 @@ class FloatingHybridRoutingTest {
     val app = ApplicationProvider.getApplicationContext<Application>()
     val disconnect = ConnectedAccessibility.start(app)
     val audio = app.getSystemService(android.media.AudioManager::class.java)
+    audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 5, 0)
     val before = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
     var calls = 0
     val original = "¿Podés bajar el volumen, por favor?"

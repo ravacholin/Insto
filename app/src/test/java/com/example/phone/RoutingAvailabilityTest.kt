@@ -67,6 +67,18 @@ class RoutingAvailabilityTest {
     assertEquals(0, currentTime)
   }
 
+  @Test fun dateBearingAlarmClarificationKeepsTheSourceDateGuardWithoutGoogle() = runTest {
+    val text = "alarma mañana a las siete"
+    val result = coordinator(DecisionClassifier { awaitCancellation() })
+      .interpret(InterpretationRequest(text), parser.parse(text)) as InterpretationResult.Clarification
+    assertEquals("intent:alarm", result.context)
+    assertEquals(0, currentTime)
+    // A complete time alone must not replace tomorrow with the next occurrence today.
+    val reply = LocalIntentRegistry.default.reply("alarm", "19:00", text to java.util.Calendar.getInstance())
+    assertTrue(reply is PhoneRoute.Clarify)
+    assertEquals("intent:alarm", (reply as PhoneRoute.Clarify).context)
+  }
+
   @Test fun pendingDraftAndExplicitRestrictionsRemainLocalOnFailure() = runTest {
     val c = coordinator(DecisionClassifier { throw DecisionException("offline") })
     val draft = DraftPlan.fromCommands(listOf(PhoneCommand.Timer(600)))
