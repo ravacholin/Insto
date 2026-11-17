@@ -39,4 +39,4 @@ Variante debug, código 17. Integrada sobre main `196685e66560799b2f3c3bdff29fcf
 - La regresión de adjuntos usa el FileProvider real del manifest y comprueba URI/nombre antes del reemplazo. No se omitieron pruebas.
 - APK recompilado, firma v2 y alineación verificadas, mismo nombre y enlace de Drive.
 
-Las trazas completas se imprimen automáticamente en CI si falla una prueba. Se aisló FileProvider por caso en las pruebas de audio. La regresión del Reloj usa el monitor de intents de Android, con una sola llamada al componente exacto, y conserva la detención del flotante antes del siguiente frame.
+Las trazas completas se imprimen automáticamente en CI si falla una prueba. Se aisló FileProvider por caso en las pruebas de audio. La regresión del Reloj registra la llamada real de la aplicación tras delegar a Android, exige una sola llamada al componente exacto y conserva la detención del flotante antes del siguiente frame.
