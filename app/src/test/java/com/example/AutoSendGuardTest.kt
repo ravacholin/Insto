@@ -45,13 +45,15 @@ class AutoSendGuardTest {
     assertFalse(AutoSendGuard.ownedAudioPreviewMatches(8, 8, 8, 42, 42, "instinct_123456789.m4a", "old draft", null))
     assertFalse(AutoSendGuard.ownedAudioPreviewMatches(8, 8, 8, 42, 42, "instinct_123456789.m4a", null, "caption"))
   }
-  @Test fun `preview must be newer than successful launch and not a preexisting window`() {
+  @Test fun `preview must belong to the prepared launch and not a preexisting window`() {
     assertTrue(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 43, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
     assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 299, 43, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
-    assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 300, 43, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
+    // Preparation and window creation can happen within the same uptime millisecond.
+    assertTrue(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 300, 43, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
     assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 42, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
     assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 7, 300, 301, 43, setOf(41, 42), "com.whatsapp.audiopicker.AudioPreviewActivity"))
-    assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 43, emptySet(), "com.whatsapp.audiopicker.AudioPreviewActivity"))
+    assertTrue(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 43, emptySet(), "com.whatsapp.audiopicker.AudioPreviewActivity"))
+    assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 43, null, "com.whatsapp.audiopicker.AudioPreviewActivity"))
     assertFalse(AutoSendGuard.freshAudioPreviewMatches(8, 8, 300, 301, 43, setOf(41, 42), "com.whatsapp.HomeActivity"))
   }
   @Test fun `text must exactly match including unicode and newlines`() {

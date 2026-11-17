@@ -443,7 +443,7 @@ class MainViewModel @JvmOverloads constructor(
       confirmFloatingAction(normalized != "no"); return true
     }
     val local = phoneParser.parse(text)
-    val fresh = local is PhoneRoute.Local || text.trimStart().startsWith("¿") ||
+    val fresh = local is PhoneRoute.Local || RequestSafetyPolicy.isQuestion(text) || text.trimStart().startsWith("¿") ||
       Regex("^(?:que|como|por que|donde|cual|instinct|explica|conta|ayuda|necesito|quiero|abri|busca|pone|agenda|llama)\\b").containsMatchIn(normalized)
     val contacts = floatingState.value.contactOptions
     if (contacts.isNotEmpty()) {

@@ -39,14 +39,14 @@ object AutoSendGuard {
       fileName?.startsWith("instinct_") == true && fileName.endsWith(".m4a") &&
       composer.isNullOrBlank() && caption == null
 
-  fun freshShareWindowMatches(request: Long, shareLaunch: Long, committedAt: Long, eventAt: Long,
-    windowId: Int, prelaunchWindows: Set<Int>): Boolean =
-    request == shareLaunch && committedAt >= 0 && eventAt > committedAt && windowId >= 0 &&
-      prelaunchWindows.isNotEmpty() && windowId !in prelaunchWindows
+  fun freshShareWindowMatches(request: Long, shareLaunch: Long, launchStartedAt: Long, eventAt: Long,
+    windowId: Int, prelaunchWindows: Set<Int>?): Boolean =
+    request == shareLaunch && launchStartedAt >= 0 && eventAt >= launchStartedAt && windowId >= 0 &&
+      prelaunchWindows != null && windowId !in prelaunchWindows
 
-  fun freshAudioPreviewMatches(request: Long, shareLaunch: Long, committedAt: Long, eventAt: Long,
-    windowId: Int, prelaunchWindows: Set<Int>, className: String?): Boolean =
-    freshShareWindowMatches(request, shareLaunch, committedAt, eventAt, windowId, prelaunchWindows) &&
+  fun freshAudioPreviewMatches(request: Long, shareLaunch: Long, launchStartedAt: Long, eventAt: Long,
+    windowId: Int, prelaunchWindows: Set<Int>?, className: String?): Boolean =
+    freshShareWindowMatches(request, shareLaunch, launchStartedAt, eventAt, windowId, prelaunchWindows) &&
       className?.endsWith(".AudioPreviewActivity") == true
 
   private fun cleanHeader(value: String): String = value

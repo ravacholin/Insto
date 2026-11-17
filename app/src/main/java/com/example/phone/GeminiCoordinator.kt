@@ -128,7 +128,7 @@ class GeminiCoordinator(
     val result = withTimeout(8000) { extractor.interpret(request) }
     currentCoroutineContext().ensureActive()
     return when (result) {
-      is InterpretationResult.Query -> if (request.draft == null) result.copy(needsConfirmation = fallback)
+      is InterpretationResult.Query -> if (request.draft == null) InterpretationResult.Query()
         else InterpretationResult.Rejected("Hay un pedido pendiente. Completalo o cancelalo antes de enviar una consulta.")
       is InterpretationResult.Plan -> {
         require(result.commands.size in 1..10)

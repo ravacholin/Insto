@@ -58,7 +58,7 @@ class FloatingGeminiCoordinatorTest {
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
   }
 
-  @Test fun fallbackQueryNeedsExplicitConfirmationAndEditingInvalidatesIt() = runTest {
+  @Test fun fallbackQueryDoesNotAskForConfirmationAndRetainsTextWhenContactIsMissing() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     val router = HybridPhoneRouter({ true }, DecisionClassifier { throw DecisionException("unavailable", GeminiFailureKind.UNAVAILABLE) })
@@ -68,9 +68,11 @@ class FloatingGeminiCoordinatorTest {
     }
     val vm = MainViewModel(app, hybridRouter = router, structuredExtractor = extractor)
     try {
-      vm.updateFloatingText("ayudame a estudiar"); vm.sendFloatingText { fail("Confirmation required") }; runCurrent()
-      assertTrue(vm.floatingAssistant.value.needsConfirmation)
-      assertTrue(vm.floatingAssistant.value.queryPreview)
+      vm.updateFloatingText("ayudame a estudiar"); vm.sendFloatingText { fail("No contact configured") }; advanceUntilIdle()
+      assertFalse(vm.floatingAssistant.value.needsConfirmation)
+      assertFalse(vm.floatingAssistant.value.queryPreview)
+      assertEquals("ayudame a estudiar", vm.floatingAssistant.value.text)
+      assertNotNull(vm.floatingAssistant.value.error)
       vm.enterFloatingTextMode()
       assertFalse(vm.floatingAssistant.value.needsConfirmation)
       vm.updateFloatingText("otro pedido")

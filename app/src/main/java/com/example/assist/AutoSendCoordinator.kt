@@ -23,8 +23,9 @@ object AutoSendCoordinator {
     private set
   @Volatile var shareLaunchCommittedRequestId: Long = -1
     private set
-  @Volatile private var shareLaunchCommittedAtUptimeMs: Long = -1
-  @Volatile private var sharePrelaunchWindows: Set<Int> = emptySet()
+  @Volatile private var shareLaunchPreparedRequestId: Long = -1
+  @Volatile private var shareLaunchStartedAtUptimeMs: Long = -1
+  @Volatile private var sharePrelaunchWindows: Set<Int>? = null
   @Volatile private var freshShareWindows: Set<Int> = emptySet()
   @Volatile var audioPreviewRequestId: Long = -1
     private set
@@ -72,8 +73,9 @@ object AutoSendCoordinator {
     requestId++
     textLaunchCommittedRequestId = -1
     shareLaunchCommittedRequestId = -1
-    shareLaunchCommittedAtUptimeMs = -1
-    sharePrelaunchWindows = emptySet()
+    shareLaunchPreparedRequestId = -1
+    shareLaunchStartedAtUptimeMs = -1
+    sharePrelaunchWindows = null
     freshShareWindows = emptySet()
     audioPreviewRequestId = -1
     audioPreviewWindowId = -1
@@ -97,19 +99,24 @@ object AutoSendCoordinator {
 
   fun markShareLaunchCommitted(request: Long) {
     if (requestId == request && expectedAudioFileName != null) {
-      shareLaunchCommittedAtUptimeMs = SystemClock.uptimeMillis()
       shareLaunchCommittedRequestId = request
     }
   }
 
-  fun prepareShareLaunch(request: Long, windowIds: Set<Int>) {
-    if (requestId == request && shareLaunchCommittedRequestId != request) sharePrelaunchWindows = windowIds.toSet()
+  fun prepareShareLaunch(request: Long, windowIds: Set<Int>?) {
+    if (requestId == request && shareLaunchCommittedRequestId != request) {
+      sharePrelaunchWindows = windowIds?.toSet()
+      shareLaunchStartedAtUptimeMs = SystemClock.uptimeMillis()
+      shareLaunchPreparedRequestId = request
+    }
   }
 
   fun observeShareWindow(packageName: String, className: String?, eventTime: Long, windowId: Int) {
     if (!isArmedFor(packageName) || !AutoSendGuard.freshShareWindowMatches(requestId,
-        shareLaunchCommittedRequestId, shareLaunchCommittedAtUptimeMs, eventTime, windowId,
+        shareLaunchPreparedRequestId, shareLaunchStartedAtUptimeMs, eventTime, windowId,
         sharePrelaunchWindows)) return
+    // Events may be created/delivered inside startActivity. Remember them now; sending
+    // still requires markShareLaunchCommitted after startActivity returns successfully.
     freshShareWindows = freshShareWindows + windowId
     if (className?.endsWith(".AudioPreviewActivity") == true) {
       audioPreviewRequestId = requestId
@@ -151,8 +158,9 @@ object AutoSendCoordinator {
     expectedText = null
     textLaunchCommittedRequestId = -1
     shareLaunchCommittedRequestId = -1
-    shareLaunchCommittedAtUptimeMs = -1
-    sharePrelaunchWindows = emptySet()
+    shareLaunchPreparedRequestId = -1
+    shareLaunchStartedAtUptimeMs = -1
+    sharePrelaunchWindows = null
     freshShareWindows = emptySet()
     audioPreviewRequestId = -1
     audioPreviewWindowId = -1

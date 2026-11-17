@@ -100,11 +100,25 @@ class FloatingAvailabilityRegressionTest {
     } finally { vm.dismissFloatingAssistant(); disconnect(); Dispatchers.resetMain() }
   }
 
-  @Test fun googleTimeoutStillSharesTheOriginalAudioToInstinctExactlyOnce() = runTest {
+  @Test fun googleTimeoutStillSharesTheOriginalAudioToInstinctExactlyOnce() = assertAudioQueryDispatchesOnce(
+    "ayudame a estudiar", DecisionClassifier { awaitCancellation() })
+
+  @Test fun bocaQuestionSharesOriginalAudioWithoutAskingToRetryOrConfirm() = assertAudioQueryDispatchesOnce(
+    "¿Cuándo es la final de Boca por la Copa Sudamericana?", DecisionClassifier { SemanticDecision("unsupported", .99, .99, .99, .99) })
+
+  @Test fun unavailableDecisionsStillSharesAnUnmatchedAudioWithoutConfirmation() = assertAudioQueryDispatchesOnce(
+    "ayudame a estudiar", DecisionClassifier { throw DecisionException("unavailable", GeminiFailureKind.UNAVAILABLE) },
+    object : StructuredCommandExtractor {
+      override suspend fun extract(text: String): List<PhoneCommand> = error("Typed boundary")
+      override suspend fun interpret(request: InterpretationRequest) = InterpretationResult.Query()
+    })
+
+  private fun assertAudioQueryDispatchesOnce(transcript: String, classifier: DecisionClassifier,
+    extractor: StructuredCommandExtractor = StructuredCommandExtractor { error("No extraction") }) = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     configureInstinct()
     val disconnect = ConnectedAccessibility.start(app)
-    val file = File.createTempFile("fallback", ".m4a", File(app.cacheDir, "voice_notes").apply { mkdirs() })
+    val file = File.createTempFile("instinct_", ".m4a", File(app.cacheDir, "voice_notes").apply { mkdirs() })
       .apply { writeText("original audio bytes") }
     val capture = object : FloatingAudioCapture {
       override val snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1500, .5f)
@@ -113,11 +127,14 @@ class FloatingAvailabilityRegressionTest {
       override fun cancel() {}
     }
     var sent = 0
-    val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "ayudame a estudiar" },
-      HybridPhoneRouter({ true }, DecisionClassifier { awaitCancellation() }))
+    val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { transcript },
+      HybridPhoneRouter({ true }, classifier), structuredExtractor = extractor)
     try {
       vm.startFloatingListening { sent++ }; runCurrent(); vm.sendFloatingAudio { sent++ }; advanceUntilIdle()
       assertEquals(1, sent)
+      assertFalse(vm.floatingAssistant.value.needsConfirmation)
+      assertFalse(vm.floatingAssistant.value.queryPreview)
+      assertNull(vm.floatingAssistant.value.error)
       val intent = shadowOf(app).nextStartedActivity
       assertEquals(Intent.ACTION_SEND, intent.action)
       val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)!!
