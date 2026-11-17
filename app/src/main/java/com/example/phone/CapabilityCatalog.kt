@@ -30,7 +30,7 @@ object CapabilityCatalog {
 
   val specs = listOf(
     spec("timer", "seconds", "seconds" to integer(1), "label" to text()),
-    spec("alarm", "hour minute", "hour" to integer(0, 23), "minute" to integer(0, 59), "period" to text("AM", "PM", "24H"), "days" to Field("array"), "label" to text()),
+    spec("alarm", "hour minute", "hour" to integer(0, 23), "minute" to integer(0, 59), "period" to text("AM", "PM", "24H"), "days" to Field("array"), "label" to text(), "date" to text()),
     spec("volume", "operation", "operation" to text("UP", "DOWN", "SET"), "percent" to integer(0, 100)),
     spec("torch", "enabled", "enabled" to Field("boolean")),
     spec("open_app", "name", "name" to text()),

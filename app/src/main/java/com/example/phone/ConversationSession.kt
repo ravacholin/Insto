@@ -199,8 +199,18 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
         val alarmBody = normalized.substringAfter("alarma", normalized.removePrefix("despertame")).trim()
         Regex("^(?:a las? )?([a-z0-9]+)(?::([0-9]{2}))?").find(alarmBody)?.let {
           PhoneCommandParser.number(it.groupValues[1])?.takeIf { hour -> hour in 0..23 }?.let { hour ->
-            fields.put("hour", hour).put("minute", it.groupValues[2].toIntOrNull() ?: 0)
-            if (it.groupValues[2].isNotEmpty()) fields.put("period", "24H")
+            // Parse the whole source with a provisional period, then remove that period.
+            // This obtains minutes/days/label without inventing the missing AM/PM answer.
+            val suffix = Regex(" (?:todos los|cada |llamad[ao] |con nombre )").find(normalized)?.range?.first ?: normalized.length
+            val completed = normalized.substring(0,suffix) + " de la manana" + normalized.substring(suffix)
+            val candidate = (PhoneCommandParser().parse(completed) as? PhoneRoute.Local)?.command as? PhoneCommand.Alarm
+            if (candidate != null) {
+              val known = PhoneCommandCodec.encode(candidate)
+              known.keys().forEach { key -> fields.put(key, known.get(key)) }
+            }
+            fields.put("hour", hour)
+            if (!fields.has("minute") && it.groupValues[2].isNotEmpty()) fields.put("minute", it.groupValues[2].toInt())
+            if (it.groupValues[2].isNotEmpty() && Regex("^(?:a las? )?0[0-9]:").containsMatchIn(alarmBody)) fields.put("period", "24H")
           }
         }
       }

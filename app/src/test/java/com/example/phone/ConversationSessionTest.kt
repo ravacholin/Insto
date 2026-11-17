@@ -5,6 +5,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationSessionTest {
+  @Test fun alarmPeriodReplyPreservesMinutesRecurrenceAndLabel() {
+    val s = session()
+    assertTrue(s.accept("alarma a las siete y media todos los días llamada Trabajo") is ConversationResult.Prompt)
+    val result = s.accept("de la mañana") as ConversationResult.Plan
+    assertEquals(PhoneCommand.Alarm(7,30,(1..7).toList(),"trabajo"), result.commands.single())
+  }
   @Test fun incompleteAlarmAndTimerKeepKnownFieldsAcrossShortReplies() {
     val s = session()
     assertTrue(s.accept("alarma a las siete") is ConversationResult.Prompt)
