@@ -35,9 +35,11 @@ data class NativeIntentSpec(
         is PhoneCommand.Navigate -> NativeIntentSpec("android.intent.action.VIEW",
           "https://www.google.com/maps/dir/?api=1&destination=${encode(command.destination)}&travelmode=${mode}&dir_action=navigate")
         is PhoneCommand.MapSearch -> NativeIntentSpec("android.intent.action.VIEW", "https://www.google.com/maps/search/?api=1&query=${encode(command.query)}")
-        is PhoneCommand.YouTubeSearch -> NativeIntentSpec("android.intent.action.VIEW", "https://www.youtube.com/results?search_query=${encode(command.query)}", preferredPackage = "com.google.android.youtube")
-        is PhoneCommand.SpotifySearch -> NativeIntentSpec("android.intent.action.VIEW", "https://open.spotify.com/search/${encode(command.query).replace("+", "%20")}", preferredPackage = "com.spotify.music")
-        is PhoneCommand.MusicSearch -> NativeIntentSpec("android.media.action.MEDIA_PLAY_FROM_SEARCH", stringExtras = mapOf("query" to command.query, "android.intent.extra.focus" to "vnd.android.cursor.item/*"))
+        is PhoneCommand.YouTubeSearch -> NativeIntentSpec("android.intent.action.VIEW", "https://www.youtube.com/results?search_query=${encode(command.query)}", preferredPackage = MediaApp.YOUTUBE.packageName)
+        is PhoneCommand.SpotifySearch -> NativeIntentSpec("android.intent.action.VIEW", "https://open.spotify.com/search/${encode(command.query).replace("+", "%20")}", preferredPackage = MediaApp.SPOTIFY.packageName)
+        is PhoneCommand.MusicSearch -> NativeIntentSpec("android.media.action.MEDIA_PLAY_FROM_SEARCH",
+          stringExtras = mapOf("query" to command.query, "android.intent.extra.focus" to "vnd.android.cursor.item/*"),
+          preferredPackage = command.app?.packageName)
         is PhoneCommand.Camera -> NativeIntentSpec(if (command.video) "android.media.action.VIDEO_CAMERA" else "android.media.action.STILL_IMAGE_CAMERA")
         is PhoneCommand.Dial -> PhoneNumbers.canonical(command.target)?.let { NativeIntentSpec("android.intent.action.DIAL", "tel:$it") }
         is PhoneCommand.CalendarEvent -> NativeIntentSpec("android.intent.action.INSERT", "content://com.android.calendar/events",

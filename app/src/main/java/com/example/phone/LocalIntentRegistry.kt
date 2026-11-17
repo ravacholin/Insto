@@ -167,13 +167,31 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
       for ((id,desc) in listOf("wifi_on" to "Activar Wi-Fi","wifi_off" to "Desactivar Wi-Fi","bluetooth_on" to "Activar Bluetooth","bluetooth_off" to "Desactivar Bluetooth")) {
         unavailable(id,IntentCategory.ANDROID,desc,desc.lowercase(),"quiero ${desc.lowercase()}",emptyList(),"Conmutación restringida a sistema/device owner en Android moderno",emptyList(),"Android no permite a esta app cambiar ese estado directamente. No cambié la conectividad. Podés pedir abrir los ajustes correspondientes.")
       }
-      for ((id,action,desc) in listOf(Triple("silent_on",PlatformAction.SILENT_ON,"Activar silencio de llamadas"),Triple("silent_off",PlatformAction.SILENT_OFF,"Desactivar silencio de llamadas"),Triple("dnd_on",PlatformAction.DND_ON,"Activar No molestar"),Triple("dnd_off",PlatformAction.DND_OFF,"Desactivar No molestar"))) {
-        fixed(id,IntentCategory.ANDROID,desc,desc.lowercase(),"quiero ${desc.lowercase()}",PhoneCommand.Platform(action),"AudioManager / NotificationManager con acceso de política",if(action in setOf(PlatformAction.SILENT_ON,PlatformAction.SILENT_OFF)) policy+"android.permission.MODIFY_AUDIO_SETTINGS" else policy)
+      val ringerPermissions = policy + "android.permission.MODIFY_AUDIO_SETTINGS"
+      fixed("silent_on", IntentCategory.ANDROID, "Silenciar llamadas y notificaciones", "silenciar", "poner en silenciar",
+        PhoneCommand.Platform(PlatformAction.SILENT_ON), "AudioManager.ringerMode", ringerPermissions)
+      fixed("vibrate_on", IntentCategory.ANDROID, "Activar el modo vibración", "modo vibrar", "poner en vibrar",
+        PhoneCommand.Platform(PlatformAction.VIBRATE_ON), "AudioManager.ringerMode", ringerPermissions)
+      for ((id,action,desc) in listOf(Triple("silent_off",PlatformAction.SILENT_OFF,"Desactivar silencio de llamadas"),Triple("dnd_on",PlatformAction.DND_ON,"Activar No molestar"),Triple("dnd_off",PlatformAction.DND_OFF,"Desactivar No molestar"))) {
+        fixed(id,IntentCategory.ANDROID,desc,desc.lowercase(),"quiero ${desc.lowercase()}",PhoneCommand.Platform(action),"AudioManager / NotificationManager con acceso de política",if(action == PlatformAction.SILENT_OFF) ringerPermissions else policy)
       }
       for ((id,op,desc) in listOf(Triple("play",MediaOp.PLAY,"Reanudar reproducción"),Triple("pause",MediaOp.PAUSE,"Pausar reproducción"),Triple("next",MediaOp.NEXT,"Siguiente tema"),Triple("previous",MediaOp.PREVIOUS,"Tema anterior"),Triple("status",MediaOp.STATUS,"Consultar qué está sonando"))) {
         fixed("media_$id",IntentCategory.MEDIA,desc,desc.lowercase(),"quiero ${desc.lowercase()}",PhoneCommand.Media(op),"MediaSession.TransportControls",media,"Acción o estado de una sesión compatible; elegir si hay varias")
       }
-      parsed("music",IntentCategory.MEDIA,"Buscar música en una aplicación compatible","poné música de Soda Stereo","reproducí música de Soda Stereo","music","¿Qué música querés escuchar?",listOf(p("query")),"MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH",result="Solicitud entregada; reproducción depende de integración") { it is PhoneCommand.MusicSearch }
+      fixed("media_stop", IntentCategory.MEDIA, "Parar la reproducción actual", "parar la música", "detener la reproducción",
+        PhoneCommand.Media(MediaOp.STOP), "MediaSession.TransportControls", media, "Se envía la orden de parar o pausar a la sesión elegida")
+      for (app in MediaApp.entries) {
+        for ((verb, operation) in listOf("pausar" to MediaOp.PAUSE, "parar" to MediaOp.STOP)) {
+          val id = "media_${operation.name.lowercase()}_${app.name.lowercase()}"
+          fixed(id, IntentCategory.MEDIA, "${verb.replaceFirstChar(Char::uppercaseChar)} la reproducción de ${app.label}",
+            "$verb ${app.label}", "$verb la reproducción en ${app.label}", PhoneCommand.Media(operation, app.packageName),
+            "MediaSession.TransportControls", media, "Se envía el control a la sesión de ${app.label}")
+        }
+      }
+      parsed("music", IntentCategory.MEDIA, "Solicitar la reproducción por título en una aplicación compatible",
+        "reproducir De música ligera en Spotify", "reproducir De música ligera en YouTube", "music", "¿Qué querés escuchar?",
+        listOf(p("query"), p("app", "SPOTIFY/YOUTUBE", false)), "MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH o MediaSession",
+        result = "Se solicita reproducción y, si la app elegida no admite el pedido, se abre su búsqueda") { it is PhoneCommand.MusicSearch }
       parsed("navigate",IntentCategory.NAVIGATION,"Iniciar ruta al destino con modo de viaje admitido","llevame a Córdoba","navegá a Córdoba","navigate","¿A dónde querés ir?",listOf(p("destination"),p("mode","DRIVING/WALKING/BICYCLING/TRANSIT",false)),"Maps directions",result="Ruta entregada a Maps") { it is PhoneCommand.Navigate }
       parsed("maps",IntentCategory.NAVIGATION,"Buscar un lugar en el mapa","buscá en Maps farmacias","buscá farmacias cerca de mí","maps","¿Qué lugar querés buscar?",listOf(p("query")),"Maps search") { it is PhoneCommand.MapSearch }
       parsed("place_save",IntentCategory.NAVIGATION,"Guardar dirección de casa o trabajo","guardá mi casa en Avenida Colón 123","mi casa es Avenida Colón 123","place","Indicá casa o trabajo y la dirección completa.",listOf(p("alias","casa/trabajo"),p("address")),"SavedPlacesRepository") { it is PhoneCommand.SavePlace }

@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.os.Vibrator
 import android.net.Uri
 import android.os.BatteryManager
 import android.provider.AlarmClock
@@ -55,7 +56,7 @@ internal class PlatformActionExecutor(private val context: Context) {
           if(ok) PhoneActionResult("Brillo ajustado al ${command.percent}%.") else rejected("Android no permitió ajustar el brillo.")
         }
       }
-      PlatformAction.SILENT_ON,PlatformAction.SILENT_OFF,PlatformAction.DND_ON,PlatformAction.DND_OFF -> mode(command.action)
+      PlatformAction.SILENT_ON,PlatformAction.SILENT_OFF,PlatformAction.VIBRATE_ON,PlatformAction.DND_ON,PlatformAction.DND_OFF -> mode(command.action)
       PlatformAction.CONTACT_PHONES -> contactPhones(command.argument!!)
       PlatformAction.NOTIFICATION_LIST,PlatformAction.NOTIFICATION_OPEN,PlatformAction.NOTIFICATION_DISMISS -> notifications(command)
       PlatformAction.APP_SETTINGS -> appSettings(command.argument!!)
@@ -103,22 +104,37 @@ internal class PlatformActionExecutor(private val context: Context) {
   }
 
   private fun mode(action: PlatformAction): PhoneActionResult {
-    val manager=context.getSystemService(NotificationManager::class.java)
-    if(!manager.isNotificationPolicyAccessGranted) return access("Habilitá el acceso a No molestar para aplicar este modo y reintentá.",Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
-    val silent=action in setOf(PlatformAction.SILENT_ON,PlatformAction.SILENT_OFF)
-    val observed=if(silent) {
-      val audio=context.getSystemService(AudioManager::class.java)
-      val target=if(action==PlatformAction.SILENT_ON) AudioManager.RINGER_MODE_SILENT else AudioManager.RINGER_MODE_NORMAL
-      audio.ringerMode=target
-      audio.ringerMode==target
-    } else {
-      val target=if(action==PlatformAction.DND_ON) NotificationManager.INTERRUPTION_FILTER_PRIORITY else NotificationManager.INTERRUPTION_FILTER_ALL
-      manager.setInterruptionFilter(target)
-      manager.currentInterruptionFilter==target
+    val manager = context.getSystemService(NotificationManager::class.java)
+    fun needsPolicyAccess() = access("Habilitá el acceso a No molestar para aplicar este modo y reintentá.",
+      Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+    if (action != PlatformAction.VIBRATE_ON && !manager.isNotificationPolicyAccessGranted) return needsPolicyAccess()
+    val ringerMode = when (action) {
+      PlatformAction.SILENT_ON -> AudioManager.RINGER_MODE_SILENT
+      PlatformAction.SILENT_OFF -> AudioManager.RINGER_MODE_NORMAL
+      PlatformAction.VIBRATE_ON -> AudioManager.RINGER_MODE_VIBRATE
+      else -> null
+    }
+    val observed = try {
+      if (ringerMode != null) {
+        if (action == PlatformAction.VIBRATE_ON && context.getSystemService(Vibrator::class.java)?.hasVibrator() != true) {
+          return PhoneActionResult("Este dispositivo no tiene un vibrador disponible.", outcome = PhoneActionOutcome.REJECTED)
+        }
+        val audio = context.getSystemService(AudioManager::class.java)
+        audio.ringerMode = ringerMode
+        audio.ringerMode == ringerMode
+      } else {
+        val target = if (action == PlatformAction.DND_ON) NotificationManager.INTERRUPTION_FILTER_PRIORITY else NotificationManager.INTERRUPTION_FILTER_ALL
+        manager.setInterruptionFilter(target)
+        manager.currentInterruptionFilter == target
+      }
+    } catch (error: SecurityException) {
+      if (!manager.isNotificationPolicyAccessGranted) return needsPolicyAccess()
+      throw error
     }
     return if(observed) PhoneActionResult(when(action) {
       PlatformAction.SILENT_ON -> "Llamadas y notificaciones en silencio."
       PlatformAction.SILENT_OFF -> "Modo de sonido normal activado."
+      PlatformAction.VIBRATE_ON -> "Modo vibración activado."
       PlatformAction.DND_ON -> "No molestar activado."
       else -> "No molestar desactivado."
     }) else PhoneActionResult("Android recibió el cambio, pero no pude confirmar el estado. Revisá los ajustes antes de reintentar.",outcome=PhoneActionOutcome.UNCERTAIN)

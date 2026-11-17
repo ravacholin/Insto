@@ -20,16 +20,17 @@ import org.robolectric.annotation.Config
 @Config(sdk = [28])
 class EverydayActionExecutorTest {
   private val app: Application get() = ApplicationProvider.getApplicationContext()
-  private fun installDialer() {
+  private fun installHandler(pkg: String, action: String, scheme: String? = null) {
     val info = ActivityInfo().apply {
-      name = "phone.Dialer"; packageName = "phone"; exported = true; enabled = true
-      applicationInfo = ApplicationInfo().apply { packageName = "phone"; enabled = true }
+      name = "$pkg.Handler"; packageName = pkg; exported = true; enabled = true
+      applicationInfo = ApplicationInfo().apply { packageName = pkg; enabled = true }
     }
     val pm = shadowOf(app.packageManager)
-    pm.installPackage(PackageInfo().apply { packageName = "phone"; applicationInfo = info.applicationInfo })
+    pm.installPackage(PackageInfo().apply { packageName = pkg; applicationInfo = info.applicationInfo })
     pm.addOrUpdateActivity(info)
-    pm.addIntentFilterForActivity(ComponentName("phone", info.name), IntentFilter(Intent.ACTION_DIAL).apply {
-      addCategory(Intent.CATEGORY_DEFAULT); addDataScheme("tel")
+    pm.addIntentFilterForActivity(ComponentName(pkg, info.name), IntentFilter(action).apply {
+      addCategory(Intent.CATEGORY_DEFAULT)
+      scheme?.let { addDataScheme(it) }
     })
   }
   @Test fun platformSearchPrefersTheRequestedAppOverABrowser() {
@@ -37,16 +38,7 @@ class EverydayActionExecutorTest {
     for ((command, pkg, url) in listOf(
       Triple(PhoneCommand.YouTubeSearch("rebord"), "com.google.android.youtube", "https://www.youtube.com/results?search_query=rebord"),
       Triple(PhoneCommand.SpotifySearch("rebord"), "com.spotify.music", "https://open.spotify.com/search/rebord"))) {
-      val info = ActivityInfo().apply {
-        name = "$pkg.Search"; packageName = pkg; exported = true; enabled = true
-        applicationInfo = ApplicationInfo().apply { packageName = pkg; enabled = true }
-      }
-      val pm = shadowOf(app.packageManager)
-      pm.installPackage(PackageInfo().apply { packageName = pkg; applicationInfo = info.applicationInfo })
-      pm.addOrUpdateActivity(info)
-      pm.addIntentFilterForActivity(ComponentName(pkg, info.name), IntentFilter(Intent.ACTION_VIEW).apply {
-        addCategory(Intent.CATEGORY_DEFAULT); addDataScheme("https")
-      })
+      installHandler(pkg, Intent.ACTION_VIEW, "https")
       val result = PhoneActionExecutor(app).execute(command)
       assertEquals(PhoneActionOutcome.HANDOFF, result.outcome)
       val launched = shadowOf(app).nextStartedActivity
@@ -54,6 +46,31 @@ class EverydayActionExecutorTest {
       assertEquals(url, launched.dataString)
       assertNull(shadowOf(app).nextStartedActivity)
     }
+  }
+  @Test fun playbackIntentGoesToTheNamedAppWithTheOriginalQuery() {
+    val action = "android.media.action.MEDIA_PLAY_FROM_SEARCH"
+    installHandler("com.spotify.music", action)
+    installHandler("com.google.android.youtube", action)
+    val command = (PhoneCommandParser().parse("Reproducir Björk en YouTube") as PhoneRoute.Local).command
+    val result = PhoneActionExecutor(app).execute(command)
+    assertEquals(PhoneActionOutcome.HANDOFF, result.outcome)
+    val launched = shadowOf(app).nextStartedActivity
+    assertEquals("com.google.android.youtube", launched.`package`)
+    assertEquals(action, launched.action)
+    assertEquals("Björk", launched.getStringExtra("query"))
+    assertNull(shadowOf(app).nextStartedActivity)
+  }
+  @Test fun missingPlaybackHandlerOpensTheNamedAppsSearchInsteadOfAnotherPlayer() {
+    installHandler("other.player", "android.media.action.MEDIA_PLAY_FROM_SEARCH")
+    installHandler("com.spotify.music", Intent.ACTION_VIEW, "https")
+    val command = (PhoneCommandParser().parse("Reproducir Miles Davis en Spotify") as PhoneRoute.Local).command
+    val result = PhoneActionExecutor(app).execute(command)
+    assertEquals(PhoneActionOutcome.HANDOFF, result.outcome)
+    assertTrue(result.message, result.message.contains("búsqueda"))
+    val launched = shadowOf(app).nextStartedActivity
+    assertEquals("com.spotify.music", launched.`package`)
+    assertEquals("https://open.spotify.com/search/Miles%20Davis", launched.dataString)
+    assertNull(shadowOf(app).nextStartedActivity)
   }
   @Test fun spotifyWithoutAnyHandlerKeepsTheRequestLocal() {
     val result = PhoneActionExecutor(app).execute(PhoneCommand.SpotifySearch("rebord"))
@@ -63,7 +80,7 @@ class EverydayActionExecutorTest {
   }
   @Test fun explicitNumberOpensDialerWithoutContactsPermissionOrAutomaticCall() {
     shadowOf(app).denyPermissions(Manifest.permission.READ_CONTACTS)
-    installDialer()
+    installHandler("phone", Intent.ACTION_DIAL, "tel")
     val result = PhoneActionExecutor(app).execute(PhoneCommand.Dial("+54 (11) 5555-0100"))
     assertEquals(PhoneActionOutcome.HANDOFF, result.outcome)
     val launched = shadowOf(app).nextStartedActivity

@@ -1,8 +1,11 @@
 package com.example.phone
 
 import android.app.Application
+import android.app.NotificationManager
 import android.content.Intent
+import android.media.AudioManager
 import android.net.Uri
+import android.os.Vibrator
 import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.*
@@ -21,6 +24,29 @@ class PlatformActionExecutorTest {
     assertEquals(PhoneActionOutcome.NEEDS_INPUT,result.outcome)
     assertEquals(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS,result.accessSettingsAction)
     assertTrue(result.retainRequest)
+  }
+  @Test fun silenceAndVibrationChangeTheRingerMode() {
+    val audio = app.getSystemService(AudioManager::class.java)
+    shadowOf(app.getSystemService(NotificationManager::class.java)).setNotificationPolicyAccessGranted(true)
+    shadowOf(app.getSystemService(Vibrator::class.java)).setHasVibrator(true)
+    val executor = PhoneActionExecutor(app)
+    val parser = PhoneCommandParser()
+    for ((phrase, mode) in listOf("Poner en silenciar" to AudioManager.RINGER_MODE_SILENT, "Modo vibrar" to AudioManager.RINGER_MODE_VIBRATE)) {
+      val command = (parser.parse(phrase) as PhoneRoute.Local).command
+      assertEquals(PhoneActionOutcome.COMPLETED, executor.execute(command).outcome)
+      assertEquals(mode, audio.ringerMode)
+    }
+  }
+  @Test fun volumeOrdersRaiseAndLowerTheMusicStream() {
+    val audio = app.getSystemService(AudioManager::class.java)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 3, 0)
+    val executor = PhoneActionExecutor(app)
+    val parser = PhoneCommandParser()
+    for ((phrase, volume) in listOf("Subir volumen" to 4, "Bajar volumen" to 3)) {
+      val command = (parser.parse(phrase) as PhoneRoute.Local).command
+      assertEquals(PhoneActionOutcome.COMPLETED, executor.execute(command).outcome)
+      assertEquals(volume, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    }
   }
   @Test fun invalidMessageTargetCannotLaunchAnActivity() {
     val result=PhoneActionExecutor(app).execute(PhoneCommand.Platform(PlatformAction.MESSAGE_DRAFT,"not a number",content="Hola"))
