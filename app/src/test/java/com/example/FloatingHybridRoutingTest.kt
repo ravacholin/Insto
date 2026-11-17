@@ -205,6 +205,7 @@ class FloatingHybridRoutingTest {
   @Test fun textFailureRetainsDraftAndPauseCancelsWithoutDispatch() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
+    withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).clearPinnedContact() }
     var calls = 0
     var cancelled = false
     val hybrid = HybridPhoneRouter({ true }, DecisionClassifier {

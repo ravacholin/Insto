@@ -24,7 +24,7 @@ La versión 1.9.0 hacía depender todos los pedidos de Decisions y de cuatro pun
 
 - Antes de corregir: siete de las ocho regresiones iniciales fallaban, incluidos los dos ejemplos exactos del reporte. La regresión adicional del saludo sin coincidencia y la de la fecha de alarma también se comprobaron en rojo.
 - Núcleo final: 163 casos JUnit, 162 aprobados y una evaluación real opt-in omitida.
-- [Reporte de CI de las fuentes del APK](https://github.com/ravacholin/Insto/actions/runs/44078519301).
+- Resultados y artefactos de la suite completa en las comprobaciones del [PR #16](https://github.com/ravacholin/Insto/pull/16).
 - CI ejecuta la suite completa con Robolectric y compila el APK. Sus regresiones recorren el ViewModel real, los resolutores y los despachadores Android: Spotify instalado se lanza; linterna llega al permiso de cámara; cuota y timeout de Google permiten compartir respectivamente el texto y los bytes de audio originales una sola vez.
 - La prueba de accesibilidad se comprobó en rojo antes de corregir el botón oculto.
 - Las pruebas usan un proveedor simulado y aplicaciones simuladas en Robolectric; no verifican un dispositivo físico ni credenciales reales de Gemini/Groq ni recepción real en WhatsApp. No se atribuye esa validación a CI.
