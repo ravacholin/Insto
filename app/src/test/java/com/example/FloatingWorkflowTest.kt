@@ -1,9 +1,10 @@
 package com.example
+
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import com.example.phone.*
 import com.example.ui.MainViewModel
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -15,73 +16,61 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[28])
 class FloatingWorkflowTest {
- @Test fun sequenceWaitsForConfirmationAndDoesNotCloseAtIntermediateStep() = runTest {
+ private fun router(choice:String)=HybridPhoneRouter({true},DecisionClassifier {SemanticDecision(choice,.99,.99,.99,.99)})
+ @Test fun newFreeSequenceDoesNotCreateOrExecuteLocalWorkflow() = runTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()
-  java.io.File(app.noBackupFilesDir,"phone-workflow.json").delete()
+  val vm=MainViewModel(app,hybridRouter=router("instinct"))
   try {
-   val vm=MainViewModel(app)
    vm.updateFloatingText("bajá el volumen y abrí AplicacionInexistente")
-   vm.sendFloatingText {fail("No debe ir a WhatsApp")}
-   assertTrue(vm.floatingAssistant.value.needsConfirmation)
-   assertEquals(2,vm.floatingAssistant.value.workflowLines.size)
+   vm.sendFloatingText {}
+   assertFalse(vm.floatingAssistant.value.needsConfirmation)
+   assertFalse(vm.floatingAssistant.value.workflowActive)
    assertNull(vm.consumePhoneActionCompletion())
-   vm.confirmFloatingAction(true)
-   assertNull(vm.consumePhoneActionCompletion())
-   assertNotNull(vm.floatingAssistant.value.error)
-   assertTrue(vm.floatingAssistant.value.workflowLines[0].contains("completado"))
-   vm.dismissFloatingAssistant()
-  } finally {Dispatchers.resetMain();java.io.File(app.noBackupFilesDir,"phone-workflow.json").delete()}
+  } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
  }
- @Test fun calendarCanBeCompletedWithoutRepeatingTitle() = runTest {
+ @Test fun classifiedCalendarCanBeCompletedWithoutRepeatingTitle() = runTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()
-  java.io.File(app.noBackupFilesDir,"phone-workflow.json").delete()
+  var calls=0
+  val vm=MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {calls++;SemanticDecision("calendar",.99,.99,.99,.99)}))
   try {
-   val vm=MainViewModel(app)
    vm.updateFloatingText("agendá reunión mañana");vm.sendFloatingText {fail("No WhatsApp")}
-   assertNull(vm.consumePhoneActionCompletion())
+   assertEquals(1,calls)
    vm.updateFloatingText("a las 17:00");vm.sendFloatingText {fail("No WhatsApp")}
+   assertEquals(1,calls)
    assertTrue(vm.floatingAssistant.value.needsConfirmation)
    assertTrue(vm.floatingAssistant.value.workflowLines.single().contains("reunión"))
-   vm.dismissFloatingAssistant()
-  } finally {Dispatchers.resetMain();java.io.File(app.noBackupFilesDir,"phone-workflow.json").delete()}
+  } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
  }
- @Test fun editingCancelsStructuredAnswerBeforeItCanPrepareAPlan() = runTest {
+ @Test fun editingCancelsDecisionBeforeItCanPrepareAPlan() = runTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()
-  java.io.File(app.noBackupFilesDir,"phone-workflow.json").delete()
-  val gate=kotlinx.coroutines.CompletableDeferred<List<com.example.phone.PhoneCommand>>()
+  val gate=CompletableDeferred<Unit>()
+  val vm=MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {
+   withContext(NonCancellable) {gate.await()};SemanticDecision("calendar",.99,.99,.99,.99)
+  }))
   try {
-   val router=com.example.phone.HybridPhoneRouter({true},com.example.phone.DecisionClassifier {error("No stale classification")})
-   val vm=MainViewModel(app,hybridRouter=router,structuredExtractor=com.example.phone.StructuredCommandExtractor {gate.await()})
-   vm.updateFloatingText("necesito luz acá");vm.sendFloatingText {fail("No WhatsApp")}
+   vm.updateFloatingText("agendá reunión mañana a las 17:00");vm.sendFloatingText {fail("No WhatsApp")}
    runCurrent();assertTrue(vm.floatingAssistant.value.deciding)
-   vm.updateFloatingText("otro pedido")
-   gate.complete(listOf(com.example.phone.PhoneCommand.Torch(true)))
-   advanceUntilIdle()
+   vm.updateFloatingText("otro pedido");gate.complete(Unit);advanceUntilIdle()
    assertFalse(vm.floatingAssistant.value.workflowActive)
    assertNull(vm.consumePhoneActionCompletion())
    assertEquals("otro pedido",vm.floatingAssistant.value.text)
-   vm.dismissFloatingAssistant()
-  }finally {Dispatchers.resetMain();java.io.File(app.noBackupFilesDir,"phone-workflow.json").delete()}
+  }finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
  }
-
- @Test fun invalidCorrectionInvalidatesEarlierPreview() = runTest {
+ @Test fun invalidCorrectionInvalidatesEarlierCalendarPreview() = runTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()
-  java.io.File(app.noBackupFilesDir,"phone-workflow.json").delete()
+  val vm=MainViewModel(app,hybridRouter=router("calendar"))
   try {
-   val vm=MainViewModel(app)
    vm.updateFloatingText("agendá reunión mañana a las 17:00");vm.sendFloatingText {fail("No WhatsApp")}
    assertTrue(vm.floatingAssistant.value.needsConfirmation)
    vm.updateFloatingText("mejor a las 99:00");vm.sendFloatingText {fail("No WhatsApp")}
    assertFalse(vm.floatingAssistant.value.needsConfirmation)
    assertFalse(vm.floatingAssistant.value.workflowActive)
    vm.confirmFloatingAction(true)
-   assertNull(org.robolectric.Shadows.shadowOf(app).nextStartedActivity)
-   vm.dismissFloatingAssistant()
-  }finally {Dispatchers.resetMain();java.io.File(app.noBackupFilesDir,"phone-workflow.json").delete()}
+   assertNull(vm.consumePhoneActionCompletion())
+  }finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
  }
-
 }

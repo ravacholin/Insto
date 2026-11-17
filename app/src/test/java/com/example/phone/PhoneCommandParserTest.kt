@@ -23,7 +23,7 @@ class PhoneCommandParserTest {
     assertEquals(PhoneRoute.Local(PhoneCommand.Alarm(19, 15)), parser.parse("alarma a las 7:15 de la tarde"))
     assertTrue(parser.parse("alarma a las siete") is PhoneRoute.Clarify)
     assertTrue(parser.parse("alarma para el 25 de diciembre a las 7") is PhoneRoute.Unsupported)
-    assertTrue(parser.parse("alarma mañana a las siete de la mañana") is PhoneRoute.Unsupported)
+    assertTrue(parser.parse("alarma mañana a las siete de la mañana") is PhoneRoute.Local)
     assertTrue(parser.parse("alarma el 25/12 a las 07:00") is PhoneRoute.Unsupported)
     assertTrue(parser.parse("alarma a las 25:80") is PhoneRoute.Clarify)
     assertEquals(PhoneRoute.Local(PhoneCommand.Alarm(7, 0)), parser.parseReply("alarm", "a las siete de la mañana"))

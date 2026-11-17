@@ -1,137 +1,90 @@
-# Insto: Gemini Decisions primero, acciones locales e Instinct
+# Insto: Decisions primero e Instinct para el resto
 
-Fecha: 2026-11-16. Estado: diseño para revisión; código de producto sin modificar.
+Fecha: 2026-11-16. Estado: implementación autorizada por el usuario y realizada en la rama de trabajo.
 
-## Objetivo solicitado
+## Decisión del usuario
 
-Toda entrada nueva, texto o transcripción, pasa primero por Gemini Decisions. Su responsabilidad es clasificar semánticamente contra un catálogo conocido. Un intent reconocido se valida y ejecuta mediante mecanismos Android autorizados. Todo lo que no encaja con suficiente confianza pasa a Instinct con el pedido original completo. Gemini no responde consultas generales, no inventa capacidades y no planifica instrucciones complejas.
+Entrada escrita o audio transcripto → Gemini Decisions clasifica semánticamente contra una lista de intents → intent conocido se valida y ejecuta mediante Android; sin coincidencia suficientemente confiable → pedido original completo a Instinct.
 
-El catálogo es extensible: añadir una acción incorpora una definición, un esquema y un ejecutor; no cambia el coordinador. Debe cubrir las catorce categorías solicitadas, distinguiendo capacidades disponibles, permisos pendientes y limitaciones reales de Android.
+El usuario rechazó expresamente una segunda llamada generativa y autorizó implementar este flujo. El diseño anterior proponía extracción estructurada por otro modelo; esa propuesta quedó descartada. El cliente `StructuredCommandClient` y su llamada `generateContent` se eliminaron de producción.
 
-## Revisión del estado actual
+Decisions solo selecciona una opción del catálogo y evalúa si el pedido constituye una acción simple representable. No responde consultas, crea planes ni genera código, componentes Android o nuevos IDs. Las expresiones de ejemplo describen equivalencias semánticas, no una tabla de clasificación literal. Los parámetros se interpretan localmente después de elegir el intent. Cuando falta un campo, se pide ese dato; no se inventa un valor.
 
-Base local: `de25ed4`, merge del PR #12. Revisados el historial, el código y las descripciones remotas de los PR #10, #11 y #12. No se evaluaron cambios remotos posteriores ni se realizaron pruebas con proveedor o teléfono.
+## Revisión de commits y PR
 
-Las discusiones de los tres PR no devolvieron comentarios adicionales. El intento de consultar la documentación pública de Decisions desde este entorno recibió HTTP 403 del túnel de red: el contrato vigente de extracción sigue sin comprobarse, no se da por inexistente. La revisión independiente del diseño no encontró preguntas materiales adicionales a la adaptación de extracción ya explicitada al final.
+Base revisada: `de25ed4`, merge del PR #12. Se leyeron historial, código, descripciones remotas y discusiones de los PR #10, #11 y #12; no había comentarios adicionales en esas discusiones.
 
-| Origen | Comportamiento actual | Cambio necesario |
+| Origen | Comportamiento anterior | Cambio |
 | --- | --- | --- |
-| PR #10, `bfca05e` | Gemini Decisions respalda al parser y solo cuando está habilitado. Veinticuatro opciones, incluidas `instinct` y `unsupported`. | Clasificación inicial para toda solicitud nueva; catálogo único y fallback por falta de coincidencia. |
-| `HybridPhoneRouter.needsDecision` | Omite acciones reconocidas localmente y determinadas consultas por prefijos. | Quitar decisiones por regex antes de clasificar. |
-| `HybridPhoneRouter.route` | Baja confianza y opciones desconocidas bloquean el pedido; parámetros libres piden repetición. | Baja confianza válida deriva a Instinct; intent conocido con campos faltantes pide solamente esos campos. |
-| PR #11, `2cbeb0a` | Configuración de clave y cronómetro mediante accesibilidad. | Conservar credenciales y ejecutor; revisar la opción de modo local que contradice el nuevo flujo obligatorio. |
-| PR #12, `b332654` / `90511b7` | `ConversationSession` interpreta nuevas entradas antes de Gemini y `StructuredCommandClient` intenta hasta diez acciones antes de Decisions. | Retirar ambos caminos de la entrada inicial; conservar interacción contextual y ejecución de rutinas ya definidas. |
-| `PhoneCommandParser` | Rechaza alarmas con fecha específica; convierte órdenes Wi-Fi/Bluetooth en abrir ajustes. | Preservar fecha y separar explícitamente cambiar conectividad de abrir configuración. |
-| `GeminiDecisionsClient` | El contrato implementado devuelve `choice` y puntuaciones, no parámetros libres. | Resolver explícitamente el mecanismo de extracción; no asumir que cambiar un prompt agrega campos al endpoint. |
-| `PhoneActionExecutor` | Ya diferencia resultados completados, entregados, permisos/datos pendientes, rechazados e inciertos. | Conservar la separación y no activar fallback después del reconocimiento. |
-| `sendFloatingText` / `sendFloatingAudio` | Envían el texto capturado o el M4A original a Instinct. | Conservarlos sin resumir ni reconstruir el pedido. |
+| PR #10, `bfca05e` | Parser primero; Decisions solo como respaldo opcional. Baja confianza bloqueada. | Toda solicitud nueva pasa por Decisions; baja confianza válida deriva a Instinct. |
+| PR #11, `2cbeb0a` | Configuración de clave, modo local y cronómetro por accesibilidad. | Se conservan credenciales y cronómetro; sin Decisions disponible se conserva el pedido, sin bypass silencioso por parser. |
+| PR #12, `b332654` / `90511b7` | Conversación y extracción generativa de planes antes de clasificar. | Se retira ese orden. Solo continúan localmente campos y ejecuciones ya reconocidos. Las secuencias nuevas libres van a Instinct. |
 
-Las pruebas existentes fijan parte del comportamiento que se debe reemplazar: comandos locales que nunca consultan Google, baja confianza bloqueada y secuencias libres resueltas localmente. No basta con agregar pruebas nuevas: esas expectativas deben actualizarse expresamente.
+## Implementación
 
-## Enfoques
+- `LocalIntentRegistry` es el registro compartido: ID, categoría, ejemplos, parámetros obligatorios/opcionales, permisos, mecanismo, resultado, resolución tipada y disponibilidad. Rechaza IDs duplicados o reservados. Puede recibir definiciones adicionales sin cambiar el router.
+- `GeminiDecisionsClient` obtiene las opciones desde ese registro. El contrato sigue siendo `/v1beta/decisions`, preguntas `choice` y `noul`, sin generación de parámetros.
+- `HybridPhoneRouter` consulta al clasificador antes de interpretar campos locales. El candidato del parser anterior nunca autoriza una ejecución por sí mismo ni sustituye el intent elegido.
+- `PhoneCommandCodec` valida campos y tipos, límites y comandos persistidos/importados. `PhoneActionExecutor` comprueba bloqueo del dispositivo y requisitos de ejecución.
+- `MainViewModel` conserva el transporte original a Instinct y las guardas de generación, cancelación, grabación y transcripción. Nunca sustituye el texto o el M4A por un resumen.
 
-1. Ampliar el parser y mantener Gemini como respaldo: no satisface el orden solicitado ni el reconocimiento semántico uniforme.
-2. Decisions primero, registro tipado compartido y extracción limitada al intent seleccionado: enfoque que implementa la arquitectura solicitada. Reutiliza ejecutores y guardas existentes.
-3. Modelo generativo general que produzca planes antes de clasificar: reproduce el problema introducido en PR #12 y contradice la prohibición de razonamiento abierto.
+Si se usa un registro personalizado, se suministra la misma instancia tanto al cliente Decisions como al router para mantener catálogo y validación alineados.
 
-El enfoque 2 deriva de la especificación del usuario. La siguiente adaptación técnica es una propuesta del constructor, pendiente de revisión: mantener `/v1beta/decisions` para clasificar y usar una extracción estructurada restringida solo cuando el intent reconocido requiere parámetros libres. No sustituye Decisions por un agente generativo. Antes de implementarla se comprobará el contrato vigente del proveedor; si Decisions permite extracción tipada real, se preferirá esa capacidad y se evitará la segunda llamada.
+## Resultados y confianza
 
-## Contratos y flujo
+El umbral inicial conserva el valor 0,95 del proyecto para las puntuaciones que autorizan una acción. Es una política conservadora; no se afirma precisión ni latencia real sin evaluar el proveedor.
 
-`OriginalRequest` conserva identificador de solicitud, texto exacto, origen, referencia opcional al audio y generación de sesión. Normalizar para validar no modifica el original.
+- Respuesta válida sin coincidencia, instrucción compleja o confianza insuficiente: `PhoneRoute.Instinct`, con el original íntegro.
+- ID inventado, JSON inválido, puntuaciones no finitas/inconsistentes, falta de clave, cuota o error de red: fallo técnico, conserva el pedido para reintentar.
+- Intent reconocido con campos faltantes: aclaración local vinculada a ese ID.
+- Permiso denegado, recurso inexistente, app ausente o error de ejecución: resultado local; nunca fallback automático a Instinct.
+- Solicitud entregada a otra app o a una selección nativa: `HANDOFF`, sin afirmar que se guardó, envió o completó.
+- Efecto incierto: se informa y no se reproduce automáticamente.
 
-`IntentDefinition` declara ID estable, categoría, descripción semántica, ejemplos equivalentes, parámetros con tipos y validaciones, requisitos de acceso, mecanismo Android, adaptador, efectos, confirmación y resultado esperado. Las expresiones son ejemplos semánticos, nunca una tabla literal de coincidencias.
+## Catálogo y mecanismos Android
 
-`IntentRegistry` verifica unicidad de IDs y que toda definición ejecutable tenga esquema y adaptador. Provee las opciones para Decisions, los esquemas para extracción y la resolución de ejecución. Ningún `when` paralelo mantiene otro catálogo. El modelo nunca entrega componentes Android, intents arbitrarios, código o URLs ejecutables.
+El catálogo completo está en [LOCAL-INTENTS.md](../../LOCAL-INTENTS.md): 87 entradas en las catorce categorías solicitadas. Incluye acciones existentes y adaptadores públicos nuevos para batería, brillo, silencio/No molestar, contactos, SMS en borrador, compartir texto, llamada directa a número y envío por la integración WhatsApp disponible.
 
-`ClassificationResult` diferencia `Recognized(intentId, scores)`, `NoMatch` y fallo técnico. Una respuesta válida cuyo máximo queda por debajo de 0,95, un pedido general o una instrucción compleja son `NoMatch`. Se conserva inicialmente el umbral 0,95 de la implementación actual, sujeto a evaluación en español. NaN, probabilidades contradictorias, JSON malformado y un ID ajeno a las opciones enviadas son errores del proveedor, no confianza baja válida. Se conserva el pedido y se ofrece reintentar ante ese fallo técnico, sin ejecutar ni enviar automáticamente.
+Las llamadas directas piden CALL_PHONE y revisión del número. El envío WhatsApp exige número y cuerpo explícitos, confirmación y las guardas existentes de destinatario, contenido y accesibilidad. No utiliza el contacto de Instinct como destinatario por defecto.
 
-La validación de una acción directa exige además que el clasificador descarte negaciones, citas, hipótesis y condiciones no representables. Una consulta local como «¿cuánta batería queda?» sí pertenece al catálogo; la comprobación no puede exigir un verbo imperativo para toda categoría.
+### Agenda
 
-Flujo de una entrada nueva:
+`CalendarActionActivity` solicita READ_CALENDAR para consultar o resolver eventos reales, y WRITE_CALENDAR únicamente para eliminar. La consulta cubre el día solicitado. Modificar abre el editor del evento elegido y entrega cambios tipados cuando se proporcionaron; conservar la duración no implica inventar una nueva. Eliminar exige elegir y confirmar el evento. Las series recurrentes se revisan en Calendario, sin eliminar toda la serie como consecuencia implícita de una ocurrencia.
 
-1. Conservar el original e iniciar una generación cancelable.
-2. Clasificar con Decisions contra el catálogo completo. No invocar antes el parser, la sesión conversacional ni el extractor generativo.
-3. `NoMatch`: entregar exactamente el original al transporte existente de Instinct. No generar una respuesta intermedia ni resumir.
-4. `Recognized`: crear el candidato del intent seleccionado. Las acciones sin campos libres no requieren otra llamada. Para las demás, extraer solamente campos de ese esquema; no permitir seleccionar otro intent, añadir pasos o completar condiciones omitidas.
-5. Validar tipos, límites, campos desconocidos, referencias, zona horaria y fidelidad de todas las restricciones. Un campo requerido ausente produce una pregunta concreta; no se inventa un valor.
-6. Resolver permisos, selección de entidades y confirmaciones. Un intent reconocido con permiso denegado o sin app compatible sigue siendo un caso local.
-7. Ejecutar el adaptador registrado y presentar su resultado real. Abrir una pantalla no demuestra que se haya realizado la acción.
+Los borradores de eventos conservan fecha, título y campos. «Mañana» se fija a una fecha al iniciar el borrador, para no desplazarse otro día si se completa después de medianoche. Las alarmas con hoy/mañana conservan la fecha; se rechazan si el contrato de Reloj solo permite una próxima ocurrencia distinta.
 
-### Contexto existente
+### Archivos
 
-Confirmar, cancelar, elegir «el segundo» y responder un campo pendiente son continuaciones de un intent ya clasificado, no solicitudes nuevas. Solo se consumen si corresponden inequívocamente al estado pendiente. Una entrada que expresa un pedido nuevo vuelve a Decisions; no se descarta ni se interpreta como respuesta forzada. Cambiar el texto, cerrar, pausar o cambiar de sesión cancela operaciones y descarta resultados tardíos tanto de clasificación como de extracción.
+`FileActionActivity` usa Storage Access Framework y permisos de URI elegidos por el usuario. Abrir, buscar, compartir, renombrar, copiar, mover y eliminar no requieren acceso global al almacenamiento. Si se indicó un nombre, se comprueba exactamente, conservando puntuación y mayúsculas. Mover requiere origen/destino autorizados y soporte del proveedor; no se convierte silenciosamente en copiar. Las escrituras y eliminaciones se revisan antes de ejecutarse.
 
-Las secuencias arbitrarias expresadas en una solicitud nueva pasan completas a Instinct. `WorkflowRunner` puede ejecutar una rutina previamente registrada como una sola capacidad local y puede recuperar una ejecución ya autorizada; no interpreta nuevos planes. Las rutinas persistidas no existen hoy: su soporte requiere un repositorio explícito, con alta/importación revisable, IDs estables y comandos tipados validados. No se crean rutinas deduciéndolas de pedidos casuales.
+Las selecciones nativas y errores de proveedor se informan dentro de Insto. Una interrupción del flujo no reproduce automáticamente un efecto ni supone que no ocurrió.
 
-### Configuración
+### Captura y notificaciones
 
-El flujo nuevo requiere configurar Decisions. Sin clave, desactivado, sin red o sin acceso al modelo se presenta un error de configuración/conexión y se conserva el original. No se ejecutan órdenes por parser como sustitución silenciosa. Se mantiene la opción explícita de enviar el original a Instinct, con las mismas guardas del transporte actual. Las claves siguen cifradas fuera de backups y logs. No se envían contactos, archivos ni contenido de notificaciones para clasificar.
+`CaptureActionActivity` utiliza cámara/grabadora nativa con resultados y URIs autorizadas. Solo informa una captura recibida cuando la aplicación devuelve un resultado válido. Las fotos y videos se pueden ver o compartir; las capturas se guardan en archivos privados de Insto. Abrir cámara y capturar siguen siendo intents distintos.
 
-## Catálogo por categorías
+`NotificationAccessService` requiere habilitación explícita separada del acceso multimedia. Solo consulta notificaciones para un pedido de notificaciones. Abrir/descartar exige un título inequívoco y se utiliza el PendingIntent o la clave reales; no se envía su contenido a Gemini.
 
-Cada ID de las familias siguientes tendrá su propia definición de parámetros, ejemplos, permisos, ejecución y resultado. Las familias no autorizan operaciones genéricas ni sustituyen los IDs individuales. Los parámetros de selección de entidades se resuelven contra Android y nunca se inventan identificadores.
+### Rutinas previamente configuradas
 
-| Categoría | IDs y parámetros esenciales | Expresiones equivalentes | Permisos / mecanismo / resultado esperado |
-| --- | --- | --- | --- |
-| Alarmas | `alarm.create` (hora, fecha o repetición, etiqueta opcional), `alarm.list`, `alarm.dismiss` (selector inequívoco), `alarm.snooze` (minutos cuando la API lo admite), `alarm.update` (alarma, cambios) | «poné una alarma», «despertame»; «mostrá mis alarmas»; «cancelá la de las ocho»; «posponé la alarma»; «cambiá la hora» | SET_ALARM; AlarmClock para crear/listar/descartar/posponer. Editar o fechas no representables requieren integración verificada o revisión en Reloj. Nunca cancelar otra alarma ni crear una repetición para simular una fecha. |
-| Temporizadores | `timer.create` (duración, etiqueta opcional), `timer.list`, `timer.dismiss` (selector), `timer.update` (selector, duración), `timer.pause`, `timer.resume` (selector) | «timer de diez minutos», «avisame en diez minutos»; «cancelá el timer»; «dale cinco minutos más» | AlarmClock y adaptador de reloj con capacidades comprobadas; los cambios sin API pública requieren integración autorizada. Resultado es entrega o estado confirmado, según evidencia. |
-| Cronómetro | `stopwatch.start`, `.pause`, `.resume`, `.reset`, `.show` | «iniciá el cronómetro», «empezá a contar»; «detené el cronómetro» | Ejecutor existente de Reloj/accesibilidad; reset conserva confirmación. No reemplaza temporizadores. |
-| Calendario | `calendar.create` (título, inicio, zona, fin/duración), `.agenda` (intervalo), `.update` (evento, cambios), `.delete` (evento) | «agendá reunión», «creá un evento»; «qué tengo mañana»; «mové la reunión»; «cancelá el evento» | INSERT entrega borrador; READ_CALENDAR para agenda/resolver eventos; WRITE_CALENDAR para cambios directos confirmados. IDs y calendarios se eligen en datos reales. Múltiples coincidencias piden selección. |
-| Llamadas | `call.dial` (contacto/número), `.start` (destinatario), `.open_dialer` | «marcá a Ana», «prepará este número»; «llamá a Ana»; «abrí el marcador» | DIAL, CALL con CALL_PHONE o integración de telefonía admitida; READ_CONTACTS solo para buscar nombres. Marcar e iniciar llamada son acciones distintas. |
-| Mensajería | `message.open` (integración, destinatario), `.draft` (integración, destinatario, cuerpo), `.send` (integración, destinatario, cuerpo) | «abrí el chat con Ana»; «redactá para Ana»; «mandale este mensaje» | SENDTO para SMS/borrador, integración explícita para envío. Confirmar destinatario y contenido cuando corresponda. No prometer envío mediante una app que solo permite abrir un borrador. La salida a Instinct sigue siendo un transporte independiente. |
-| Aplicaciones | `app.open` (app), `.search` (app, consulta), `.share` (contenido autorizado, app opcional), `.settings` (app) | «abrí Spotify», «iniciá Spotify»; «buscá en YouTube»; «compartí esto»; «configuración de WhatsApp» | PackageManager, búsqueda registrada por app, ACTION_SEND y APPLICATION_DETAILS_SETTINGS. Sin selección de contenido no se adivina «esto». No se garantiza reproducción por abrir una app. |
-| Android | `volume.up`, `.down`, `.set` (canal, porcentaje); `brightness.set` (porcentaje); `torch.on`, `.off`; `wifi.enable`, `.disable`, `.settings`; `bluetooth.enable`, `.disable`, `.settings`; `silent.enable`, `.disable`; `dnd.enable`, `.disable` | «subí el volumen», «más fuerte»; «bajá el brillo»; «prendé la linterna», «iluminá con la linterna»; «activá Wi-Fi»; «abrí los ajustes de Wi-Fi» | AudioManager, WRITE_SETTINGS para brillo, CAMERA para linterna, accesos DND y Bluetooth según versión. Android moderno restringe conmutar Wi-Fi/Bluetooth: explicar la limitación y ofrecer panel para intervención explícita; no declarar cambio realizado ni confundirlo con el intent de abrir ajustes. |
-| Multimedia | `media.play`, `.pause`, `.next`, `.previous`, `.status` (sesión/app opcional); `media.search` (consulta, app opcional) | «seguí la música», «reanudá»; «pausá»; «pasá de tema»; «tema anterior» | Sesiones multimedia y acceso especial actual; validar acción admitida y elegir sesión si hay varias. La búsqueda usa la integración registrada y no implica éxito de reproducción. Volumen comparte los IDs de Android. |
-| Navegación | `navigation.map` (consulta), `.route` (destino, modo), `.save_place` (alias, dirección) | «buscá farmacias», «mostrá farmacias en el mapa»; «llevame a casa», «iniciá ruta a casa» | Intents/URLs constantes del adaptador actual; parámetros codificados; alias resuelto desde repositorio. Rutas con restricciones solo si el adaptador puede representarlas todas. |
-| Contactos | `contact.search` (nombre), `.phones` (contacto); comunicación delega en `call` / `message` | «buscá a Ana», «encontrá el contacto Ana»; «qué teléfono tiene Ana» | READ_CONTACTS y ContactsContract, o selector nativo. No envía la agenda a Gemini. El resultado muestra solo contactos realmente encontrados. |
-| Archivos | `file.open`, `.search` (nombre/tipo); `.share` (URI autorizada), `.rename` (URI, nombre), `.move` / `.copy` (URI, destino), `.delete` (URI) | «abrí un PDF», «buscá el informe»; «compartí el archivo»; «renombrá», «mové», «copiá», «borrá» | Storage Access Framework / DocumentsContract y concesiones de URI. Elegir archivos fuera del ámbito autorizado; no pedir acceso global como sustituto. Confirmar eliminación y validar permiso de proveedor. Abrir selector es HANDOFF, no prueba que se abrió el archivo solicitado. |
-| Cámara y grabación | `camera.open_photo`, `.open_video`; `camera.capture_photo`, `.capture_video`; `recorder.start` (opciones admitidas), `.stop` (sesión propia) | «abrí cámara», «cámara de fotos»; «sacá una foto»; «grabá un video»; «grabá una nota de voz» | Intents públicos de captura y entrega de URI cuando corresponde; RECORD_AUDIO para grabación propia. No convertir «sacá una foto» en solo abrir la cámara ni terminar una grabación que Insto no controla. |
-| Notificaciones | `notification.list` (filtro opcional), `.open` (clave real), `.dismiss` (clave real) | «qué notificaciones tengo»; «abrí la de Ana»; «descartá esa notificación» | NotificationListenerService habilitado expresamente para este uso, actualmente limitado a multimedia; PendingIntent original y cancelNotification. No leer contenido como efecto de habilitar control multimedia. No inventar claves ni descartar notificaciones no cancelables. |
-| Dispositivo | `device.battery`, `.settings`, `.accessibility`, `.shortcut` (ID registrado) | «cuánta batería queda», «estado de batería»; «abrí ajustes», «abrí accesibilidad»; «ejecutá mi acceso directo» | BatteryManager/estado de batería; Settings; ShortcutManager o integración exportada/autorizada. Solo accesos directos realmente accesibles a Insto, sin lanzar componentes arbitrarios. |
-| Automatización local | `routine.run` (ID previamente configurado), `.list`; `mode.temporary` (tipo, duración, parámetros), `.end` | «ejecutá estudio», «activá mi rutina estudio»; «mis rutinas»; «silencio por una hora»; «restaurá el modo» | Repositorio local de rutinas más WorkflowRunner; TemporaryModeManager conserva permisos, persistencia y propiedad de ajustes. No interpreta instrucciones complejas nuevas ni configura disparadores implícitos. |
+`ConfiguredRoutineStore` importa plantillas JSON revisadas mediante `RoutineImportActivity`. No aprende rutinas de pedidos casuales ni interpreta un plan nuevo. El archivo admite hasta 65.536 caracteres, cincuenta plantillas y diez comandos por plantilla. Rechaza campos desconocidos, nombres duplicados, comandos inválidos, importaciones y ejecución de otras rutinas dentro de una rutina.
 
-### Disponibilidad y fidelidad
+Guardar reemplaza atómicamente la configuración después de la revisión. Ejecutar resuelve un nombre guardado, presenta los pasos y utiliza `WorkflowRunner`, conservando persistencia, confirmaciones, entregas, fallos y recuperación sin repetir efectos inciertos. Listar no ejecuta acciones.
 
-El catálogo semántico enumera operaciones conocidas, pero cada definición declara su disponibilidad real. Un adaptador ausente no puede anunciarse como implementado. La entrega debe incluir adaptadores para las operaciones implementables con APIs públicas e integraciones autorizadas, y explicar limitaciones de plataforma para el resto. Crear una entrada con un rechazo constante no cuenta como implementar la acción.
+Ejemplo importable: [routines.json](../../examples/routines.json). «Importá rutinas» abre el selector; «mostrá mis rutinas» lista; «ejecutá la rutina Estudio» presenta la plantilla para ejecutar.
 
-Un intent reconocido que no puede ejecutarse en ese dispositivo se informa localmente como no disponible o acceso pendiente. No se inventa otra acción ni se manda a Instinct como si no se hubiera reconocido. Ofrecer abrir ajustes/Reloj es una alternativa explícita, cuya aceptación crea su propio intent.
+### Límites explícitos
 
-Para «mañana a las ocho» se conserva fecha y hora. Si la hora es ambigua según el contexto, se pregunta el período; si no hay API capaz de crear la alarma para esa fecha, se comunica esa limitación. No se elimina «mañana», no se sustituye por un día semanal y no se promete una fecha que AlarmClock no permite verificar.
+Diez entradas declaran ausencia de API pública uniforme o de la integración/rol autorizado necesarios: modificar/pausar/reanudar determinados objetos de Reloj, conmutar conectividad restringida, detener una grabación controlada por otra app y ejecutar accesos directos sin proveedor registrado. No tienen un adaptador ficticio que afirme éxito. El reconocimiento informa la limitación localmente y ofrece una alternativa solo como otro pedido explícito.
 
-Los valores por defecto admitidos se especifican por intent, se muestran cuando afectan el resultado y nunca completan destinatarios, fechas, contenido o restricciones que el usuario no dio. Si una extracción no puede representar fielmente el pedido, se pide una aclaración local; no se ejecuta un subconjunto.
+## Continuaciones y ciclo de vida
 
-## Resultados y errores
+Confirmar, cancelar, elegir una opción o completar un campo inequívoco continúa un intent ya reconocido. Las preguntas y solicitudes nuevas vuelven a Decisions. Las aclaraciones no pueden cambiar el tipo de comando. Las respuestas de alarma conservan la fecha; un cambio de día/zona exige repetir los datos completos. Editar un pedido fallido vuelve a clasificar incluso cuando solo cambió su puntuación; un reintento del texto idéntico conserva el comando reconocido.
 
-- `NoMatch`: original completo a Instinct, sin acciones locales parciales.
-- `NeedsParameters` / `NeedsSelection` / `NeedsPermission` / `NeedsConfirmation`: conserva el intent y el original; interacción local.
-- `Completed`: efecto comprobado por API o estado observado.
-- `Handoff`: solicitud entregada a otra app; el usuario debe completar/verificar allí.
-- `ExecutionFailed` / `Unavailable`: intent reconocido, ejecución impedida; sin fallback automático.
-- `Uncertain`: pudo existir efecto; no repetir automáticamente.
-- `ClassificationFailed` / `ExtractionFailed`: problema técnico del proveedor o contrato; conserva el original y ofrece reintento. Nunca se transforma silenciosamente en otro comando.
+Editar, pausar o cerrar invalida generaciones anteriores. Una respuesta tardía de red no ejecuta ni envía. El audio se transcribe una sola vez por intento conservado y, cuando corresponde Instinct, se comparte el M4A original.
 
-No registrar contenido sensible para diagnóstico. La telemetría local de desarrollo puede medir latencia, etapa y estado sin claves, texto, destinatarios ni cuerpos de notificaciones.
+## Verificación
 
-## Verificación de aceptación
+La bitácora y los resultados exactos están en [el plan](../plans/2026-11-16-decisions-first.md). Se verifican política de routing, catálogo y esquemas, contrato HTTP simulado, conservación de campos, importación de rutinas, identidad de archivos y regresiones anteriores. Compilar fuentes de pruebas no equivale a ejecutar sus assertions Android.
 
-1. Toda entrada nueva consulta Decisions antes de parser/extractor/ejecutor; incluso una orden literal conocida o una consulta general.
-2. «Poné una alarma…» y «despertame…» llegan al mismo ID; extracción conserva fecha, hora y todas las restricciones. Se prueban respuestas simuladas y un conjunto etiquetado en español; simulación no prueba precisión del proveedor real.
-3. Las opciones de Decisions y los esquemas de extracción se generan desde el mismo registro. IDs duplicados, parámetros desconocidos y ausencia de adaptador impiden registrar capacidades ejecutables.
-4. `NoMatch`, baja confianza válida, consultas generales, citas y planes nuevos complejos envían exactamente el texto/M4A original una sola vez.
-5. Una respuesta de extracción no puede cambiar de ID ni agregar comandos. Ausencia de campos, tipos inválidos, horario ambiguo, DST, fechas pasadas y restricciones no representables nunca producen efectos parciales.
-6. Permisos denegados, app ausente, operación no admitida, error de API y resultado incierto de un intent reconocido nunca despachan a Instinct ni otra acción.
-7. Confirmaciones/selecciones/aclaraciones inequívocas conservan contexto; un pedido nuevo vuelve a clasificar. Editar/pausar/cerrar descarta respuestas tardías; reintentar conserva la grabación y transcripción.
-8. Alarmas, agenda, llamadas, mensajería, archivos y notificaciones tienen pruebas de adaptadores que verifican destinatario/recurso y contrato de resultado. Cambios destructivos no afectan entidades vecinas.
-9. Rutinas configuradas ejecutan solamente sus pasos registrados, conservando recuperación y sin repetir efectos inciertos. Una nueva secuencia libre no se convierte en rutina.
-10. Ejecutar compilación y suite completa con las herramientas disponibles, informar bloqueos reales de SDK/dependencias por separado. Validación física y del proveedor se declara pendiente si faltan dispositivo o credenciales.
-
-## Ámbito de cambios previsto
-
-Introducir el registro y coordinador de decisiones; refactorizar HybridPhoneRouter, GeminiDecisionsClient y StructuredCommandClient; integrar la nueva entrada en MainViewModel; restringir ConversationSession a continuaciones; ampliar PhoneCommand/Codec y los adaptadores por categoría; declarar accesos Android únicamente para capacidades implementadas; añadir el repositorio de rutinas configuradas; actualizar configuración/UI y pruebas que hoy fijan el orden anterior.
-
-Se conserva Kotlin, coroutines, Compose, Groq, las guardas de WhatsApp, Android Keystore y las políticas de persistencia de workflows/modos. El constructor decide separación concreta de archivos y detalles internos. No se añaden razonamiento general, operación universal de pantallas, lectura continua de notificaciones ni nuevas integraciones externas sin soporte real.
-
-## Punto técnico que requiere revisión del usuario
-
-La especificación describe Decisions identificando intent y extrayendo parámetros; el contrato actualmente implementado solo clasifica. La propuesta es una etapa inicial compuesta: Decisions selecciona el intent y, solo si hacen falta campos libres, una llamada de extracción estructurada restringida a ese único intent obtiene los parámetros. Instinct sigue siendo el segundo nivel para todo lo demás. Esta adaptación añade una llamada para esos intents y debe aprobarse antes de implementarla; no se presenta como extracción nativa ya comprobada de Decisions.
+La suite completa y la inicialización Robolectric encontraron bloqueos HTTP 403 al descargar artefactos externos. No hubo dispositivo ni credenciales para probar el proveedor y las aplicaciones reales; esa validación sigue pendiente.
