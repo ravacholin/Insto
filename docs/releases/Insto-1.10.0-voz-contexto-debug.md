@@ -35,6 +35,6 @@ Variante debug, código 17. Integrada sobre main `196685e66560799b2f3c3bdff29fcf
 ## Corrección posterior a la primera ejecución Android
 
 - Código corregido: `55c556453fe5da88cc1411a0d2d46d5f3cbd393f`.
-- Se acepta un intent de inicio ausente sin intentar leer contexto; se mantiene la regresión del ciclo de vida del Reloj.
+- Se acepta defensivamente un intent de inicio ausente sin intentar leer contexto; la regresión del Reloj se conserva y la aserción muestra el estado del asistente si no hay lanzamiento.
 - La regresión de adjuntos usa el FileProvider real del manifest y comprueba URI/nombre antes del reemplazo. No se omitieron pruebas.
 - APK recompilado, firma v2 y alineación verificadas, mismo nombre y enlace de Drive.

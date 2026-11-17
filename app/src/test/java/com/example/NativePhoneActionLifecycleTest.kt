@@ -39,7 +39,9 @@ class NativePhoneActionLifecycleTest {
       val vm = ViewModelProvider(activity)[MainViewModel::class.java]
       vm.updateFloatingText("iniciá el cronómetro")
       vm.sendFloatingText { fail("Local request must not send WhatsApp") }
-      assertEquals("com.android.deskclock.action.START_STOPWATCH", shadowOf(app).nextStartedActivity.action)
+      val launched = shadowOf(app).nextStartedActivity
+      assertNotNull("Clock was not launched; assistant state: ${vm.floatingAssistant.value}", launched)
+      assertEquals("com.android.deskclock.action.START_STOPWATCH", launched!!.action)
       controller.pause().stop()
       // No Compose frame or return to the assistant is needed to consume completion.
       runCurrent()

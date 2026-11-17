@@ -17,6 +17,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Before
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -26,6 +27,11 @@ import org.robolectric.Shadows.shadowOf
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class FloatingHybridRoutingTest {
+  @Before fun attachCurrentFileProviderRoots() {
+    // FileProvider caches roots by authority, while Robolectric gives each test a new cacheDir.
+    org.robolectric.Robolectric.buildContentProvider(androidx.core.content.FileProvider::class.java).create()
+  }
+
   @Test fun explicitSearchAudioLaunchesAndroidInsteadOfSendingTheOriginalToInstinct() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()

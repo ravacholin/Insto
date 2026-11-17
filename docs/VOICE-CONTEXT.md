@@ -63,7 +63,9 @@ La entrega actualizada y el APK de Drive se describen en [Insto 1.10.0](releases
 
 La primera ejecución Android completa del PR #17 ejecutó 325 casos y detectó dos fallos (más una evaluación real omitida):
 
-- `NativePhoneActionLifecycleTest.clockHandoffFinishesEvenWhenTheOverlayStopsBeforeItsNextFrame`: el nuevo receptor de contexto asumía un intent de inicio no nulo. La actividad ahora ignora de forma segura un intent ausente, conservando la prueba de ciclo de vida y la entrega al Reloj.
+- `NativePhoneActionLifecycleTest.clockHandoffFinishesEvenWhenTheOverlayStopsBeforeItsNextFrame`: la traza completa ubica el NPE en la comprobación de una actividad Reloj no lanzada. Se agregó estado del asistente a la aserción para identificar el bloqueo. El receptor también tolera defensivamente un intent ausente, pero ese guard no resolvió por sí solo este caso.
 - `FloatingContextTest.newReferenceReplacesAPreviouslySelectedAttachment`: el proveedor anónimo se registraba sin adjuntarle contexto Android. La prueba usa ahora el `FileProvider` real del manifest, un archivo temporal permitido y comprueba URI y nombre antes de quitar el adjunto al recibir contexto.
 
 No se deshabilitaron pruebas ni comprobaciones del workflow. La verificación final se documenta en la nota de entrega.
+
+La salida completa de XML en CI reveló además una regresión de aislamiento de `FloatingHybridRoutingTest`: el FileProvider reutilizaba raíces de otro directorio temporal. Su fixture ahora se adjunta en cada prueba, como las demás pruebas de audio existentes.
