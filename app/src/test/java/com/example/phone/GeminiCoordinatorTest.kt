@@ -35,7 +35,7 @@ class GeminiCoordinatorTest {
     assertTrue(result is InterpretationResult.Rejected)
   }
 
-  @Test fun unavailableDecisionsUsesOneConfirmedFallbackButQuotaDoesNot() = runTest {
+  @Test fun unavailableDecisionsUsesOneFallbackWithoutAddingQueryConfirmation() = runTest {
     for (kind in listOf(GeminiFailureKind.UNAVAILABLE, GeminiFailureKind.QUOTA, GeminiFailureKind.AUTH, GeminiFailureKind.INVALID_RESPONSE)) {
       var calls = 0
       val router = HybridPhoneRouter({ true }, DecisionClassifier { throw DecisionException("error", kind) })
@@ -45,7 +45,7 @@ class GeminiCoordinatorTest {
       }
       val result = GeminiCoordinator(router, extractor).interpret(InterpretationRequest("ayudame a estudiar"), PhoneRoute.Instinct)
       if (kind == GeminiFailureKind.UNAVAILABLE) {
-        assertEquals(InterpretationResult.Query(true), result); assertEquals(1, calls)
+        assertEquals(InterpretationResult.Query(), result); assertEquals(1, calls)
       } else { assertEquals(InterpretationResult.Query(), result); assertEquals(0, calls) }
     }
   }

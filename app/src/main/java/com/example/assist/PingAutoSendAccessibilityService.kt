@@ -483,6 +483,30 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
   }
 
   private fun findSharePositiveButton(root: AccessibilityNodeInfo, pkg: String): AccessibilityNodeInfo? {
+    // WhatsApp's dialog IDs vary between builds. Exact accessible button labels remain
+    // usable, and the recipient/payload/freshness policy below still authorizes the touch.
+    var labelled: AccessibilityNodeInfo? = null
+    var foundConfirmation = false
+    var visited = 0
+    fun walk(node: AccessibilityNodeInfo, depth: Int) {
+      if (visited++ >= 800 || depth > 28) return
+      val label = node.text?.toString()?.takeIf { it.isNotBlank() } ?: node.contentDescription?.toString()
+      val confirmation = ShareConfirmationPolicy.isConfirmationLabel(label)
+      if (node.isVisibleToUser && node.isEnabled &&
+        (node.isClickable || node.className?.toString()?.endsWith("Button") == true) &&
+        ShareConfirmationPolicy.isPositiveLabel(label) &&
+        (labelled == null || confirmation && !foundConfirmation)) {
+        labelled?.recycle()
+        labelled = AccessibilityNodeInfo.obtain(node)
+        foundConfirmation = confirmation
+      }
+      for (i in 0 until node.childCount) {
+        val child = node.getChild(i) ?: continue
+        try { walk(child, depth + 1) } finally { child.recycle() }
+      }
+    }
+    walk(root, 0)
+    labelled?.let { return it }
     val ids = listOf("android:id/button1", "$pkg:id/button1", "$pkg:id/confirm", "$pkg:id/confirm_button", "$pkg:id/ok",
       "$pkg:id/ok_button", "$pkg:id/positive_button", "$pkg:id/dialog_positive_button",
       "$pkg:id/send", "$pkg:id/send_button", "$pkg:id/send_btn", "$pkg:id/media_caption_send_btn")
@@ -962,7 +986,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
           try { current.add(root.windowId) } finally { root.recycle() }
         }
         current.filter { it >= 0 }.toSet()
-      }.getOrDefault(emptySet())
+      }.getOrNull()
       AutoSendCoordinator.prepareShareLaunch(request, ids)
     }
 
