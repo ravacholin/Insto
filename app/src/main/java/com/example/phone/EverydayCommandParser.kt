@@ -31,10 +31,11 @@ internal class EverydayCommandParser(private val now: () -> Calendar) {
     val r = FoldedRequest.of(input)
     fun match(pattern: String) = Regex("^$PREFIX$pattern$").matchEntire(r.text)
     fun local(command: PhoneCommand) = PhoneRoute.Local(command)
-    val verbs = "llevame|lleves|llevarme|navega|navegues|navegar|llama|llames|llamar|marca|marques|agenda|agendes|agendar|programa|programes|guarda|guardes|guardar|recorda|pone|pongas|poneme|abri|abras|abre|abrir|busca|busques|buscame|buscar|reproduci|reproduce|reproduzcas|prende|prendas|apaga|apagues|enciende|encende|inicia|inicies|reinicia|reinicies|pausa|pauses|activa|actives|desactiva|desactives|subi|baja|mostra|muestres"
+    val verbs = "llevame|lleves|llevarme|navega|navegues|navegar|llama|llames|llamar|marca|marques|agenda|agendes|agendar|programa|programes|guarda|guardes|guardar|recorda|pone|poner|pongas|poneme|abri|abras|abre|abrir|busca|busques|buscame|buscar|reproduci|reproducir|reproduce|reproduzcas|prende|prendas|apaga|apagues|enciende|encende|inicia|inicies|reinicia|reinicies|pausa|pausar|pauses|parar|detene|detener|activa|actives|desactiva|desactives|subi|subir|baja|bajar|silencia|silenciar|mostra|muestres" +
+      "|para(?=\\s+(?:(?:la )?(?:musica|reproduccion)|(?:en )?(?:spotify|youtube))\\b)"
     val structural = r.text.replace(Regex("[\"]([^\"]*)[\"]|“[^”]*”"), "")
     if (Regex("^$PREFIX(?:(?:$verbs)\\b|mi (?:casa|trabajo) es\\b)").containsMatchIn(structural) &&
-      Regex("(?:\\s+(?:(?:y\\s+)?(?:despues|luego)|y)\\s+|[;\\n]\\s*|\\.\\s+)$PREFIX(?:$verbs)\\b").containsMatchIn(structural)) {
+      Regex("(?:\\s+(?:(?:y\\s+)?(?:despues|luego)|y)\\s+|[,;\\n]\\s*|\\.\\s+)$PREFIX(?:$verbs)\\b").containsMatchIn(structural)) {
       return PhoneRoute.Unsupported("Pedime una acción por vez para interpretar todos sus detalles.")
     }
     if (Regex("^$PREFIX(?:llevame|lleves|llevarme|navega|navegues|navegar)\\b").containsMatchIn(r.text) &&
@@ -65,6 +66,12 @@ internal class EverydayCommandParser(private val now: () -> Calendar) {
     }
     match("(?:busca|buscar|busques|buscame|mostra|mostrar|muestres)\\s+en\\s+(youtube|spotify)\\s+(.+)")?.let {
       return platformSearch(it.groupValues[1], r.capture(it, 2))
+    }
+    match("(?:reproduci|reproducir|reproduce|reproduzcas)\\s+(.+?)\\s+en\\s+(youtube|spotify)[.!?]*")?.let {
+      val app = MediaApp.entries.first { app -> app.label.equals(it.groupValues[2], ignoreCase = true) }
+      val query = r.capture(it, 1).removeSurrounding("\"").removeSurrounding("“", "”").trim()
+      if (query.length !in 1..2000) return PhoneRoute.Unsupported("Indicá un título válido para reproducir en ${app.label}.")
+      return local(PhoneCommand.MusicSearch(query, app))
     }
     match("(?:busca|buscar|busques|buscame)\\s+en\\s+(?:google\\s+)?maps\\s+(.+)")?.let {
       return local(PhoneCommand.MapSearch(r.capture(it, 1)))

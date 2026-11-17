@@ -1,6 +1,7 @@
 package com.example.phone
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -52,6 +53,28 @@ internal class EverydayActionExecutor(private val context: Context) {
       spec.longExtras.forEach { (key, value) -> putExtra(key, value) }
       setPackage(spec.preferredPackage)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    if (resolved is PhoneCommand.MusicSearch && resolved.app != null) {
+      val app = resolved.app
+      if (intent.resolveActivity(context.packageManager) != null) {
+        try {
+          context.startActivity(intent)
+          return PhoneActionResult("Pedido de reproducción enviado a ${app.label}.", outcome = PhoneActionOutcome.HANDOFF)
+        } catch (_: ActivityNotFoundException) {
+          // The playback activity stopped being available.
+        } catch (_: SecurityException) {
+          // The playback activity is not accessible to this app.
+        }
+      }
+      MediaControllerAdapter(context).playFromSearch(app, resolved.query)?.let { return it }
+      val search = when (app) {
+        MediaApp.SPOTIFY -> PhoneCommand.SpotifySearch(resolved.query)
+        MediaApp.YOUTUBE -> PhoneCommand.YouTubeSearch(resolved.query)
+      }
+      val result = execute(search)
+      return if (result.outcome == PhoneActionOutcome.HANDOFF) {
+        result.copy(message = "Abrí la búsqueda en ${app.label}. Elegí qué reproducir.")
+      } else result
     }
     if (spec.preferredPackage != null && intent.resolveActivity(context.packageManager) == null) {
       intent.setPackage(null) // Same search URL in a browser when the requested app is unavailable.

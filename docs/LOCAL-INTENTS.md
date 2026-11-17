@@ -4,7 +4,7 @@ Generado desde `LocalIntentRegistry`, `NativeActionParameters` y `ExtendedLocalI
 
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 
-Total de entradas: 88.
+Total de entradas: 94.
 
 ## `timer` · CLOCK
 
@@ -514,14 +514,18 @@ Desactivar Bluetooth.
 
 ## `silent_on` · ANDROID
 
-Activar silencio de llamadas.
+Silenciar llamadas y notificaciones.
 
-- Equivalentes: activar silencio de llamadas / quiero activar silencio de llamadas
+- Equivalentes: silenciar / poner en silenciar
 - Parámetros: ninguno
 - Permisos: android.permission.ACCESS_NOTIFICATION_POLICY; android.permission.MODIFY_AUDIO_SETTINGS
-- Ejecución: AudioManager / NotificationManager con acceso de política
-- Resultado: Activar silencio de llamadas
+- Ejecución: AudioManager.ringerMode
+- Resultado: Silenciar llamadas y notificaciones
 - Disponibilidad: adaptador implementado; depende de app, versión y permisos
+
+## `vibrate_on` · ANDROID
+
+Activa el modo vibración con `modo vibrar` o `poner en vibrar`. Usa `AudioManager.ringerMode`. Android puede pedir acceso a No molestar al cambiar de modo.
 
 ## `silent_off` · ANDROID
 
@@ -624,14 +628,18 @@ Buscar contenido en Spotify.
 
 ## `music` · MEDIA
 
-Buscar música en una aplicación compatible.
+Solicitar la reproducción por título en una aplicación compatible.
 
-- Equivalentes: poné música de Soda Stereo / reproducí música de Soda Stereo
-- Parámetros: query (texto, obligatorio): valor explícito del usuario
-- Permisos: sin acceso especial adicional
-- Ejecución: MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH
-- Resultado: Solicitud entregada; reproducción depende de integración
+- Equivalentes: reproducir De música ligera en Spotify / reproducir De música ligera en YouTube
+- Parámetros: query (título, obligatorio) y app (Spotify o YouTube, opcional)
+- Permisos: acceso a notificaciones si se usa la sesión multimedia
+- Ejecución: `MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH` o `MediaSession`
+- Resultado: Se envía el pedido de reproducción. Si la app elegida no admite ese control, se abre su búsqueda.
 - Disponibilidad: adaptador implementado; depende de app, versión y permisos
+
+## `media_stop`, `media_pause_spotify`, `media_stop_spotify`, `media_pause_youtube`, `media_stop_youtube` · MEDIA
+
+`Pausar Spotify`, `pausar YouTube`, `parar Spotify` y `parar YouTube` controlan la sesión de la app nombrada. `Parar la música` elige la sesión si solo hay una reproduciendo. Si hay varias, Insto pide elegir una. El control requiere acceso a notificaciones. Cuando la app solo ofrece pausa, `parar` envía la orden de pausa.
 
 ## `navigate` · NAVIGATION
 

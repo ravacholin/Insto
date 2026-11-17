@@ -2,7 +2,11 @@ package com.example.phone
 
 enum class StopwatchOp { START, PAUSE, RESUME, RESET, STATUS }
 enum class TravelMode { DRIVING, WALKING, BICYCLING, TRANSIT }
-enum class MediaOp { PLAY, PAUSE, NEXT, PREVIOUS, STATUS }
+enum class MediaOp { PLAY, PAUSE, STOP, NEXT, PREVIOUS, STATUS }
+enum class MediaApp(val label: String, val packageName: String) {
+  SPOTIFY("Spotify", "com.spotify.music"),
+  YOUTUBE("YouTube", "com.google.android.youtube"),
+}
 enum class ModeKind { MEDIA_VOLUME, SILENT, DND }
 enum class VolumeOp { UP, DOWN, SET }
 enum class PlatformAction {
@@ -13,7 +17,7 @@ enum class PlatformAction {
   ALARM_DISMISS, ALARM_SNOOZE, TIMER_DISMISS, CALENDAR_AGENDA, DIALER_OPEN,
   CONTACT_SEARCH, CONTACT_PHONES, APP_SETTINGS, MESSAGE_OPEN, MESSAGE_DRAFT, TEXT_SHARE,
   FILES_BROWSE, RECORDER_OPEN, BATTERY, BRIGHTNESS, ACCESSIBILITY_SETTINGS, DISPLAY_SETTINGS,
-  SILENT_ON, SILENT_OFF, DND_ON, DND_OFF, NOTIFICATION_LIST, NOTIFICATION_OPEN, NOTIFICATION_DISMISS
+  SILENT_ON, SILENT_OFF, VIBRATE_ON, DND_ON, DND_OFF, NOTIFICATION_LIST, NOTIFICATION_OPEN, NOTIFICATION_DISMISS
 }
 sealed interface PhoneCommand {
   data class Platform(val action: PlatformAction, val argument: String? = null, val percent: Int? = null, val content: String? = null) : PhoneCommand
@@ -28,7 +32,7 @@ sealed interface PhoneCommand {
   data class Camera(val video: Boolean = false) : PhoneCommand
   data class YouTubeSearch(val query: String) : PhoneCommand
   data class SpotifySearch(val query: String) : PhoneCommand
-  data class MusicSearch(val query: String) : PhoneCommand
+  data class MusicSearch(val query: String, val app: MediaApp? = null) : PhoneCommand
   data class Timer(val seconds: Int, val label: String = "") : PhoneCommand
   data class Alarm(val hour: Int, val minute: Int, val days: List<Int> = emptyList(), val label: String = "", val date: String? = null) : PhoneCommand
   data class ClockList(val alarms: Boolean) : PhoneCommand
