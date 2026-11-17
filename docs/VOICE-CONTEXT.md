@@ -69,3 +69,5 @@ La primera ejecución Android completa del PR #17 ejecutó 325 casos y detectó 
 No se deshabilitaron pruebas ni comprobaciones del workflow. La verificación final se documenta en la nota de entrega.
 
 La salida completa de XML en CI reveló además una regresión de aislamiento de `FloatingHybridRoutingTest`: el FileProvider reutilizaba raíces de otro directorio temporal. Su fixture ahora se adjunta en cada prueba, como las demás pruebas de audio existentes.
+
+La traza con estado confirmó que el Reloj devolvía HANDOFF, sin error, mientras la cola auxiliar de Robolectric estaba vacía. La prueba de ciclo de vida observa ahora el envío real mediante `IntentMonitorRegistry`, verifica una sola llamada y el componente exacto del Reloj, detiene el flotante sin avanzar un frame de Compose y comprueba cierre y consumo único de la finalización. No reemplaza el ejecutor ni simula un resultado de lanzamiento.
