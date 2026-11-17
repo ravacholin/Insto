@@ -27,6 +27,14 @@ class EverydayCommandParserTest {
     assertEquals(PhoneCommand.MusicSearch("Soda Stereo"), local("Poné música de Soda Stereo"))
     assertEquals(PhoneCommand.MusicSearch("De Música Ligera"), local("reproducí la canción De Música Ligera"))
   }
+  @Test fun explicitSearchesPreserveThePlatformQueryAndSpokenPunctuation() {
+    assertEquals(PhoneCommand.YouTubeSearch("rebord"), local("buscar rebord en YouTube"))
+    assertEquals(PhoneCommand.SpotifySearch("rebord"), local("buscar rebord en spotify"))
+    assertEquals(PhoneCommand.SpotifySearch("Björk & Jazz"), local("buscá en Spotify Björk & Jazz"))
+    assertEquals(PhoneCommand.YouTubeSearch("rebord"), local("Buscá rebord en YouTube."))
+    assertEquals(PhoneCommand.SpotifySearch("rebord"), local("¿Podés buscar rebord en Spotify?"))
+    assertEquals(PhoneCommand.SpotifySearch("rebord"), parser.parseReply("spotify", "rebord").let { (it as PhoneRoute.Local).command })
+  }
   @Test fun decomposedAccentsArePreservedAtTheEndOfAPayload() {
     assertEquals(PhoneCommand.MapSearch("Cafe\u0301"), local("buscá en Maps Cafe\u0301"))
   }

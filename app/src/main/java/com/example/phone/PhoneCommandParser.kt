@@ -20,6 +20,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       "navigate" -> return parse("llevame a $text")
       "dial" -> return parse("llamá a $text")
       "youtube" -> return parse("buscá en YouTube $text")
+      "spotify" -> return parse("buscá en Spotify $text")
       "maps" -> return parse("buscá en Maps $text")
       "music" -> return parse("poné música de $text")
       "calendar" -> return PhoneRoute.Clarify("Repetí el evento con título, fecha y hora: agendá reunión mañana a las 17:00.", "calendar")

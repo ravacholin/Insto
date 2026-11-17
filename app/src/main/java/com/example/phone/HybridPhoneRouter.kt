@@ -31,7 +31,20 @@ class HybridPhoneRouter(
     if (scores.any { !it.isFinite() || it !in 0.0..1.0 } || result.choice !in registry.choices) {
       throw DecisionException("Respuesta inválida de Gemini Decisions. El pedido se conserva para reintentar.")
     }
-    if (result.choice in LocalIntentRegistry.fallbackIds || scores.any { it < .95 }) return PhoneRoute.Instinct
+    if (result.choice in LocalIntentRegistry.fallbackIds || scores.any { it < .95 }) {
+      // A literal platform search must not turn into sending the original audio to Instinct.
+      // Decisions still runs first; recovery is restricted to these validated, explicit searches.
+      val candidate = (PhoneCommandParser().parse(text) as? PhoneRoute.Local)?.command
+      val id = when (candidate) {
+        is PhoneCommand.YouTubeSearch -> "youtube"
+        is PhoneCommand.SpotifySearch -> "spotify"
+        else -> null
+      }
+      if (id != null && candidate != null && registry.definitions.any { it.id == id } && NativeIntentSpec.forCommand(candidate) != null) {
+        return registry.resolve(id, text)
+      }
+      return PhoneRoute.Instinct
+    }
     return registry.resolve(result.choice, text)
   }
 

@@ -40,4 +40,15 @@ class NativeIntentSpecTest {
     assertEquals("vnd.android.cursor.item/*", music.stringExtras["android.intent.extra.focus"])
     assertEquals("https://www.youtube.com/results?search_query=ELE+%26+jazz", NativeIntentSpec.forCommand(PhoneCommand.YouTubeSearch("ELE & jazz"))!!.dataUri)
   }
+  @Test fun spotifySearchOpensEncodedResultsWithoutRequestingPlayback() {
+    val route = PhoneCommandParser().parse("buscar Björk & jazz en spotify")
+    assertTrue(route is PhoneRoute.Local)
+    val command = (route as PhoneRoute.Local).command
+    val spec = NativeIntentSpec.forCommand(command)!!
+    assertEquals("android.intent.action.VIEW", spec.action)
+    assertEquals("https://open.spotify.com/search/Bj%C3%B6rk%20%26%20jazz", spec.dataUri)
+    assertTrue(spec.stringExtras.isEmpty())
+    assertEquals(command, PhoneCommandCodec.decode(PhoneCommandCodec.encode(command)))
+  }
+
 }

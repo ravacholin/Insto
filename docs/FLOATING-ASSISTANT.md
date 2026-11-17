@@ -1,7 +1,11 @@
-## Flujo vigente: Decisions primero (1.8.0 / código 13)
+## Flujo vigente: Decisions primero (1.8.1 / código 14)
 
 Toda solicitud nueva escrita o transcripta se clasifica primero con Gemini Decisions contra el catálogo. Un intent reconocido se valida y ejecuta en Android; si no hay coincidencia confiable, el texto o M4A original completo va a Instinct. No hay una segunda llamada generativa. Sin clave o ante un error técnico de clasificación se conserva el pedido, sin ejecutar por el parser como sustitución silenciosa.
 
+
+Las búsquedas explícitas «buscar rebord en YouTube» y «buscar rebord en Spotify» permanecen en Android aunque Decisions derive a Instinct, devuelva `unsupported` o no alcance 0,95. Después de consultar Decisions, se valida localmente la orden completa y su consulta; esta recuperación solo admite búsquedas de esas dos plataformas. No se aplica a consultas generales, negaciones, condiciones ni acciones encadenadas, ni sustituye errores técnicos o la falta de clave. Las demás acciones conservan el umbral anterior.
+
+Se prefiere la app YouTube/Spotify instalada para abrir sus resultados mediante `ACTION_VIEW`; si no resuelve la búsqueda, se abre la misma URL pública en una app compatible. Si no hay handler, el pedido queda en Insto con un error, sin enviar el audio a Instinct. Buscar no garantiza reproducción automática.
 El [catálogo de intents](LOCAL-INTENTS.md) detalla parámetros, equivalencias, permisos, resultados y límites reales. Archivos usan selección SAF; agenda usa permisos y entidades reales; cámara/grabadora usa interfaces y resultados nativos. Rutinas se importan y revisan desde JSON: [ejemplo](examples/routines.json). Los efectos externos y selecciones siguen siendo entregas a otra app hasta que se verifiquen allí.
 
 Las secciones de versiones anteriores más abajo son historial. La [especificación vigente](superpowers/specs/2026-11-16-decisions-first-design.md) reemplaza el orden híbrido y la extracción generativa descritos en esas versiones.

@@ -31,6 +31,34 @@ class EverydayActionExecutorTest {
       addCategory(Intent.CATEGORY_DEFAULT); addDataScheme("tel")
     })
   }
+  @Test fun platformSearchPrefersTheRequestedAppOverABrowser() {
+    com.example.testsupport.installNativeHandler(app, Intent.ACTION_VIEW, "https")
+    for ((command, pkg, url) in listOf(
+      Triple(PhoneCommand.YouTubeSearch("rebord"), "com.google.android.youtube", "https://www.youtube.com/results?search_query=rebord"),
+      Triple(PhoneCommand.SpotifySearch("rebord"), "com.spotify.music", "https://open.spotify.com/search/rebord"))) {
+      val info = ActivityInfo().apply {
+        name = "$pkg.Search"; packageName = pkg; exported = true; enabled = true
+        applicationInfo = ApplicationInfo().apply { packageName = pkg; enabled = true }
+      }
+      val pm = shadowOf(app.packageManager)
+      pm.installPackage(PackageInfo().apply { packageName = pkg; applicationInfo = info.applicationInfo; activities = arrayOf(info) })
+      pm.addIntentFilterForActivity(ComponentName(pkg, info.name), IntentFilter(Intent.ACTION_VIEW).apply {
+        addCategory(Intent.CATEGORY_DEFAULT); addDataScheme("https")
+      })
+      val result = PhoneActionExecutor(app).execute(command)
+      assertEquals(PhoneActionOutcome.HANDOFF, result.outcome)
+      val launched = shadowOf(app).nextStartedActivity
+      assertEquals(pkg, launched.`package`)
+      assertEquals(url, launched.dataString)
+      assertNull(shadowOf(app).nextStartedActivity)
+    }
+  }
+  @Test fun spotifyWithoutAnyHandlerKeepsTheRequestLocal() {
+    val result = PhoneActionExecutor(app).execute(PhoneCommand.SpotifySearch("rebord"))
+    assertEquals(PhoneActionOutcome.REJECTED, result.outcome)
+    assertTrue(result.retainRequest)
+    assertNull(shadowOf(app).nextStartedActivity)
+  }
   @Test fun explicitNumberOpensDialerWithoutContactsPermissionOrAutomaticCall() {
     shadowOf(app).denyPermissions(Manifest.permission.READ_CONTACTS)
     installDialer()

@@ -53,11 +53,18 @@ internal class EverydayCommandParser(private val now: () -> Calendar) {
     match("(?:llevame|llevarme|lleves|navega|navegar|navegues)\\s+(?:(a pie|en auto|en coche|en bici|en bicicleta|en colectivo|en transporte publico)\\s+)?(?:a|al)\\s+(.+)")?.let {
       return local(PhoneCommand.Navigate(r.capture(it, 2), travelMode(it.groupValues[1])))
     }
-    match("(?:busca|buscar|busques|buscame|mostra|mostrar|muestres)\\s+(.+)\\s+en\\s+youtube")?.let {
-      return local(PhoneCommand.YouTubeSearch(r.capture(it, 1)))
+    fun platformSearch(platform: String, query: String): PhoneRoute {
+      // Conditions and extra actions are syntax, unless quoted as part of a title.
+      if (Regex("\\b(?:si|cuando|despues|luego|hasta que)\\b").containsMatchIn(structural)) {
+        return PhoneRoute.Unsupported("Pedí la búsqueda sin condiciones; no abrí otra aplicación.")
+      }
+      return local(if (platform == "youtube") PhoneCommand.YouTubeSearch(query) else PhoneCommand.SpotifySearch(query))
     }
-    match("(?:busca|buscar|busques|buscame)\\s+en\\s+youtube\\s+(.+)")?.let {
-      return local(PhoneCommand.YouTubeSearch(r.capture(it, 1)))
+    match("(?:busca|buscar|busques|buscame|mostra|mostrar|muestres)\\s+(.+?)\\s+en\\s+(youtube|spotify)[.!?]*")?.let {
+      return platformSearch(it.groupValues[2], r.capture(it, 1))
+    }
+    match("(?:busca|buscar|busques|buscame|mostra|mostrar|muestres)\\s+en\\s+(youtube|spotify)\\s+(.+)")?.let {
+      return platformSearch(it.groupValues[1], r.capture(it, 2))
     }
     match("(?:busca|buscar|busques|buscame)\\s+en\\s+(?:google\\s+)?maps\\s+(.+)")?.let {
       return local(PhoneCommand.MapSearch(r.capture(it, 1)))
@@ -78,7 +85,8 @@ internal class EverydayCommandParser(private val now: () -> Calendar) {
     val incomplete = listOf(
       "(?:llevame|navega|lleves)(?: a| al)?" to ("¿A dónde querés ir?" to "navigate"),
       "(?:llama|llames|marca)(?: a| al)?" to ("¿A quién querés llamar? Podés indicar un nombre o número." to "dial"),
-      "(?:busca|busques) en youtube" to ("¿Qué querés buscar en YouTube?" to "youtube"),
+      "(?:busca|buscar|busques|buscame) en youtube[.!?]*" to ("¿Qué querés buscar en YouTube?" to "youtube"),
+      "(?:busca|buscar|busques|buscame) en spotify[.!?]*" to ("¿Qué querés buscar en Spotify?" to "spotify"),
       "(?:busca|busques) en (?:google )?maps" to ("¿Qué lugar querés buscar?" to "maps"),
       "(?:pone|pongas|reproduci|reproduce) musica(?: de)?" to ("¿Qué música querés escuchar?" to "music"),
     )

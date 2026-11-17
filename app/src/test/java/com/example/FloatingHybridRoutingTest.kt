@@ -26,6 +26,44 @@ import org.robolectric.Shadows.shadowOf
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class FloatingHybridRoutingTest {
+  @Test fun explicitSearchAudioLaunchesAndroidInsteadOfSendingTheOriginalToInstinct() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    com.example.testsupport.installNativeHandler(app, Intent.ACTION_VIEW, "https")
+    try {
+      for ((transcript, url) in listOf(
+        "buscar rebord en YouTube" to "https://www.youtube.com/results?search_query=rebord",
+        "buscar rebord en spotify" to "https://open.spotify.com/search/rebord")) {
+        val file = File.createTempFile("search-original", ".m4a", app.cacheDir).apply { writeText("original audio") }
+        var decisions = 0
+        val capture = object : FloatingAudioCapture {
+          override val snapshot get() = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1500, .5f)
+          override fun start() = Result.success(Unit)
+          override fun finish() = RecordedAudio(file, "audio/mp4")
+          override fun cancel() {}
+        }
+        val vm = MainViewModel(app, capture, UnconfinedTestDispatcher(testScheduler), AudioTranscriber { transcript },
+          HybridPhoneRouter({ true }, DecisionClassifier {
+            decisions++; SemanticDecision("instinct", .99, .99, .99, .99)
+          }))
+        try {
+          vm.startFloatingListening { fail("Search must stay on Android") }
+          runCurrent()
+          vm.sendFloatingAudio { fail("Search audio must not be sent to Instinct") }
+          advanceUntilIdle()
+          val launched = shadowOf(app).nextStartedActivity
+          assertNotNull(transcript, launched)
+          assertEquals(Intent.ACTION_VIEW, launched.action)
+          assertEquals(url, launched.dataString)
+          assertEquals(1, decisions)
+          assertNotNull(vm.consumePhoneActionCompletion())
+          assertFalse(file.exists())
+          assertNull(shadowOf(app).nextStartedActivity)
+        } finally { vm.dismissFloatingAssistant(); file.delete() }
+      }
+    } finally { Dispatchers.resetMain() }
+  }
+
   @Test fun semanticLocalActionWorksWithoutWhatsAppAndCompletesOnce() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()

@@ -4,7 +4,7 @@ Generado desde `LocalIntentRegistry`, `NativeActionParameters` y `ExtendedLocalI
 
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 
-Total de entradas: 87.
+Total de entradas: 88.
 
 ## `timer` · CLOCK
 
@@ -610,6 +610,17 @@ Consultar qué está sonando.
 - Ejecución: MediaSession.TransportControls
 - Resultado: Acción o estado de una sesión compatible; elegir si hay varias
 - Disponibilidad: adaptador implementado; depende de app, versión y permisos
+
+## `spotify` · MEDIA
+
+Buscar contenido en Spotify.
+
+- Equivalentes: buscar rebord en Spotify / buscá en Spotify jazz
+- Parámetros: query (texto, obligatorio): consulta explícita del usuario
+- Permisos: sin acceso especial adicional
+- Ejecución: ACTION_VIEW https://open.spotify.com/search/ con consulta codificada como segmento de ruta; se prefiere com.spotify.music y se permite la misma URL pública si la app no la resuelve
+- Resultado: Resultados de búsqueda abiertos; no se afirma reproducción
+- Disponibilidad: adaptador implementado; depende de app, versión y handler disponible
 
 ## `music` · MEDIA
 
