@@ -42,6 +42,20 @@ jobs:
           -keyalg RSA -keysize 2048 -validity 10000
       - name: Run Android unit tests and build debug APK
         run: ./gradlew --no-daemon --stacktrace testDebugUnitTest assembleDebug
+      - name: Print failing test stack traces
+        if: failure()
+        run: |
+          python3 - <<'PYREPORT'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          for path in sorted(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.xml')):
+              suite = ET.parse(path).getroot()
+              for case in suite.findall('testcase'):
+                  for failure in list(case.findall('failure')) + list(case.findall('error')):
+                      print(f"{case.get('classname')}.{case.get('name')}", flush=True)
+                      print(failure.get('message', ''), flush=True)
+                      print(failure.text or '', flush=True)
+          PYREPORT
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@v5
