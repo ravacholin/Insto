@@ -68,7 +68,7 @@ class GeminiCoordinator(
             is PhoneRoute.Unsupported -> return@withTimeout InterpretationResult.Rejected(registered.message)
             is PhoneRoute.Clarify -> {
               val type = when (decision.choice) { "volume_set" -> "volume"; "app_open" -> "open_app"; else -> decision.choice }
-              if (type !in CapabilityCatalog.specs || local is PhoneRoute.Clarify)
+              if (type !in CapabilityCatalog.specs || local is PhoneRoute.Clarify && request.sourceContext == null)
                 return@withTimeout InterpretationResult.Clarification(registered.prompt, registered.context)
             }
             else -> Unit

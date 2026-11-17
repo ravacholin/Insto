@@ -11,12 +11,21 @@ data class InterpretationRequest(
   val now: Calendar = Calendar.getInstance(),
   val requestId: String = UUID.randomUUID().toString(),
   val revision: Long = draft?.revision ?: 0,
+  val sourceContext: com.example.context.SharedTextContext? = null,
 ) {
-  /** Only the active request; no recording, address book, notification or unrelated history. */
-  fun modelInput(): String = if (draft == null) text else JSONObject()
-    .put("turn", text).put("draft", JSONArray(draft.steps.map { it.jsonWithId() }))
-    .apply { draft.pendingEdit?.let { put("pendingEdit", it) }; draft.selectedStepId?.let { put("selectedStepId", it) } }
-    .put("revision", revision).toString()
+  /** Reference material is a separate data field, never appended to the executable turn. */
+  fun modelInput(): String {
+    if (draft == null && sourceContext == null) return text
+    return JSONObject().put("turn", text).apply {
+      sourceContext?.let { put("sourceContext", it.json()) }
+      draft?.let { active ->
+        put("draft", JSONArray(active.steps.map { it.jsonWithId() }))
+        active.pendingEdit?.let { put("pendingEdit", it) }
+        active.selectedStepId?.let { put("selectedStepId", it) }
+        put("revision", revision)
+      }
+    }.toString()
+  }
 }
 
 sealed interface InterpretationResult {

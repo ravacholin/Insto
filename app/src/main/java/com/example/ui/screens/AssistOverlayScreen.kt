@@ -57,6 +57,7 @@ fun AssistOverlayScreen(
   onDismissOverlay: () -> Unit,
   onAttach: () -> Unit = {},
   onRemoveAttachment: () -> Unit = {},
+  onRemoveContext: () -> Unit = {},
   onConfigureGroq: () -> Unit = {},
   onConfigureContact: () -> Unit = {},
   onConfigureClockAccessibility: () -> Unit = {},
@@ -114,6 +115,20 @@ fun AssistOverlayScreen(
           }
         }
         HorizontalDivider(color = edge)
+        state.sourceContext?.let { reference ->
+          Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("overlay_context")) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Text(if (reference.source == com.example.context.SharedTextContext.Source.SELECTED) "Texto seleccionado" else "Texto compartido",
+                modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+              TextButton(onClick = onRemoveContext, enabled = !busy || state.deciding,
+                modifier = Modifier.testTag("overlay_remove_context")) { Text("Quitar") }
+            }
+            Text(reference.text, maxLines = 4, overflow = TextOverflow.Ellipsis, color = secondary,
+              style = MaterialTheme.typography.bodySmall)
+            Text("Pedí: resumime esto, traducilo o agendá la fecha. Una URL compartida aporta el enlace; para trabajar con el contenido, seleccioná su texto.",
+              color = secondary, style = MaterialTheme.typography.labelSmall)
+          }
+        }
         if (!state.geminiConfigured) {
           Text("Gemini Decisions sin configurar", color = secondary, style = MaterialTheme.typography.bodySmall)
           TextButton(onClick = onConfigureGroq, enabled = !busy) { Text("Configurar clave de Gemini", color = Color.White) }
@@ -126,7 +141,7 @@ fun AssistOverlayScreen(
         Text(
           text = when (state.mode) {
             FloatingMode.LISTENING -> "Te escucho… o tocá para escribir"
-            FloatingMode.RECORDING -> "Grabando · se interpreta tras 3 s de silencio"
+            FloatingMode.RECORDING -> "Grabando · cierre automático según la duración de tu voz"
             FloatingMode.TYPING -> "Pedido o consulta · micrófono apagado"
             FloatingMode.SENDING -> state.status ?: "Interpretando pedido…"
             FloatingMode.AUDIO_READY -> "Audio guardado · podés reintentar sin grabar de nuevo"
@@ -212,6 +227,10 @@ fun AssistOverlayScreen(
               Icon(Icons.Filled.Close, "Quitar adjunto")
             }
           }
+        }
+        if (com.example.BuildConfig.DEBUG) state.voiceLatency?.takeIf { it.finalizationMs != null }?.let {
+          Text(it.summary(), color = secondary, style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.testTag("overlay_voice_latency"))
         }
         state.transcript?.let { Text("Escuché: $it", color = secondary, style = MaterialTheme.typography.bodySmall, maxLines = 3) }
         if (state.needsConfirmation && !busy && !recording && !listening) {

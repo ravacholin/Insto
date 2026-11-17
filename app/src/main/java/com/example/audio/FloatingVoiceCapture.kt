@@ -22,6 +22,7 @@ class FloatingVoiceCapture(private val context: Context) : FloatingAudioCapture 
     val elapsedMs: Long = 0,
     val amplitude: Float = 0f,
     val error: String? = null,
+    val speechEndAtMs: Long? = null,
   )
   private class Session(val input: AudioRecord) {
     var output: File? = null
@@ -98,7 +99,8 @@ class FloatingVoiceCapture(private val context: Context) : FloatingAudioCapture 
               preroll.clear()
             }
           } else checkNotNull(writer).write(frame)
-          session.snapshot = Snapshot(state, elapsed, frame.maxOf { abs(it.toInt()) } / 32768f)
+          session.snapshot = Snapshot(state, elapsed, frame.maxOf { abs(it.toInt()) } / 32768f,
+            speechEndAtMs = if (session.hasSpeech) started + policy.lastSpeechMs else null)
           if (state == VoiceSessionPolicy.State.IDLE || state == VoiceSessionPolicy.State.SEND) break
           check(elapsed < 300_000) { "Límite de 5 minutos alcanzado. Podés enviar el audio guardado." }
         }

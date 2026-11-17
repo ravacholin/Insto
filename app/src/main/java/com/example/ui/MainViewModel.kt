@@ -26,8 +26,10 @@ import com.example.audio.EyesFreeFeedbackManager
 import com.example.audio.FloatingAudioCapture
 import com.example.audio.FloatingVoiceCapture
 import com.example.audio.RecordedAudio
+import com.example.audio.VoiceLatency
 import com.example.audio.VoiceSessionPolicy
 import com.example.audio.VoiceRecorderManager
+import com.example.context.SharedTextContext
 import com.example.context.ContextRoutingEngine
 import com.example.context.EffectiveContextRoute
 import com.example.data.AssistantActivationMode
@@ -107,6 +109,8 @@ data class FloatingAttachment(val uri: android.net.Uri, val name: String, val mi
 data class FloatingAssistantState(
   val mode: FloatingMode = FloatingMode.IDLE,
   val text: String = "",
+  val sourceContext: SharedTextContext? = null,
+  val voiceLatency: VoiceLatency? = null,
   val contactName: String = "Instinct",
   val attachment: FloatingAttachment? = null,
   val elapsedMs: Long = 0,
@@ -144,6 +148,7 @@ class MainViewModel @JvmOverloads constructor(
     { com.example.phone.GeminiSettings(application).isEnabled() },
     com.example.phone.GeminiDecisionsClient({ com.example.phone.GeminiSettings(application).readKey() })),
   private val structuredExtractor: StructuredCommandExtractor = StructuredCommandClient({ GeminiSettings(application).readKey() }),
+  private val monotonicClock: () -> Long = android.os.SystemClock::elapsedRealtime,
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
@@ -515,7 +520,7 @@ class MainViewModel @JvmOverloads constructor(
     decidingRequest = true
     floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, error = null)
     return try {
-      val result = geminiCoordinator.interpret(InterpretationRequest(text, draft), local) { stage ->
+      val result = geminiCoordinator.interpret(InterpretationRequest(text, draft, sourceContext = floatingState.value.sourceContext), local) { stage ->
         if (generation == floatingGeneration && !floatingPaused) floatingState.value = floatingState.value.copy(status = stage)
       }
       if (generation != floatingGeneration || !kotlinx.coroutines.currentCoroutineContext().isActive || floatingPaused) true
@@ -601,6 +606,22 @@ class MainViewModel @JvmOverloads constructor(
     floatingState.value = floatingState.value.copy(geminiConfigured = gemini.readKey() != null, geminiEnabled = gemini.isEnabled())
   }
 
+  fun setFloatingContext(context: SharedTextContext?, error: String? = null) {
+    prepareFloatingAssistant()
+    if (activeWorkflow()?.confirmed == true || floatingState.value.mode == FloatingMode.SENDING && !decidingRequest && !transcribingAudio) {
+      floatingState.value = floatingState.value.copy(error = "Terminá o cancelá el pedido actual antes de cambiar el contexto.")
+      return
+    }
+    enterFloatingTextMode() // Invalidates generations, pending queries, audio and unconfirmed plans.
+    semanticDraft = null; conversation.clear(); clarification = null; clarificationRequest = null
+    confirmation = null; retryLocalCommand = null; retryLocalText = null
+    cameraCommand = null; contactsCommand = null; notificationsCommand = null; appChoiceCommand = null
+    floatingState.value = floatingState.value.copy(sourceContext = context, attachment = if (context != null || error != null) null else floatingState.value.attachment,
+      text = if (context != null) "" else floatingState.value.text,
+      error = error, status = null, needsConfirmation = false, contactOptions = emptyList(), appOptions = emptyList(),
+      needsCamera = false, needsContacts = false, needsNotifications = false)
+  }
+
   fun startFloatingListening(onDispatched: () -> Unit) {
     prepareFloatingAssistant()
     if (floatingState.value.mode == FloatingMode.SENDING || floatingState.value.attachment != null) return
@@ -617,7 +638,7 @@ class MainViewModel @JvmOverloads constructor(
         error = "Micrófono no disponible. Podés escribir o volver a intentarlo.")
       return
     }
-    floatingState.value = floatingState.value.copy(mode = FloatingMode.LISTENING, text = "", elapsedMs = 0, error = null, needsGroqKey = false, transcript = null, needsWhatsAppAccessibility = false)
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.LISTENING, text = "", elapsedMs = 0, error = null, needsGroqKey = false, transcript = null, voiceLatency = null, needsWhatsAppAccessibility = false)
     floatingJob = viewModelScope.launch {
       while (isActive) {
         val sample = floatingCapture.snapshot
@@ -789,7 +810,7 @@ class MainViewModel @JvmOverloads constructor(
     confirmation = null
     cameraCommand = null
     contactsCommand = null
-    floatingState.value = floatingState.value.copy(queryPreview = false, needsNotifications = false, workflowActive = false, workflowCanContinue = false, workflowCanRetry = false, deciding = false, needsConfirmation = false, needsCamera = false, appOptions = emptyList(), needsContacts = false, contactOptions = emptyList(), phoneActionCompletion = null)
+    floatingState.value = floatingState.value.copy(sourceContext = null, queryPreview = false, needsNotifications = false, workflowActive = false, workflowCanContinue = false, workflowCanRetry = false, deciding = false, needsConfirmation = false, needsCamera = false, appOptions = emptyList(), needsContacts = false, contactOptions = emptyList(), phoneActionCompletion = null)
   }
 
   fun sendFloatingAudio(onDispatched: () -> Unit) {
@@ -797,9 +818,15 @@ class MainViewModel @JvmOverloads constructor(
     floatingJob?.cancel()
     floatingJob = null
     val generation = ++floatingGeneration
+    val sendStarted = monotonicClock()
+    val previousLatency = floatingState.value.voiceLatency
+    val endpoint = floatingCapture.snapshot.speechEndAtMs?.let { (sendStarted - it).coerceAtLeast(0) }
+    val latency = if (pendingFloatingAudio != null) previousLatency ?: VoiceLatency() else VoiceLatency(endpointMs = endpoint)
     floatingPaused = false
-    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null, status = "Interpretando tu audio…", needsGroqKey = false)
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null, status = "Interpretando tu audio…", needsGroqKey = false, voiceLatency = latency)
     floatingJob = viewModelScope.launch {
+      val reusedAudio = pendingFloatingAudio != null
+      val finalizationStarted = monotonicClock()
       val audio = pendingFloatingAudio ?: finishFloatingCapture()
       if (generation != floatingGeneration) { audio?.file?.delete(); return@launch }
       if (audio == null) {
@@ -808,11 +835,14 @@ class MainViewModel @JvmOverloads constructor(
         return@launch
       }
       pendingFloatingAudio = audio
+      if (!reusedAudio) updateVoiceLatency(latency.copy(finalizationMs = monotonicClock() - finalizationStarted))
       if (floatingPaused) {
         floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, status = "Audio guardado.")
         return@launch
       }
       transcribingAudio = true
+      val reusedTranscript = pendingTranscript != null
+      val transcriptionStarted = monotonicClock()
       val transcript = try {
         pendingTranscript ?: audioTranscriber.transcribe(audio.file)
       } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -829,15 +859,26 @@ class MainViewModel @JvmOverloads constructor(
       }
       if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
       transcribingAudio = false
+      if (!reusedTranscript) updateVoiceLatency(floatingState.value.voiceLatency!!.copy(transcriptionMs = monotonicClock() - transcriptionStarted))
       pendingTranscript = transcript
       floatingState.value = floatingState.value.copy(transcript = transcript)
-      if (routeFloatingRequest(transcript, onDispatched)) {
+      val interpretationStarted = monotonicClock()
+      val handled = try { routeFloatingRequest(transcript, onDispatched) } finally {
+        if (generation == floatingGeneration && isActive && !floatingPaused) {
+          updateVoiceLatency(floatingState.value.voiceLatency!!.copy(interpretationMs = monotonicClock() - interpretationStarted))
+        }
+      }
+      if (handled) {
         if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
         if (!retainLocalAudio) {
           audio.file.delete()
           pendingFloatingAudio = null
           pendingTranscript = null
         }
+        return@launch
+      }
+      if (floatingState.value.sourceContext != null) {
+        dispatchFloatingTextQuery(transcript, onDispatched)
         return@launch
       }
       prepareFloatingAssistant()
@@ -876,20 +917,37 @@ class MainViewModel @JvmOverloads constructor(
     floatingJob = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
       if (routeFloatingRequest(text, onDispatched)) return@launch
       if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
-      prepareFloatingAssistant()
-      val contact = floatingContact
-      val prefs = floatingPrefs
-      if (contact == null || prefs == null) {
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, error = "Configurá el contacto de Instinct para enviar esta consulta.")
-        return@launch
-      }
-      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null, status = "Enviando a Instinct…")
-      val result = WhatsAppDispatcher.sendWhatsAppText(getApplication(), contact.phoneNumber,
-        text, prefs.preferredFlavor,
-        PingAutoSendAccessibilityService.isEnabled(getApplication()), contact.displayName, floatingReturnPackage)
-      if (result is DispatchResult.Error) {
-        floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, error = result.message, needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
-      } else onDispatched()
+      dispatchFloatingTextQuery(text, onDispatched)
+    }
+  }
+
+
+  private fun updateVoiceLatency(latency: VoiceLatency) {
+    floatingState.value = floatingState.value.copy(voiceLatency = latency)
+    if (com.example.BuildConfig.DEBUG) android.util.Log.d("InstoVoiceLatency", latency.summary())
+  }
+
+  private fun dispatchFloatingTextQuery(text: String, onDispatched: () -> Unit) {
+    prepareFloatingAssistant()
+    val failureMode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING
+    val contact = floatingContact
+    val prefs = floatingPrefs
+    if (contact == null || prefs == null) {
+      floatingState.value = floatingState.value.copy(mode = failureMode,
+        error = "Configurá el contacto de Instinct para enviar esta consulta.")
+      return
+    }
+    val payload = floatingState.value.sourceContext?.query(text) ?: text
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null, status = "Enviando a Instinct…")
+    val result = WhatsAppDispatcher.sendWhatsAppText(getApplication(), contact.phoneNumber,
+      payload, prefs.preferredFlavor, PingAutoSendAccessibilityService.isEnabled(getApplication()), contact.displayName, floatingReturnPackage)
+    if (result is DispatchResult.Error) {
+      floatingState.value = floatingState.value.copy(mode = failureMode, error = result.message,
+        needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
+    } else {
+      pendingFloatingAudio?.file?.delete()
+      pendingFloatingAudio = null; pendingTranscript = null
+      onDispatched()
     }
   }
 

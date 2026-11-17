@@ -27,6 +27,7 @@ import androidx.lifecycle.lifecycleScope
 import com.example.speech.GroqSettingsActivity
 import com.example.MainActivity
 import com.example.data.AssistantPreferencesRepository
+import com.example.context.SharedTextIntents
 import com.example.context.ContextRoutingEngine
 import com.example.ui.MainViewModel
 import com.example.ui.FloatingMode
@@ -56,6 +57,7 @@ class AssistActivity : ComponentActivity() {
       return
     }
     viewModel.prepareFloatingAssistant()
+    if (savedInstanceState == null) receiveSharedText(intent)
     // A native handoff can stop this window before Compose gets another frame.
     // Observe until destruction so completion still closes the stopped overlay.
     lifecycleScope.launch {
@@ -165,6 +167,7 @@ class AssistActivity : ComponentActivity() {
             attachmentPicker.launch(arrayOf("*/*"))
           },
           onRemoveAttachment = viewModel::removeFloatingAttachment,
+          onRemoveContext = { viewModel.setFloatingContext(null) },
           onSend = {
             if (state.attachment != null) viewModel.sendFloatingAttachment { finish() }
             else if (state.mode == FloatingMode.TYPING) viewModel.sendFloatingText { finish() }
@@ -204,7 +207,15 @@ class AssistActivity : ComponentActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
+    receiveSharedText(intent)
     // A repeated hotkey brings the existing panel forward without destroying its draft.
+  }
+
+  private fun receiveSharedText(incoming: Intent) {
+    if (!SharedTextIntents.supports(incoming)) return
+    runCatching { SharedTextIntents.read(incoming) }
+      .onSuccess { viewModel.setFloatingContext(it) }
+      .onFailure { viewModel.setFloatingContext(null, it.message ?: "No se pudo leer el texto compartido.") }
   }
 
   override fun onStop() {
