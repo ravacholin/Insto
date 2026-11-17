@@ -17,6 +17,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.PingAssistTheme
+import com.example.phone.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 class GroqSettingsActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,6 +36,17 @@ class GroqSettingsActivity : ComponentActivity() {
         var geminiValue by remember { mutableStateOf("") }
         var geminiConfigured by remember { mutableStateOf(gemini.readKey() != null) }
         var hybridEnabled by remember { mutableStateOf(gemini.isEnabled()) }
+        val scope = rememberCoroutineScope()
+        var probeJob by remember { mutableStateOf<Job?>(null) }
+        var probing by remember { mutableStateOf(false) }
+        var diagnostics by remember { mutableStateOf(GeminiDiagnostics.snapshot()) }
+        DisposableEffect(lifecycle) {
+          val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) { probeJob?.cancel(); probing = false }
+          }
+          lifecycle.addObserver(observer)
+          onDispose { probeJob?.cancel(); lifecycle.removeObserver(observer) }
+        }
         Surface(Modifier.fillMaxSize()) {
           Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Gemini Decisions · híbrido", style = MaterialTheme.typography.headlineSmall)
@@ -48,12 +63,32 @@ class GroqSettingsActivity : ComponentActivity() {
             if (geminiConfigured) {
               Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Switch(checked = hybridEnabled, onCheckedChange = { desired ->
+                  probeJob?.cancel(); probing = false
                   runCatching { gemini.setEnabled(desired) }.onSuccess { hybridEnabled = desired }
                     .onFailure { message = "No se pudo cambiar el modo híbrido." }
                 })
                 Text("Usar Gemini para pedidos no comprendidos")
               }
+              Button(enabled = hybridEnabled && !probing, onClick = {
+                probing = true
+                probeJob = scope.launch {
+                  try {
+                    val coordinator = GeminiCoordinator(HybridPhoneRouter(gemini::isEnabled, GeminiDecisionsClient(gemini::readKey)), StructuredCommandClient(gemini::readKey))
+                    // Fixed synthetic text; interpretation only, never dispatched to an executor.
+                    val result = coordinator.interpret(InterpretationRequest("ayudame a estudiar geografía"), PhoneRoute.Instinct)
+                    message = when (result) {
+                      is InterpretationResult.Failure -> result.message
+                      is InterpretationResult.Rejected -> "Gemini respondió, pero rechazó la frase de prueba."
+                      is InterpretationResult.Query -> if (result.needsConfirmation) "Conexión disponible mediante Gemini de respaldo. No se envió ninguna consulta." else "Decisions respondió correctamente. No se ejecutó ninguna acción."
+                      else -> "Gemini respondió. La prueba no ejecuta ni envía acciones."
+                    }
+                  } catch (cancelled: CancellationException) { throw cancelled
+                  } finally { probing = false; diagnostics = GeminiDiagnostics.snapshot() }
+                }
+              }) { Text(if (probing) "Probando Gemini…" else "Probar conexión de Gemini") }
+              Text("Decisions: ${diagnostics.decisions} · extracción: ${diagnostics.extractions} · respaldo: ${diagnostics.fallbacks}\nÚltima interpretación: ${diagnostics.lastDurationMillis} ms${diagnostics.lastFailure?.let { " · ${it.label}" } ?: ""}", style = MaterialTheme.typography.bodySmall)
               TextButton(onClick = {
+                probeJob?.cancel(); probing = false
                 runCatching { gemini.clear() }.onSuccess { geminiConfigured = false; hybridEnabled = false; geminiValue = ""; message = "Clave de Gemini borrada." }
                   .onFailure { message = "No se pudo borrar la clave de Gemini." }
               }) { Text("Borrar clave de Gemini") }

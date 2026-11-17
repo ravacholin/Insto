@@ -6,6 +6,7 @@ sealed interface ConversationResult {
   data object Pass : ConversationResult
   data class Prompt(val message: String) : ConversationResult
   data class Plan(val commands: List<PhoneCommand>) : ConversationResult
+  data class Semantic(val draft: DraftPlan? = null) : ConversationResult
 }
 
 /** Session-only drafts. Nothing here performs Android side effects. */
@@ -14,12 +15,13 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
   private var calendarDraft: CalendarDraft? = null
   private var pending: String? = null
   private var lastPlan: List<PhoneCommand>? = null
-  fun clear() { calendarDraft = null; pending = null; lastPlan = null }
+  private var pendingDraft: DraftPlan? = null
+  fun clear() { calendarDraft = null; pending = null; lastPlan = null; pendingDraft = null }
 
-  fun accept(text: String): ConversationResult {
+  fun accept(text: String, allowSemantic: Boolean = false): ConversationResult {
     val normalized = PhoneCommandParser.normalize(text)
     if (normalized in listOf("cancelar", "cancela", "no", "dejalo", "olvidalo")) {
-      val active = calendarDraft != null || pending != null || lastPlan != null
+      val active = calendarDraft != null || pending != null || lastPlan != null || pendingDraft != null
       clear()
       return if (active) ConversationResult.Prompt("Pedido cancelado.") else ConversationResult.Pass
     }
@@ -33,7 +35,11 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       clear()
       if (parts.size > 10) return ConversationResult.Prompt("Podés pedir hasta diez pasos por vez.")
       val commands = parts.map { part -> (parser.parse(part) as? PhoneRoute.Local)?.command }
-      if (commands.any { it == null }) return ConversationResult.Prompt("No entendí todos los pasos. Completá cada acción; todavía no ejecuté ninguna.")
+      if (commands.any { it == null }) {
+        val routes = parts.map(parser::parse)
+        if (allowSemantic && routes.none { it is PhoneRoute.Unsupported && !it.recoverable }) return ConversationResult.Semantic()
+        return ConversationResult.Prompt("No entendí todos los pasos. Completá cada acción; todavía no ejecuté ninguna.")
+      }
       val plan = commands.filterNotNull()
       lastPlan = plan
       return ConversationResult.Plan(plan)
@@ -41,6 +47,15 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
     val isCalendar = Regex("^(?:agenda|agendar|agendame|programa|crea (?:un )?evento)\\b").containsMatchIn(normalized)
     val correcting = Regex("^(?:mejor|cambia|cambialo|que dure|durante|a las?|de la|en vez|para |el |hoy|manana|pasado manana)").containsMatchIn(normalized)
     if (isCalendar || calendarDraft != null && correcting) return calendar(text, isCalendar)
+    if (calendarDraft != null && allowSemantic && parser.parse(text) == PhoneRoute.Instinct) {
+      val known = calendarDraft!!
+      val fields = org.json.JSONObject().put("type", "calendar")
+      if (known.title.isNotBlank()) fields.put("title", known.title)
+      if (known.date.isNotBlank()) fields.put("date", known.date)
+      if (known.time.isNotBlank()) fields.put("time", known.time)
+      CommandDuration.seconds(known.duration)?.let { fields.put("durationSeconds", it) }
+      return ConversationResult.Semantic(DraftPlan(listOf(CommandDraft("s1", fields))))
+    }
     if (normalized.startsWith("mejor ") && lastPlan?.size == 1) {
       val command = lastPlan!!.single()
       val reply = normalized.removePrefix("mejor ")
@@ -58,6 +73,20 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       }
     }
     pending?.let { context ->
+      pendingDraft?.let { draft ->
+        if (parser.parse(text) == PhoneRoute.Instinct) {
+          val result = try { draft.reply(text, now()) } catch (_: Exception) {
+            return ConversationResult.Prompt("Ese dato no es válido. Conservé el pedido; corregilo antes de confirmar.")
+          }
+          when (result) {
+            is InterpretationResult.Plan -> { clear(); return ConversationResult.Plan(result.commands).also { lastPlan = it.commands } }
+            is InterpretationResult.Incomplete -> { pendingDraft = result.draft; return ConversationResult.Prompt(result.prompt) }
+            is InterpretationResult.Rejected -> return ConversationResult.Prompt(result.message)
+            null -> if (allowSemantic) return ConversationResult.Semantic(draft)
+            else -> Unit
+          }
+        }
+      }
       when (val route = parser.parseReply(context, text)) {
         is PhoneRoute.Local -> { pending = null; return ConversationResult.Plan(listOf(route.command)).also { lastPlan = it.commands } }
         is PhoneRoute.Clarify -> return ConversationResult.Prompt(route.prompt)
@@ -66,7 +95,11 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       }
     }
     when (val route = parser.parse(text)) {
-      is PhoneRoute.Clarify -> { pending = route.context; return ConversationResult.Prompt(route.prompt) }
+      is PhoneRoute.Clarify -> {
+        pending = route.context
+        pendingDraft = seedDraft(text, route.context)
+        return ConversationResult.Prompt(route.prompt)
+      }
       is PhoneRoute.Local -> {
         clear()
         val event=route.command as? PhoneCommand.CalendarEvent
@@ -137,6 +170,36 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
   }
 
   companion object {
+    private fun seedDraft(text: String, context: String): DraftPlan? {
+      val type = if (context == "volume") "volume" else context
+      if (type !in CapabilityCatalog.specs || type == "calendar") return null
+      val fields = org.json.JSONObject().put("type", type)
+      val normalized = PhoneCommandParser.normalize(text)
+      if (type == "volume") fields.put("operation", "SET")
+      if (type == "temporary_mode") {
+        when {
+          "no molestar" in normalized -> fields.put("kind", "DND")
+          "volumen" in normalized -> {
+            fields.put("kind", "MEDIA_VOLUME")
+            Regex("volumen al? (.+?)(?: por ciento|%| durante|$)").find(normalized)?.let {
+              PhoneCommandParser.number(it.groupValues[1])?.takeIf { value -> value in 0..100 }?.let { value -> fields.put("percent", value) }
+            }
+          }
+          normalized.startsWith("silencia") -> fields.put("kind", "SILENT")
+        }
+      }
+      if (type == "timer") Regex(" (?:para|llamado) (.+)$", RegexOption.IGNORE_CASE).find(text)?.let { fields.put("label", it.groupValues[1]) }
+      if (type == "alarm") {
+        val alarmBody = normalized.substringAfter("alarma", normalized.removePrefix("despertame")).trim()
+        Regex("^(?:a las? )?([a-z0-9]+)(?::([0-9]{2}))?").find(alarmBody)?.let {
+          PhoneCommandParser.number(it.groupValues[1])?.takeIf { hour -> hour in 0..23 }?.let { hour ->
+            fields.put("hour", hour).put("minute", it.groupValues[2].toIntOrNull() ?: 0)
+            if (it.groupValues[2].isNotEmpty()) fields.put("period", "24H")
+          }
+        }
+      }
+      return runCatching { DraftPlan(listOf(CommandDraft("s1", fields))) }.getOrNull()
+    }
     private fun maskQuotes(input:String):String {
       var quoted=false
       return input.map {c ->

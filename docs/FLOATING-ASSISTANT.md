@@ -328,3 +328,66 @@ Mientras está activo, un servicio visible observa cambios del ajuste. Si el usu
 - Revisión independiente realizada y hallazgos corregidos: invalidación del plan anterior al recibir una aclaración; fechas/condiciones dentro de títulos citados; rechazo de volumen SET sin porcentaje. Regresiones puras observadas fallar y luego pasar. La integración del floating sigue pendiente de ejecución Android.
 - Firma APK v2 y alineación ZIP/16 KiB verificadas. Se generó una clave de debug nueva, excluida de Git; no garantiza actualización sobre una instalación firmada con otra clave. Para actualizar conservando datos hace falta la firma original.
 - `adb devices` no muestra teléfonos conectados. No se usaron claves reales de Gemini/Groq. Falta validar sesiones multimedia, permisos, servicio de modos temporales, restricciones de batería, proveedor y ejecución real en el Motorola.
+
+### Gemini: clasificación primero y correcciones con contexto (2026-11-17)
+
+El panel conserva los comandos claros y las respuestas locales a aclaraciones. Para
+redacciones desconocidas consulta primero Decisions; solo interpreta parámetros o
+secuencias con `generateContent` cuando corresponde. Un catálogo común incluye
+multimedia, modos temporales, aplicaciones y ajustes ya admitidos. También se
+corrige la consulta local «qué está sonando».
+
+La interpretación remota tiene un presupuesto compartido de 12 segundos:
+Decisions hasta 4 y extracción hasta 8, sin reintentos automáticos. Solo las
+respuestas 404/405/501 de Decisions habilitan respaldo estructurado. Los problemas
+de clave, cuota, conexión, servidor o esquema conservan el pedido y explican el
+fallo; no se convierten en mensajes a Instinct. El respaldo siempre requiere
+revisión, incluso para enviar una consulta. Al confirmarla se reutiliza el texto
+o M4A original sin clasificarlo otra vez.
+
+Los borradores parciales conservan campos y pasos identificados. Se puede
+completar una duración, período de alarma o destino sin repetir lo conocido.
+Una corrección de varios pasos pide identificar el paso y mantiene la corrección
+original al consultar Gemini. La fusión precede a los valores por defecto para
+no borrar etiquetas, días de alarma ni el modo «a pie». Al editar se invalida la
+vista previa anterior antes de permitir otra confirmación. No se modifican pasos
+ya ejecutados ni se omiten restricciones para completar una secuencia.
+
+En configuración, «Probar conexión de Gemini» envía una frase sintética, interpreta
+la respuesta y nunca ejecuta ni despacha acciones. Se cancela al salir. El
+diagnóstico conserva contadores, tiempos y categorías de fallo en memoria; no
+almacena textos, cuerpos del proveedor, audio ni credenciales.
+
+Verificación reproducible:
+
+- `python scripts/test-phone-core.py` compila el núcleo Kotlin real y ejecuta
+  sus pruebas JUnit sin SDK Android. Dependencias fijadas en la caché del usuario.
+- El corpus contiene 130 casos etiquetados en español. Las pruebas con respuestas
+  simuladas verifican contratos, rutas y conservación de datos; no miden la
+  precisión real del modelo.
+- La evaluación real requiere activar `INSTO_GEMINI_LIVE=1` y disponer de
+  `GEMINI_API_KEY` en el entorno local; el runner imprime aciertos exactos del
+  parser/híbrido, rechazos, llamadas y latencias p50/p95 sin ejecutar comandos.
+- App y fuentes de pruebas se verifican con `compileDebugKotlin` y
+  `compileDebugUnitTestKotlin`; el entorno temporal usa JDK 21, Gradle 9.3.1 y
+  SDK 36.1, sin cambiar configuración de compilación ni firma del proyecto.
+- La suite Android completa está bloqueada por HTTP 403 al obtener
+  `nativeruntime-dist-compat:1.0.18`. Un intento con runtime gráfico LEGACY,
+  configurado únicamente fuera del repositorio, también falló antes de ejecutar
+  los cuerpos de `FloatingGeminiCoordinatorTest`, `FloatingHybridRoutingTest` y
+  `FloatingWorkflowTest`: no pudo descargar `android-all-instrumented` de API 28.
+- La documentación/discovery de Google sigue bloqueada por el proxy. No se
+  verificó una cuenta real de Gemini ni un teléfono físico. El contrato y la
+  disponibilidad del proveedor, su precisión y la ejecución Android real siguen
+  pendientes; no se infieren de mocks ni de una compilación correcta.
+
+Resultado del núcleo al cerrar esta mejora: **122 pruebas JUnit correctas** con
+el compilador Kotlin 2.2.10. La evaluación real del proveedor se omite salvo
+activación explícita; los casos de HTTP usan conexiones simuladas. La revisión
+independiente detectó cinco problemas de corrección de borradores y vistas
+previas, corregidos con cobertura adicional; no quedaron observaciones menores
+aplazadas. Los bloqueos de integración y proveedor descritos arriba permanecen.
+
+La compilación final de `compileDebugKotlin compileDebugUnitTestKotlin` terminó
+con **BUILD SUCCESSFUL** sobre las fuentes finales (22 tareas, código de salida
+0). Esto verifica compilación, no ejecución de las suites Robolectric bloqueadas.

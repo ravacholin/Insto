@@ -127,6 +127,7 @@ data class FloatingAssistantState(
   val appOptions: List<AppOption> = emptyList(),
   val phoneActionCompletion: String? = null,
   val deciding: Boolean = false,
+  val queryPreview: Boolean = false,
   val workflowLines: List<String> = emptyList(),
   val workflowCanContinue: Boolean = false,
   val workflowCanRetry: Boolean = false,
@@ -165,6 +166,12 @@ class MainViewModel @JvmOverloads constructor(
   private val phoneParser = PhoneCommandParser()
   private val phoneExecutor = PhoneActionExecutor(application)
   private val conversation = ConversationSession()
+  private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor)
+  private var semanticDraft: DraftPlan? = null
+  private data class QueryPreview(val text: String, val generation: Long)
+  private var pendingQuery: QueryPreview? = null
+  private var approvedQueryText: String? = null
+  private var previewInvalidatedByEdit = false
   private val workflowStore = WorkflowStore(application)
   private var workflowLoadError: String? = null
   private val workflow = WorkflowRunner(runCatching { workflowStore.read() }.getOrElse {
@@ -188,6 +195,8 @@ class MainViewModel @JvmOverloads constructor(
   private fun previewWorkflow(commands: List<PhoneCommand>) {
     try {
       workflow.prepare(commands)
+      if (semanticDraft == null && commands.size > 1) semanticDraft = runCatching { DraftPlan.fromCommands(commands) }.getOrNull()
+      previewInvalidatedByEdit = false
       floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
         status = "Revisá los pasos. Podés corregir el pedido o decir dale para ejecutarlo.", phoneActionCompletion = null)
       retainLocalAudio = true
@@ -212,7 +221,7 @@ class MainViewModel @JvmOverloads constructor(
   fun cancelFloatingWorkflow() {
     floatingGeneration++; floatingJob?.cancel()
     cancelClockAutomation?.invoke(); cancelClockAutomation = null
-    workflow.cancel(); conversation.clear()
+    workflow.cancel(); conversation.clear(); semanticDraft = null; pendingQuery = null; approvedQueryText = null
     confirmation = null; cameraCommand = null; contactsCommand = null; notificationsCommand = null
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, needsConfirmation = false,
       appOptions = emptyList(), contactOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false,
@@ -229,7 +238,7 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private fun finishWorkflow() {
-    conversation.clear()
+    conversation.clear(); semanticDraft = null
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
       status = "Secuencia finalizada. Las entregas a otras apps se revisan allí.",
       phoneActionCompletion = "Secuencia finalizada.")
@@ -252,8 +261,27 @@ class MainViewModel @JvmOverloads constructor(
     return message
   }
 
-  fun confirmFloatingAction(accept: Boolean) {
+  fun confirmFloatingAction(accept: Boolean, onDispatched: () -> Unit = {}) {
+    pendingQuery?.let { query ->
+      pendingQuery = null
+      floatingState.value = floatingState.value.copy(needsConfirmation = false, queryPreview = false)
+      if (!accept || query.generation != floatingGeneration) {
+        floatingState.value = floatingState.value.copy(status = "Consulta cancelada.")
+        return
+      }
+      approvedQueryText = query.text
+      if (pendingFloatingAudio != null) {
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY)
+        sendFloatingAudio(onDispatched)
+      } else {
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.TYPING, text = query.text)
+        sendFloatingText(onDispatched)
+      }
+      return
+    }
     if (activeWorkflow()?.confirmed == false) {
+      if (previewInvalidatedByEdit) { retainDecisionRequest("El pedido cambió. Enviá la corrección y revisá el nuevo plan antes de confirmar."); return }
+      semanticDraft = null
       if (accept) { workflow.confirm(); advanceWorkflow() } else cancelFloatingWorkflow()
       return
     }
@@ -367,9 +395,21 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   /** Returns false only when this is a general query for Instinct. */
-  private suspend fun routeFloatingRequest(text: String): Boolean {
+  private suspend fun routeFloatingRequest(text: String, onDispatched: () -> Unit): Boolean {
     retainLocalAudio = false
     val normalized = PhoneCommandParser.normalize(text)
+    if (approvedQueryText == text) { approvedQueryText = null; return false }
+    pendingQuery?.let {
+      if (normalized in listOf("si", "dale", "confirmar", "confirmo", "ok", "no", "cancelar")) {
+        confirmFloatingAction(normalized !in listOf("no", "cancelar"), onDispatched)
+        return true
+      }
+      pendingQuery = null
+      floatingState.value = floatingState.value.copy(queryPreview = false, needsConfirmation = false)
+    }
+    if (normalized !in listOf("cancelar", "cancela", "no", "dejalo", "si", "confirmo")) {
+      RequestSafetyPolicy.rejection(text)?.let { retainDecisionRequest(it); return true }
+    }
     if (workflowLoadError != null) {
       if (normalized in listOf("cancelar", "descartar")) {workflow.clear(); workflowLoadError = null}
       else {retainDecisionRequest(workflowLoadError + " Decí cancelar para descartar el registro dañado."); return true}
@@ -382,8 +422,35 @@ class MainViewModel @JvmOverloads constructor(
       if (normalized in listOf("reintenta", "reintentar", "intenta de nuevo")) {retryFloatingWorkflow(); return true}
     }
     val hasChoice = confirmation != null || floatingState.value.appOptions.isNotEmpty() || floatingState.value.contactOptions.isNotEmpty()
+    var semanticCandidate = false
+    if (semanticDraft != null && !hasChoice && active?.confirmed != true) {
+      if (normalized in listOf("cancelar", "cancela", "no", "dejalo", "olvidalo")) {
+        semanticDraft = null; conversation.clear(); workflow.invalidatePreview(); syncWorkflow()
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = "Pedido cancelado.")
+        return true
+      }
+      val fresh = phoneParser.parse(text)
+      if (fresh is PhoneRoute.Local && !normalized.startsWith("mejor ")) {
+        semanticDraft = null; conversation.clear(); workflow.invalidatePreview(); syncWorkflow()
+      } else {
+        workflow.invalidatePreview(); syncWorkflow()
+        val result = try { semanticDraft!!.reply(text, java.util.Calendar.getInstance()) } catch (_: Exception) {
+          retainDecisionRequest("Ese dato no es válido. Conservé el pedido; corregilo antes de confirmar.")
+          return true
+        }
+        if (result is InterpretationResult.Incomplete && result.draft.selectedStepId != null && hybridRouter.isEnabled()) {
+          semanticDraft = result.draft
+          return interpretWithGemini(text, PhoneRoute.Instinct, semanticDraft)
+        }
+        if (result != null) return applyInterpretation(result, text)
+        if (!hybridRouter.isEnabled()) {
+          retainDecisionRequest(semanticDraft!!.prompt()); return true
+        }
+        return interpretWithGemini(text, PhoneRoute.Instinct, semanticDraft)
+      }
+    }
     if (!hasChoice && (active == null || !active.confirmed)) {
-      when (val conversational = conversation.accept(text)) {
+      when (val conversational = conversation.accept(text, allowSemantic = hybridRouter.isEnabled())) {
         is ConversationResult.Plan -> { previewWorkflow(conversational.commands); return true }
         is ConversationResult.Prompt -> {
           workflow.invalidatePreview()
@@ -391,6 +458,12 @@ class MainViewModel @JvmOverloads constructor(
           retainLocalAudio = true
           floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = conversational.message, error = null)
           return true
+        }
+        is ConversationResult.Semantic -> {
+          semanticDraft = conversational.draft
+          semanticCandidate = true
+          workflow.invalidatePreview()
+          syncWorkflow()
         }
         ConversationResult.Pass -> {
           workflow.invalidatePreview()
@@ -436,7 +509,8 @@ class MainViewModel @JvmOverloads constructor(
       if (selected != null) { chooseFloatingApp(selected); return true }
     }
     val pendingContext = clarification
-    val local = if (contacts.isNotEmpty() && normalized == "no") PhoneRoute.Cancel
+    val local = if (semanticCandidate) PhoneRoute.Unsupported("Pedido pendiente de interpretación.", recoverable = true)
+      else if (contacts.isNotEmpty() && normalized == "no") PhoneRoute.Cancel
       else clarification?.let { phoneParser.parseReply(it, text) } ?: phoneParser.parse(text)
     // Unresolved choices/confirmations stay local; never reinterpret "two" or "maybe" as a fresh request.
     if ((options.isNotEmpty() || confirmation != null) && local == PhoneRoute.Instinct) {
@@ -446,45 +520,10 @@ class MainViewModel @JvmOverloads constructor(
         error = "Elegí una opción, confirmá el pedido o decí cancelar.", status = null)
       return true
     }
-    val generation = floatingGeneration
-    if (pendingContext == null && hybridRouter.needsDecision(text, local)) {
-      decidingRequest = true
-      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, status = "Interpretando parámetros con Gemini…", error = null)
-      try {
-        val commands = structuredExtractor.extract(text)
-        if (generation != floatingGeneration || !kotlinx.coroutines.currentCoroutineContext().isActive || floatingPaused) return true
-        previewWorkflow(commands)
-        return true
-      } catch (cancelled: kotlinx.coroutines.CancellationException) {
-        if (generation == floatingGeneration) retainDecisionRequest("Interpretación cancelada. El pedido se conserva.")
-        return true
-      } catch (_: Exception) {
-        // Classification can still route a genuine general query to Instinct.
-      } finally {
-        if (generation == floatingGeneration) {decidingRequest = false; floatingState.value = floatingState.value.copy(deciding = false)}
-      }
+    if ((pendingContext == null || semanticCandidate) && hybridRouter.needsDecision(text, local)) {
+      return interpretWithGemini(text, local, semanticDraft)
     }
-    val route = if (pendingContext == null && hybridRouter.needsDecision(text, local)) {
-      decidingRequest = true
-      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, status = "Decidiendo con Gemini…", error = null)
-      try {
-        val result = hybridRouter.route(text, local)
-        if (generation != floatingGeneration || !kotlinx.coroutines.currentCoroutineContext().isActive || floatingPaused) return true
-        result
-      } catch (cancelled: kotlinx.coroutines.CancellationException) {
-        if (generation == floatingGeneration) retainDecisionRequest("La interpretación se interrumpió. El pedido se conserva para reintentar.")
-        return true
-      } catch (failure: Exception) {
-        if (generation == floatingGeneration) retainDecisionRequest(
-          (failure as? com.example.phone.DecisionException)?.message ?: "No se pudo decidir con Gemini. El pedido se conserva para reintentar.")
-        return true
-      } finally {
-        if (generation == floatingGeneration) {
-          decidingRequest = false
-          floatingState.value = floatingState.value.copy(deciding = false)
-        }
-      }
-    } else local
+    val route = local
     // A new complete request replaces any earlier clarification/confirmation.
     clarification = null
     confirmation = null
@@ -506,6 +545,62 @@ class MainViewModel @JvmOverloads constructor(
       }
       PhoneRoute.Cancel -> floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = "Pedido cancelado.", error = null)
       PhoneRoute.Instinct -> return false
+    }
+    return true
+  }
+
+  private suspend fun interpretWithGemini(text: String, local: PhoneRoute, draft: DraftPlan?): Boolean {
+    val generation = floatingGeneration
+    decidingRequest = true
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, error = null)
+    return try {
+      val result = geminiCoordinator.interpret(InterpretationRequest(text, draft), local) { stage ->
+        if (generation == floatingGeneration && !floatingPaused) floatingState.value = floatingState.value.copy(status = stage)
+      }
+      if (generation != floatingGeneration || !kotlinx.coroutines.currentCoroutineContext().isActive || floatingPaused) true
+      else applyInterpretation(result, text)
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+      if (generation == floatingGeneration) retainDecisionRequest("Interpretación cancelada. El pedido se conserva.")
+      true
+    } finally {
+      if (generation == floatingGeneration) {
+        decidingRequest = false
+        floatingState.value = floatingState.value.copy(deciding = false)
+      }
+    }
+  }
+
+  private fun applyInterpretation(result: InterpretationResult, text: String): Boolean {
+    when (result) {
+      is InterpretationResult.Query -> {
+        if (!result.needsConfirmation) return false
+        pendingQuery = QueryPreview(text, floatingGeneration)
+        retainLocalAudio = true
+        floatingState.value = floatingState.value.copy(
+          mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING,
+          status = "Gemini de respaldo propone enviar esta consulta a Instinct. Revisala y confirmá para enviar.",
+          needsConfirmation = true, queryPreview = true, error = null)
+      }
+      is InterpretationResult.Direct -> {
+        semanticDraft = null; conversation.clear(); clarification = null
+        routedRequestText = text
+        runPhoneCommand(result.command)
+      }
+      is InterpretationResult.Plan -> {
+        clarification = null; conversation.clear()
+        semanticDraft = result.draft ?: DraftPlan.fromCommands(result.commands)
+        previewWorkflow(result.commands)
+        if (result.fallback) floatingState.value = floatingState.value.copy(status = "Gemini de respaldo: revisá los pasos y confirmá para ejecutarlos.")
+      }
+      is InterpretationResult.Incomplete -> {
+        semanticDraft = result.draft; conversation.clear(); clarification = null
+        workflow.invalidatePreview(); syncWorkflow()
+        retainLocalAudio = true
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
+          status = (if (result.fallback) "Gemini de respaldo. " else "") + result.prompt)
+      }
+      is InterpretationResult.Rejected -> retainDecisionRequest(result.message)
+      is InterpretationResult.Failure -> retainDecisionRequest(result.message)
     }
     return true
   }
@@ -539,6 +634,8 @@ class MainViewModel @JvmOverloads constructor(
     prepareFloatingAssistant()
     if (floatingState.value.mode == FloatingMode.SENDING || floatingState.value.attachment != null) return
     floatingGeneration++
+    pendingQuery = null; approvedQueryText = null
+    floatingState.value = floatingState.value.copy(queryPreview = false)
     stopFloatingCapture(discard = true)
     pendingFloatingAudio?.file?.delete()
     pendingFloatingAudio = null
@@ -579,6 +676,11 @@ class MainViewModel @JvmOverloads constructor(
   /** Called on focus, before the keyboard appears, not just after the first character. */
   fun enterFloatingTextMode() {
     if (floatingState.value.mode == FloatingMode.SENDING && !decidingRequest && !transcribingAudio) return
+    invalidatePreviewForEditing()
+    if (pendingQuery != null) {
+      pendingQuery = null; approvedQueryText = null
+      floatingState.value = floatingState.value.copy(queryPreview = false, needsConfirmation = false)
+    }
     floatingGeneration++
     decidingRequest = false
     transcribingAudio = false
@@ -590,9 +692,24 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun updateFloatingText(text: String) {
+    if (text != floatingState.value.text) invalidatePreviewForEditing()
+    if (pendingQuery != null && text != pendingQuery?.text) {
+      pendingQuery = null; approvedQueryText = null
+      floatingState.value = floatingState.value.copy(needsConfirmation = false, queryPreview = false)
+    }
     if (floatingState.value.mode == FloatingMode.SENDING && !decidingRequest && !transcribingAudio) return
     if (floatingState.value.mode != FloatingMode.TYPING) enterFloatingTextMode()
     floatingState.value = floatingState.value.copy(text = text)
+  }
+
+  private fun invalidatePreviewForEditing() {
+    if (activeWorkflow()?.confirmed != false) return
+    previewInvalidatedByEdit = true
+    runCatching { workflow.invalidatePreview() }.onFailure {
+      floatingState.value = floatingState.value.copy(error = "No se pudo guardar la edición. El plan anterior no se ejecutará.")
+    }
+    syncWorkflow()
+    floatingState.value = floatingState.value.copy(needsConfirmation = false)
   }
 
   fun selectFloatingAttachment(uri: android.net.Uri) {
@@ -693,6 +810,7 @@ class MainViewModel @JvmOverloads constructor(
     pendingFloatingAudio = null
     pendingTranscript = null
     notificationsCommand=null
+    semanticDraft = null; pendingQuery = null; approvedQueryText = null
     conversation.clear()
     // Explicit close cancels future steps; effects already handed off are never replayed.
     if (activeWorkflow() != null) workflow.cancel()
@@ -700,7 +818,7 @@ class MainViewModel @JvmOverloads constructor(
     confirmation = null
     cameraCommand = null
     contactsCommand = null
-    floatingState.value = floatingState.value.copy(needsNotifications = false, workflowActive = false, workflowCanContinue = false, workflowCanRetry = false, deciding = false, needsConfirmation = false, needsCamera = false, appOptions = emptyList(), needsContacts = false, contactOptions = emptyList(), phoneActionCompletion = null)
+    floatingState.value = floatingState.value.copy(queryPreview = false, needsNotifications = false, workflowActive = false, workflowCanContinue = false, workflowCanRetry = false, deciding = false, needsConfirmation = false, needsCamera = false, appOptions = emptyList(), needsContacts = false, contactOptions = emptyList(), phoneActionCompletion = null)
   }
 
   fun sendFloatingAudio(onDispatched: () -> Unit) {
@@ -742,7 +860,7 @@ class MainViewModel @JvmOverloads constructor(
       transcribingAudio = false
       pendingTranscript = transcript
       floatingState.value = floatingState.value.copy(transcript = transcript)
-      if (routeFloatingRequest(transcript)) {
+      if (routeFloatingRequest(transcript, onDispatched)) {
         if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
         if (!retainLocalAudio) {
           audio.file.delete()
@@ -785,7 +903,7 @@ class MainViewModel @JvmOverloads constructor(
     val generation = ++floatingGeneration
     floatingPaused = false
     floatingJob = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
-      if (routeFloatingRequest(text)) return@launch
+      if (routeFloatingRequest(text, onDispatched)) return@launch
       if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
       prepareFloatingAssistant()
       val contact = floatingContact

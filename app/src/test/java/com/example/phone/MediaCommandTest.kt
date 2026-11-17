@@ -2,6 +2,11 @@ package com.example.phone
 import org.junit.Assert.*
 import org.junit.Test
 class MediaCommandTest {
+ @Test fun currentMediaQuestionUsesPhoneWhileExplanationsRemainQueries() {
+  val p = PhoneCommandParser()
+  assertEquals(PhoneRoute.Local(PhoneCommand.Media(MediaOp.STATUS)), p.parse("¿Qué está sonando?"))
+  assertEquals(PhoneRoute.Instinct, p.parse("¿Qué es la reproducción multimedia?"))
+ }
  @Test fun mediaCommandsTargetTransportNotSearch() {
   val p = PhoneCommandParser()
   assertEquals(PhoneRoute.Local(PhoneCommand.Media(MediaOp.PAUSE)), p.parse("Pausá la música"))

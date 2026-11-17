@@ -38,6 +38,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     val original = normalize(text)
     val s = canonicalRequest(original)
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel
+    if (s == "que esta sonando") return PhoneRoute.Local(PhoneCommand.Media(MediaOp.STATUS))
     if (s.isBlank() || Regex("^(no |nunca |si |que |como |por que |(?:me )?expli|conta|instinct)").containsMatchIn(s)) return PhoneRoute.Instinct
     ExtendedCommandParser.parse(s)?.let { return it }
     EverydayCommandParser(calendarNow).parse(text)?.let { return it }

@@ -53,12 +53,12 @@ class FloatingWorkflowTest {
   java.io.File(app.noBackupFilesDir,"phone-workflow.json").delete()
   val gate=kotlinx.coroutines.CompletableDeferred<List<com.example.phone.PhoneCommand>>()
   try {
-   val router=com.example.phone.HybridPhoneRouter({true},com.example.phone.DecisionClassifier {error("No stale classification")})
+   val router=com.example.phone.HybridPhoneRouter({true},com.example.phone.DecisionClassifier {com.example.phone.SemanticDecision("timer",.99,.99,.99,.99)})
    val vm=MainViewModel(app,hybridRouter=router,structuredExtractor=com.example.phone.StructuredCommandExtractor {gate.await()})
-   vm.updateFloatingText("necesito luz acá");vm.sendFloatingText {fail("No WhatsApp")}
+   vm.updateFloatingText("avisame en diez minutos");vm.sendFloatingText {fail("No WhatsApp")}
    runCurrent();assertTrue(vm.floatingAssistant.value.deciding)
    vm.updateFloatingText("otro pedido")
-   gate.complete(listOf(com.example.phone.PhoneCommand.Torch(true)))
+   gate.complete(listOf(com.example.phone.PhoneCommand.Timer(600)))
    advanceUntilIdle()
    assertFalse(vm.floatingAssistant.value.workflowActive)
    assertNull(vm.consumePhoneActionCompletion())
