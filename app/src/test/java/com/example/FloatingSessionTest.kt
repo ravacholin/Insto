@@ -64,6 +64,21 @@ class FloatingSessionTest {
       vm.dismissFloatingAssistant()
     } finally { Dispatchers.resetMain() }
   }
+
+  @Test fun `capture started by a permission result polls before resume`() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    try {
+      val capture = Capture()
+      val vm = MainViewModel(ApplicationProvider.getApplicationContext<Application>(), capture, StandardTestDispatcher(testScheduler))
+      vm.pauseFloatingAssistant()
+      vm.startFloatingListening { fail("Starting the microphone must not dispatch") }
+      capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
+      runCurrent()
+      assertEquals(FloatingMode.RECORDING, vm.floatingAssistant.value.mode)
+      vm.dismissFloatingAssistant()
+    } finally { Dispatchers.resetMain() }
+  }
+
   @Test fun `encoder failure on finish returns to idle instead of leaving dead recording controls`() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     try {
