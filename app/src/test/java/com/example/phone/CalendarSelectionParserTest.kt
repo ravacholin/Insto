@@ -22,6 +22,20 @@ class CalendarSelectionParserTest {
     assertEquals(CalendarSelection(title = "reunion", from = "2026-11-20"), selection("¿A qué hora es la reunión del viernes?"))
   }
 
+  @Test fun everydayAgendaQuestionsKeepTheExplicitPeriod() {
+    for (text in listOf("qué tengo hoy en la agenda?", "¿Qué hay hoy en mi calendario?",
+      "¿Qué eventos tengo hoy en mi agenda?", "¿Tengo algo en la agenda para hoy?")) {
+      assertEquals(text, CalendarSelection(from = "2026-11-18"), selection(text))
+    }
+    assertEquals(CalendarSelection(from = "2026-11-19", afternoon = true),
+      selection("¿Qué tengo mañana en el calendario por la tarde?"))
+    assertEquals(CalendarSelection(from = "2026-11-18", until = "2026-11-20"),
+      selection("Mostrame mi agenda desde hoy hasta mañana"))
+    assertEquals(CalendarSelection(from = "2026-11-18"), selection("Consultá mi agenda"))
+    assertFalse(parser.parse("¿Qué tengo que estudiar hoy?") is PhoneRoute.Local)
+    assertTrue(parser.parse("¿Qué tengo hoy en la agenda después de las 15:00?") is PhoneRoute.Unsupported)
+  }
+
   @Test fun selectorsSeparateExistingDateFromNewFields() {
     assertEquals(CalendarSelection(title = "reunion", from = "2026-11-20", newTime = "18:00"),
       selection("Pasá la reunión del viernes a las 18:00"))

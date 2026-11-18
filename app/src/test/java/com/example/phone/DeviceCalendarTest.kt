@@ -46,6 +46,15 @@ class DeviceCalendarTest {
     assertTrue(week.contains("20/11/2026 14:00 a 15:00 · Turno médico"))
   }
 
+  @Test fun everydayTodayQuestionReadsTodaysEntriesOnly() {
+    provider.instances += instance(1, "Plaza", "2026-11-18", 17)
+    provider.instances += instance(2, "Turno médico", "2026-11-19", 14)
+    val agenda = store.agenda(selection("qué tengo hoy en la agenda?"))
+    assertTrue(agenda.contains("18/11/2026 17:00 a 18:00 · Plaza"))
+    assertFalse(agenda.contains("Turno médico"))
+    assertEquals(0, provider.writes)
+  }
+
   @Test fun recurringInstancesAndDuplicateLabelsFromDifferentCalendarsRemainSelectable() {
     provider.instances += instance(1, "Reunión de equipo", "2026-11-20", 9, calendarId = 1, recurring = true)
     provider.instances += instance(1, "Reunión de equipo", "2026-11-27", 9, calendarId = 1, recurring = true)
