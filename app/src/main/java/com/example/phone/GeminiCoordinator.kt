@@ -96,7 +96,7 @@ class GeminiCoordinator(
           return@withTimeout resolveStructured(request, local, steps, stage)
         }
         val attempt = breaker.acquire()
-        val speculative = if (attempt != null && fallback != null) async {
+        val speculative: Deferred<Result<InterpretationResult>>? = if (attempt != null && fallback != null) async {
           try {
             Result.success(extract(request, fallback, fallback = true, timeout = 6_000))
           } catch (error: CancellationException) {
