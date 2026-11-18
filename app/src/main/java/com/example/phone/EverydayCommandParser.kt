@@ -84,8 +84,8 @@ internal class EverydayCommandParser(private val now: () -> Calendar) {
       }
       return local(if (platform == "youtube") PhoneCommand.YouTubeSearch(query) else PhoneCommand.SpotifySearch(query))
     }
-    match("(?:busca|encontra|mostra)\\s+(.+?)\\s+en\\s+(youtube|spotify)[.!?]*")?.let {
-      return platformSearch(it.groupValues[2], r.capture(it, 1))
+    match("(?:busca|encontra|mostra)\\s+(.+?)\\s+en\\s+((?:videos de )?youtube|spotify)[.!?]*")?.let {
+      return platformSearch(it.groupValues[2].removePrefix("videos de "), r.capture(it, 1))
     }
     match("(?:busca|encontra|mostra)\\s+en\\s+(youtube|spotify)\\s+(.+)")?.let {
       return platformSearch(it.groupValues[1], r.capture(it, 2))
@@ -109,6 +109,12 @@ internal class EverydayCommandParser(private val now: () -> Calendar) {
     }
     match("(?:llama|marca)\\s+(?:(?:el\\s+)?numero\\s+de\\s+|(?:a|al)\\s+)(.+)")?.let {
       return local(PhoneCommand.Dial(r.capture(it, 1).trimEnd('.', '!', '?')))
+    }
+    match("prepara el marcador para (.+)")?.let {
+      if (!RequestSafetyPolicy.fixedActionHasExtraParameters(r.raw) &&
+        !Regex("\\b(?:hoy|manana|despues|luego|cuando|si)\\b").containsMatchIn(structural)) {
+        return local(PhoneCommand.Dial(r.capture(it, 1).trimEnd('.', '!', '?')))
+      }
     }
     match("abri\\s+(?:la\\s+)?camara(?:\\s+(para grabar|en modo video|de video))?[.!?]*")?.let {
       return local(PhoneCommand.Camera(it.groupValues[1].isNotEmpty()))

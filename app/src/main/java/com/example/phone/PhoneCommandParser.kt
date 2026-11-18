@@ -22,7 +22,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     if (normalized in listOf("si", "dale", "ok") || normalized.startsWith("si ")) {
       return PhoneRoute.Clarify("Indicá el dato del pedido sin condiciones, o decí cancelar.", context)
     }
-    if (normalized.startsWith("instinct")) return PhoneRoute.Instinct
+    if (normalized.startsWith("instinct") || isExplicitGeneralRequest(text)) return PhoneRoute.Instinct
     if (Regex("^(?:(?:como|que|por que|conta)\\b|(?:me )?expli)").containsMatchIn(normalized)) return PhoneRoute.Instinct
     when (context) {
       "app" -> return parse("abrí $text")
@@ -95,7 +95,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     if (torch != null) return PhoneRoute.Local(PhoneCommand.Torch(torch.groupValues[1] !in listOf("apaga", "apagar", "apagame", "desactiva", "desactivar")))
     if (Regex("^(subi|aumenta) (?:el )?volumen$").matches(s)) return PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.UP))
     if (Regex("^(baja|reduce) (?:el )?volumen$").matches(s)) return PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.DOWN))
-    val volume = Regex("^(?:pone|fija|ajusta|subi|baja|reduce|aumenta) (?:el )?(?:volumen(?: multimedia)?|sonido) (?:al? )?(.+?)(?: por ciento|%)?$").matchEntire(s)
+    val volume = Regex("^(?:(?:pone|fija|ajusta|subi|baja|reduce|aumenta) (?:el )?(?:volumen(?: multimedia)?|sonido)|deja (?:el )?audio multimedia) (?:al? )?(.+?)(?: por ciento|%)?$").matchEntire(s)
     if (volume != null) {
       val n = number(volume.groupValues[1])
       return if (n != null && n in 0..100) PhoneRoute.Local(PhoneCommand.Volume(VolumeOp.SET, n))
@@ -106,6 +106,12 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     if (phrase != null) return phrase
     if (Regex("^(?:abri|lanza)(?: (?:la |una )?(?:app|aplicacion))?$").matches(s))
       return PhoneRoute.Clarify("¿Qué aplicación querés abrir?", "app")
+    when (s) {
+      "abri musica", "abri la musica" -> return PhoneRoute.Clarify("¿Qué aplicación de música querés abrir?", "app")
+      "apaga la luz", "apaga luz" -> return PhoneRoute.Clarify("Indicá la acción completa. Para la luz del teléfono, pedí apagar la linterna.", "action")
+      "baja spotify" -> return PhoneRoute.Clarify("Indicá la acción completa: bajar el volumen, pausar Spotify o lo que necesites.", "action")
+      "detene todo" -> return PhoneRoute.Clarify("Indicá qué querés detener.", "action")
+    }
     val app = Regex("^(?:abri|lanza|inicia) (?:(?:la )?(?:app|aplicacion) )?(.+)$").matchEntire(s)
     if (app != null) return PhoneRoute.Local(PhoneCommand.OpenApp(app.groupValues[1]))
     // Recognized requests outside our executor must never silently become a message to Instinct.
@@ -254,6 +260,15 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       "termina" to "terminar termina termines",
       "restaura" to "restaurar restaura restaures"
     ).flatMap { (canonical, variants) -> variants.split(' ').map { it to canonical } }.toMap()
+
+    private val explicitGeneralRequest = Regex(
+      "^(?:como se (?:prende|enciende|apaga) (?:la )?linterna$|" +
+        "escrib(?:ir|i|e)(?:me)? (?:un |una )?(?:cuento|historia)\\b|investig(?:a|ar) (?:las )?ultimas noticias\\b|" +
+        "prepara (?:un )?analisis\\b|organiz(?:ar|a)(?:me)? una investigacion\\b)"
+    )
+
+    internal fun isExplicitGeneralRequest(text: String): Boolean =
+      explicitGeneralRequest.containsMatchIn(canonicalRequest(normalize(text)))
 
     internal fun requestHeadStart(text: String): Int {
       val start = politeness.find(text)?.value?.length ?: 0

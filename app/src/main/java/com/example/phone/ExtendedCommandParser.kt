@@ -21,7 +21,7 @@ internal object ExtendedCommandParser {
    else -> null
   }
   if (media != null) return local(PhoneCommand.Media(media))
-  val timed = Regex("^(.+?) (durante|por(?! ciento\\b)|hasta)(?: (.+?))?(?: y (?:(?:despues|luego) )?restaura(?:lo)?)?$").matchEntire(s)
+  val timed = Regex("^(.+?) (durante|por(?! ciento\\b)|hasta)(?: (.+?))?(?: y (?:(?:despues|luego) )?restaura(?:lo)?| con restauracion)?$").matchEntire(s)
     ?: return null
   val mode = timed.groupValues[1]
   val volume = Regex("^(?:pone|fija|ajusta|subi|baja) (?:el )?volumen(?: multimedia)? (?:al? )?(.+?)(?: por ciento|%)?$").matchEntire(mode)

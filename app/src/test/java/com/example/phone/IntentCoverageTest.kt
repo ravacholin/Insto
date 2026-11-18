@@ -7,7 +7,7 @@ import kotlin.math.ceil
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
-import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -92,6 +92,50 @@ class IntentCoverageTest {
     return Observation(case, result, decisions, extractions)
   }
 
+  @Test fun newCasesFollowTheirExpectedRoutes() = runBlocking {
+    val failures = extra.mapNotNull { case ->
+      val result = observe(case)
+      val passes = when (case.group) {
+        "direct" -> result.local && result.result is InterpretationResult.Direct && result.commands == case.commands
+        "alternative" -> result.commands == case.commands && (result.local || result.decisions == listOf(case.choice))
+        "ambiguous" -> !result.executes && (result.result is InterpretationResult.Clarification ||
+          result.decisions.isNotEmpty())
+        "restriction" -> result.result is InterpretationResult.Rejected ||
+          result.result is InterpretationResult.Clarification
+        "query", "instinct" -> result.result == InterpretationResult.Query()
+        else -> error("Unexpected group: ${case.group}")
+      }
+      if (passes) null else "${case.text}: ${result.route}, Decisions=${result.decisions}"
+    }
+    assertTrue(failures.joinToString("\n"), failures.isEmpty())
+  }
+
+  @Test fun explicitQueriesAndAmbiguousTargetsCannotBeTurnedIntoActionsByDecisions() = runBlocking {
+    val misleadingChoices = mapOf(
+      "Abrí música" to "app_open",
+      "Apagá la luz" to "torch_off",
+      "Bajá Spotify" to "volume_down",
+      "Detené todo" to "workflow",
+    )
+    val queriesAndAmbiguous = extra.filter { it.group in setOf("ambiguous", "query", "instinct") } +
+      Case("Escribime un cuento sobre alguien que pone una alarma", "query")
+    val failures = queriesAndAmbiguous.mapNotNull { case ->
+      val result = observe(case.copy(choice = misleadingChoices[case.text] ?: "torch_on",
+        commands = listOf(PhoneCommand.OpenApp("Spotify"), PhoneCommand.Torch(false))))
+      val expectedRoute = if (case.group == "ambiguous") result.result is InterpretationResult.Clarification
+        else result.result == InterpretationResult.Query()
+      if (result.local && expectedRoute) null else "${case.text}: ${result.route}, Decisions=${result.decisions}"
+    }
+    assertTrue(failures.joinToString("\n"), failures.isEmpty())
+  }
+
+  @Test fun localExpansionsDoNotDropTimingRestrictionsOrReclassifyOtherTargets() {
+    for (text in listOf("Prepará el marcador para Ana mañana", "Prepará el marcador para Ana a las ocho",
+      "Poné algo de Netflix", "Poné algo de comer")) {
+      assertFalse(text, parser.parse(text) is PhoneRoute.Local)
+    }
+  }
+
   @Test fun offlineMetrics() = runBlocking {
     val stream = requireNotNull(javaClass.getResourceAsStream("/gemini-es-corpus.json"))
     val corpus = JSONArray(stream.bufferedReader().use { it.readText() }).objects()
@@ -147,7 +191,9 @@ class IntentCoverageTest {
     val incorrectInstinct = observations.count {
       it.result is InterpretationResult.Query && it.case.group !in setOf("query", "instinct")
     }
-    val missedInstinct = observations.count { it.case.group == "instinct" && it.result !is InterpretationResult.Query }
+    val missedInstinct = observations.count {
+      it.case.group in setOf("query", "instinct") && it.result !is InterpretationResult.Query
+    }
     val instinctExecutions = observations.count { it.case.group == "instinct" && it.executes }
     println(String.format(Locale.ROOT,
       "METRICS requests=%d local=%d (%.2f%%) decisions=%d calls_per_request=%.4f mean_bytes=%.2f min_bytes=%d max_bytes=%d p50_ns=%d p95_ns=%d false_positives=%d incorrect_instinct=%d missed_instinct=%d instinct_executions=%d",
