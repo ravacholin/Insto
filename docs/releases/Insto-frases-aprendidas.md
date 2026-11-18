@@ -26,9 +26,14 @@ recientemente.
 
 ## Verificación
 
-`testDebugUnitTest` completo quedó bloqueado al descargar
-`org.robolectric:nativeruntime-dist-compat:1.0.18`. El espejo de Maven respondió
-HTTP 403.
+- GitHub Actions aprobó `testDebugUnitTest` completo y `assembleDebug`.
+  [Ejecución de CI](https://github.com/ravacholin/Insto/actions/runs/44348071914).
+- En este entorno, la suite completa se frenó al descargar
+  `org.robolectric:nativeruntime-dist-compat:1.0.18`. El espejo de Maven respondió
+  HTTP 403. Las pruebas de Robolectric se compilaron y quedaron sin ejecutar
+  localmente.
+- Pasaron 59 pruebas JVM con un filtro local y un script de Gradle temporal que
+  excluyó solo ese artefacto de Robolectric.
 
 En el teléfono queda probar una confirmación con éxito, cancelación y permisos
 rechazados, repetición de texto en modo avión, desinstalación de una app,
