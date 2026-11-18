@@ -222,23 +222,25 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       }
       return runCatching { DraftPlan(listOf(CommandDraft("s1", fields))) }.getOrNull()
     }
-    private fun maskQuotes(input:String):String {
-      var quoted=false
-      return input.map {c ->
-        if(c in "\"“”") quoted=!quoted
-        if(quoted || c in "\"“”") '_' else c
+    private fun maskQuotes(input: String): String {
+      var closing: Char? = null
+      return input.map { character ->
+        val opening = when (character) {
+          '"' -> '"'
+          '“' -> '”'
+          '«' -> '»'
+          else -> null
+        }
+        val masked = closing != null || opening != null
+        if (closing == character) closing = null
+        else if (closing == null) closing = opening
+        if (masked) '_' else character
       }.joinToString("")
     }
     private fun looksLikeRequest(s: String) = Regex("\\b(?:prende|apaga|pone|baja|subi|abri|agenda|llama|lleva|inicia)").containsMatchIn(s)
     /** Split only structural separators outside quotes. An unknown second step remains visible and rejects the plan. */
     fun splitSteps(input: String): List<String> {
-      val masked = StringBuilder(input)
-      var quoted = false
-      input.forEachIndexed { i, c ->
-        if (c in "\"“”") quoted = !quoted
-        if (quoted || c in "\"“”") masked.setCharAt(i, '_')
-      }
-      val syntax = masked.toString()
+      val syntax = maskQuotes(input)
       val separators = Regex("\\s*[,;]\\s*|\\s+(?:y después|y despues|y luego|después|despues|luego|y)\\s+", RegexOption.IGNORE_CASE)
       // 'y' within quantities, titles and a time is not a separator unless followed by a command-like verb.
       val verbs = Regex("^(?:pone|poneme|pon|baja|subi|abri|prende|enciende|encende|apaga|inicia|pausa|continua|reinicia|lleva|llevame|llama|agenda|busca|reproduci|compra|envia|borra|activa|desactiva|silencia|mostra|cancela)\\b")

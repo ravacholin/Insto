@@ -25,6 +25,20 @@ class GeminiCoordinatorTest {
     assertEquals(1, extractions)
   }
 
+  @Test fun appNameComparisonUsesLauncherNormalization() = runTest {
+    val text = "Encendé la linterna y abrí Spotify"
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Unexpected Decisions call") })
+    val commands = listOf(PhoneCommand.Torch(true), PhoneCommand.OpenApp("Spotify"))
+    val result = GeminiCoordinator(router, StructuredCommandExtractor { commands })
+      .interpret(InterpretationRequest(text), PhoneCommandParser().parse(text))
+    assertEquals(commands, (result as InterpretationResult.Plan).commands)
+  }
+
+  @Test fun quotedSeparatorsDoNotTurnTextIntoExtraSteps() {
+    val text = "Reproducí «Bajá el volumen, abrí Spotify»"
+    assertEquals(listOf(text), ConversationSession.splitSteps(text))
+  }
+
   @Test fun explicitSequencePreservesMissingAlarmPeriodAndOtherSteps() = runTest {
     val text = "Poné una alarma a las siete, silenciá el teléfono durante una hora y abrí Spotify"
     val parser = PhoneCommandParser()

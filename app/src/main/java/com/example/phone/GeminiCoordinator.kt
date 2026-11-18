@@ -268,6 +268,8 @@ class GeminiCoordinator(
           if (completed is PhoneCommand.Platform && route.command is PhoneCommand.Platform &&
             completed.action == route.command.action && completed.action in CalendarSelection.actions)
             CalendarSelection.decode(completed) == CalendarSelection.decode(route.command)
+          else if (completed is PhoneCommand.OpenApp && route.command is PhoneCommand.OpenApp)
+            PhoneCommandParser.normalize(completed.name) == PhoneCommandParser.normalize(route.command.name)
           else completed == route.command
         }
         is PhoneRoute.Clarify -> {
