@@ -766,7 +766,7 @@ class MainViewModel @JvmOverloads constructor(
     stopDispatchJob?.cancel()
     amplitudeJob?.cancel()
     recorder.release()
-    dismissFloatingAssistant()
+    floating.close()
     super.onCleared()
   }
 
