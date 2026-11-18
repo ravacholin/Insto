@@ -18,14 +18,14 @@ internal object ExtendedLocalIntents {
           extract(request)?.let {PhoneRoute.Local(it)}
         }))
     }
-    parsed("call_direct",IntentCategory.CALLS,"Iniciar llamada directa a un número explícito, con permiso y confirmación",listOf("llamá directamente al +541112345678","iniciá una llamada al +541112345678"),PlatformAction.CALL_DIRECT,
+    parsed("call_direct",IntentCategory.CALLS,"Iniciar una llamada directa al número explícito, en vez de preparar el marcador.",listOf("llamá directamente al +541112345678","iniciá una llamada al +541112345678"),PlatformAction.CALL_DIRECT,
       listOf(parameter("number")),listOf("android.permission.CALL_PHONE"),"Intent.ACTION_CALL tras confirmación local","Android inicia la llamada solicitada; no se afirma conexión",
       "Indicá un número completo: llamá directamente al +541112345678.") {r ->
       Regex("^(?:(?:llama|marca) directamente (?:al?|a)|(?:inicia|hace) (?:una )?llamada directa? (?:al?|a)|inicia una llamada (?:al?|a)) ([+0-9 ()-]+)[.!?]*$").matchEntire(r.text)?.let {m ->
         PhoneNumbers.canonical(r.capture(m,1))?.let {PhoneCommand.Platform(PlatformAction.CALL_DIRECT,it)}
       }
     }
-    parsed("message_send",IntentCategory.MESSAGING,"Enviar texto por la integración de WhatsApp a un número explícito, tras revisar destinatario y contenido",listOf("mandá por WhatsApp a +541112345678 que diga Estoy llegando","enviá por WhatsApp a +541112345678 que diga Hola José"),PlatformAction.MESSAGE_SEND,
+    parsed("message_send",IntentCategory.MESSAGING,"Enviar un mensaje de WhatsApp al número indicado, en vez de preparar un borrador de SMS.",listOf("mandá por WhatsApp a +541112345678 que diga Estoy llegando","enviá por WhatsApp a +541112345678 que diga Hola José"),PlatformAction.MESSAGE_SEND,
       listOf(parameter("number"),parameter("body")),listOf("WhatsApp instalado y accesibilidad conectada/autorizada"),"WhatsAppDispatcher con guardas de destinatario y texto existentes",
       "Solicitud de envío entregada a WhatsApp; la automatización verifica destinatario y cuerpo. Sin otro destinatario por defecto.",
       "Indicá número y texto: mandá por WhatsApp a +541112345678 que diga Estoy llegando.") {r ->
@@ -38,7 +38,7 @@ internal object ExtendedLocalIntents {
       Triple("file_share",PlatformAction.FILE_SHARE,"comparti"),Triple("file_delete",PlatformAction.FILE_DELETE,"borra|elimina"),
       Triple("file_copy",PlatformAction.FILE_COPY,"copia"),Triple("file_move",PlatformAction.FILE_MOVE,"move"))) {
       val label=when(op) {PlatformAction.FILE_OPEN->"Abrir";PlatformAction.FILE_SEARCH->"Buscar";PlatformAction.FILE_SHARE->"Compartir";PlatformAction.FILE_DELETE->"Eliminar";PlatformAction.FILE_COPY->"Copiar";else->"Mover"}
-      parsed(id,IntentCategory.FILES,"$label un archivo con selección y permisos de Android",listOf("${label.lowercase()} el archivo informe.pdf","${label.lowercase()} un archivo"),op,
+      parsed(id,IntentCategory.FILES,"$label un archivo o documento identificado por su nombre o por selección.",listOf("${label.lowercase()} el archivo informe.pdf","${label.lowercase()} un archivo"),op,
         listOf(parameter("name",false)),listOf("concesión de URI del Storage Access Framework"),"ACTION_OPEN_DOCUMENT / OPEN_DOCUMENT_TREE y DocumentsContract",
         "Selección nativa; se verifica nombre si se indicó, destino y confirmación antes de escribir. Eliminar no usa otro archivo por defecto.","Indicá solo el archivo o pedí elegirlo en el selector de Android.") { r ->
         Regex("^(?:$verb) (?:el |un )?(?:archivo|documento)(?: (.+?))?[.!?]*$").matchEntire(r.text)?.let {m ->
@@ -47,7 +47,7 @@ internal object ExtendedLocalIntents {
         }
       }
     }
-    parsed("file_rename",IntentCategory.FILES,"Renombrar un archivo con nombres exactos y selección Android",listOf("renombrá el archivo \"informe.pdf\" a \"final.pdf\"","renombrar archivo \"foto.jpg\" a \"viaje.jpg\""),PlatformAction.FILE_RENAME,
+    parsed("file_rename",IntentCategory.FILES,"Cambiar el nombre de un archivo indicando el nombre actual y el nuevo.",listOf("renombrá el archivo \"informe.pdf\" a \"final.pdf\"","renombrar archivo \"foto.jpg\" a \"viaje.jpg\""),PlatformAction.FILE_RENAME,
       listOf(parameter("name"),parameter("newName")),listOf("concesión de URI de escritura"),"ACTION_OPEN_DOCUMENT y DocumentsContract.renameDocument","Se verifica el archivo y se confirma el nombre antes de renombrar",
       "Indicá nombres entre comillas: renombrá el archivo \"informe.pdf\" a \"final.pdf\".") {r ->
       Regex("^(?:renombra|cambia el nombre de) (?:el )?(?:archivo|documento) \"(.+?)\" (?:a|por) \"([^/\\\\]+)\"[.!?]*$").matchEntire(r.text)?.let {m ->
@@ -55,9 +55,9 @@ internal object ExtendedLocalIntents {
       }
     }
     for ((action, description, examples) in listOf(
-      Triple(PlatformAction.CALENDAR_QUERY, "Consultar eventos de la agenda", listOf("qué tengo mañana", "mostrá mi agenda de esta semana")),
-      Triple(PlatformAction.CALENDAR_UPDATE, "Modificar un evento de la agenda", listOf("editá el evento \"Reunión\"", "pasá la reunión del viernes a las 18:00")),
-      Triple(PlatformAction.CALENDAR_DELETE, "Eliminar un evento de la agenda", listOf("cancelá la reunión del viernes", "borrá el turno médico de mañana")),
+      Triple(PlatformAction.CALENDAR_QUERY, "Consultar eventos existentes en la agenda, por fecha, horario o título.", listOf("qué tengo mañana", "mostrá mi agenda de esta semana")),
+      Triple(PlatformAction.CALENDAR_UPDATE, "Modificar la fecha, hora o duración de un evento existente en la agenda.", listOf("editá el evento \"Reunión\"", "pasá la reunión del viernes a las 18:00")),
+      Triple(PlatformAction.CALENDAR_DELETE, "Cancelar o eliminar un evento existente en la agenda, identificado por título u horario.", listOf("cancelá la reunión del viernes", "borrá el turno médico de mañana")),
     )) {
       val id = action.name.lowercase(java.util.Locale.ROOT)
       val readOnly = action == PlatformAction.CALENDAR_QUERY
@@ -74,22 +74,34 @@ internal object ExtendedLocalIntents {
           }
         }))
     }
-    parsed("routine_run",IntentCategory.AUTOMATION,"Ejecutar una rutina local ya configurada",listOf("ejecutá la rutina Estudio","activá mi rutina Estudio"),PlatformAction.ROUTINE_RUN,
+    parsed("routine_run",IntentCategory.AUTOMATION,"Ejecutar por nombre una rutina ya configurada, sin interpretar pasos nuevos.",listOf("ejecutá la rutina Estudio","activá mi rutina Estudio"),PlatformAction.ROUTINE_RUN,
       listOf(parameter("name")),emptyList(),"ConfiguredRoutineStore y WorkflowRunner","Se revisan los pasos guardados antes de ejecutar, sin crear pasos a partir del pedido",
       "¿Qué rutina configurada querés ejecutar? Indicá su nombre.") {r ->
       Regex("^(?:ejecuta|activa|inicia|lanza) (?:la |mi )?rutina (.+?)[.!?]*$").matchEntire(r.text)?.let {m ->
         r.capture(m,1).takeIf(::literalTarget)?.let {PhoneCommand.Platform(PlatformAction.ROUTINE_RUN,it)}
       }
     }
-    for((id,op,desc) in listOf(Triple("camera_capture",PlatformAction.CAPTURE_PHOTO,"Capturar una foto"),Triple("camera_record",PlatformAction.CAPTURE_VIDEO,"Capturar un video"),Triple("recorder_start",PlatformAction.CAPTURE_AUDIO,"Capturar una grabación de audio"))) {
-      add(LocalIntentDefinition(id,IntentCategory.CAMERA_RECORDING,desc+" mediante la aplicación nativa",listOf(desc.lowercase(),"quiero ${desc.lowercase()}"),emptyList(),
-        if(op==PlatformAction.CAPTURE_AUDIO) emptyList() else listOf("android.permission.CAMERA"),
+    val captures = listOf(
+      Triple("camera_capture", PlatformAction.CAPTURE_PHOTO, "Capturar una foto"),
+      Triple("camera_record", PlatformAction.CAPTURE_VIDEO, "Capturar un video"),
+      Triple("recorder_start", PlatformAction.CAPTURE_AUDIO, "Capturar una grabación de audio"),
+    )
+    for ((id, op, desc) in captures) {
+      val decisionDescription = when (op) {
+        PlatformAction.CAPTURE_PHOTO -> "Capturar una foto en vez de solo abrir la cámara en modo foto."
+        PlatformAction.CAPTURE_VIDEO -> "Grabar un video en vez de solo abrir la cámara en modo video."
+        else -> "Grabar audio en vez de solo abrir la grabadora."
+      }
+      add(LocalIntentDefinition(id, IntentCategory.CAMERA_RECORDING, "$desc mediante la aplicación nativa",
+        listOf(desc.lowercase(), "quiero ${desc.lowercase()}"), emptyList(),
+        if (op == PlatformAction.CAPTURE_AUDIO) emptyList() else listOf("android.permission.CAMERA"),
         "ACTION_IMAGE_CAPTURE / ACTION_VIDEO_CAPTURE / RECORD_SOUND_ACTION con resultado y URI autorizada",
-        "Se abre la interfaz nativa para capturar; solo se informa archivo guardado cuando la app devuelve un resultado válido. Sin filtros ni ajustes adicionales.",fixed=PhoneCommand.Platform(op)))
+        "Se abre la interfaz nativa para capturar; solo se informa archivo guardado cuando la app devuelve un resultado válido. Sin filtros ni ajustes adicionales.",
+        fixed = PhoneCommand.Platform(op), decisionDescription = decisionDescription))
     }
     for((id,op,desc,examples) in listOf(
-      listOf("routine_list",PlatformAction.ROUTINE_LIST,"Listar rutinas locales configuradas",listOf("mostrá mis rutinas","qué rutinas tengo")),
-      listOf("routine_import",PlatformAction.ROUTINE_IMPORT,"Importar plantillas de rutinas revisadas desde JSON",listOf("importá rutinas","configurá rutinas desde un archivo")))) {
+      listOf("routine_list",PlatformAction.ROUTINE_LIST,"Mostrar las rutinas ya configuradas, sin poner ninguna en marcha.",listOf("mostrá mis rutinas","qué rutinas tengo")),
+      listOf("routine_import",PlatformAction.ROUTINE_IMPORT,"Importar plantillas de rutinas desde un archivo JSON, sin ejecutar las rutinas.",listOf("importá rutinas","configurá rutinas desde un archivo")))) {
       @Suppress("UNCHECKED_CAST")
       add(LocalIntentDefinition(id as String,IntentCategory.AUTOMATION,desc as String,examples as List<String>,emptyList(),emptyList(),
         "ConfiguredRoutineStore con selección SAF e importación confirmada","Listar no ejecuta; importar reemplaza solo después de revisar las plantillas",fixed=PhoneCommand.Platform(op as PlatformAction)))

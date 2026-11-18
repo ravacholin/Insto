@@ -441,8 +441,6 @@ class GeminiCoordinatorTest {
     val result = coordinator("workflow", StructuredCommandExtractor { commands })
       .interpret(InterpretationRequest("activá vibración y detené YouTube"), PhoneRoute.Instinct)
     assertEquals(commands, (result as InterpretationResult.Plan).commands)
-    assertTrue(CapabilityCatalog.choices.getValue("media_stop_youtube").contains("parar YouTube"))
-    assertTrue(CapabilityCatalog.choices.getValue("media_pause").contains("Equivalentes"))
   }
 
   @Test fun extractionCannotExtendTheSharedDeadline() = runTest {

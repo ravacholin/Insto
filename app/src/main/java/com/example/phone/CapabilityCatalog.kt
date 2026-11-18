@@ -78,14 +78,13 @@ object CapabilityCatalog {
     "calendar_delete" to "Eliminar un evento seleccionado localmente, tras confirmación.",
     "youtube" to "Buscar en YouTube.", "music" to "Reproducir un título; conservar Spotify o YouTube si se indicó. Es distinto de buscar o de controlar la reproducción actual.",
     "volume_set" to "Ajustar volumen multimedia a porcentaje explícito.",
-    "open_app" to "Abrir aplicación por su nombre.", "settings" to "Abrir ajustes de conectividad; no cambiar conectividad automáticamente.",
+    "open_app" to "Abrir una aplicación por su nombre, como app_open. Obligatorios: name.", "settings" to "Abrir ajustes de conectividad en general, sin activar ni desactivar redes. Obligatorios: kind.",
     "temporary_mode" to "Aplicar volumen multimedia/silencio/No molestar por duración explícita y restaurar.",
     "workflow" to "Secuencia explícita de dos a diez acciones admitidas para hacer ahora; sin condiciones ni pasos omitidos.",
   )
   val choices: Map<String, String> = LinkedHashMap(LocalIntentRegistry.default.choices).apply {
-    fixed.forEach { (key, command) -> putIfAbsent(key, PhoneCommandCodec.summary(command) + "; sin parámetros ni condiciones adicionales.") }
+    putIfAbsent("end_mode", getValue("temporary_mode_end"))
     parameterChoices.forEach { (key, description) -> putIfAbsent(key, description) }
-    put("unsupported", "Fuera del catálogo, negación, condición o detalles no representables. Un dato faltante conserva la categoría de acción para pedir aclaración.")
   }
 
   private fun fixedCommand(choice: String): PhoneCommand? =
