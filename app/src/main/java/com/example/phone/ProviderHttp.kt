@@ -112,7 +112,11 @@ internal object ProviderHttp {
           connection.setRequestProperty("Content-Type", contentType)
           if (length < 0) connection.setChunkedStreamingMode(8192) else connection.setFixedLengthStreamingMode(length.toInt())
           connection.outputStream.use(write)
-          read(connection.responseCode) { connection.inputStream }
+          val status = connection.responseCode
+          read(status) {
+            if (status >= 400) connection.errorStream ?: byteArrayOf().inputStream()
+            else connection.inputStream
+          }
         } finally {
           connection.disconnect()
         }

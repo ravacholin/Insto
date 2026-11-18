@@ -3,6 +3,10 @@ package com.example.phone
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.SocketTimeoutException
+import java.util.Calendar
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -18,9 +22,100 @@ class GeminiTransportTest {
     override fun getResponseCode() = status
     override fun getOutputStream() = output
     override fun getInputStream(): java.io.InputStream = body.byteInputStream()
+    override fun getErrorStream(): java.io.InputStream = body.byteInputStream()
   }
   private fun response(content: String) = JSONObject().put("candidates", org.json.JSONArray().put(JSONObject()
     .put("finishReason", "STOP").put("content", JSONObject().put("parts", org.json.JSONArray().put(JSONObject().put("text", content)))))).toString()
+
+  @Test fun structuredRequestKeepsJsonSchemaAndUsesMinimalThinking() {
+    val config = StructuredCommandClient.buildRequest("pedido", Calendar.getInstance()).getJSONObject("generationConfig")
+    assertFalse(config.has("temperature"))
+    assertEquals("minimal", config.getJSONObject("thinkingConfig").getString("thinkingLevel"))
+    assertEquals(2048, config.getInt("maxOutputTokens"))
+    assertEquals("application/json", config.getString("responseMimeType"))
+    assertTrue(StructuredCommandClient.proposalSchema().similar(config.getJSONObject("responseJsonSchema")))
+  }
+
+  @Test fun structuredClientRetriesOnlyModelErrorsAndReportsTheRespondingModel() = runBlocking {
+    val missing = """{"error":{"status":"INVALID_ARGUMENT","message":"models/gemini-3.5-flash-lite is not found for API version v1beta, or is not supported for generateContent."}}"""
+    val unsupported = """{"error":{"status":"INVALID_ARGUMENT","message":"Model is not supported."}}"""
+    val invalidConfig = """{"error":{"status":"INVALID_ARGUMENT","message":"Thinking level is not supported for this model."}}"""
+    for ((status, body, retries) in listOf(
+      Triple(404, "", true), Triple(400, missing, true), Triple(400, unsupported, true),
+      Triple(400, """{"error":{"message":"Unsupported model: gemini-3.5-flash-lite"}}""", true),
+      Triple(400, invalidConfig, false), Triple(400, "bad JSON", false),
+      Triple(401, missing, false), Triple(403, missing, false), Triple(429, missing, false),
+      Triple(408, missing, false), Triple(405, missing, false), Triple(501, missing, false),
+      Triple(200, response("""{"kind":"instinct","steps":[]}"""), false),
+    )) {
+      val attempts = mutableListOf<String>()
+      val primary = Connection(status, body)
+      val fallback = Connection(200, response("""{"kind":"instinct","steps":[]}"""))
+      val client = StructuredCommandClient({ "key" }, { url ->
+        attempts.add(url.path)
+        if (attempts.size == 1) primary else fallback
+      })
+      val result = runCatching { client.interpret(InterpretationRequest("pedido")) }
+      assertEquals(retries || status == 200, result.getOrNull() is InterpretationResult.Query)
+      val expected = listOf("/v1beta/models/gemini-3.5-flash-lite:generateContent")
+      assertEquals(if (retries) expected + "/v1beta/models/gemini-3.1-flash-lite:generateContent" else expected, attempts)
+      if (retries || status == 200) {
+        assertEquals(if (retries) "gemini-3.1-flash-lite" else "gemini-3.5-flash-lite",
+          GeminiDiagnostics.snapshot().lastExtractionModel)
+      }
+    }
+  }
+
+  @Test fun twoMissingModelsStopAfterTheFallback() = runBlocking {
+    var attempts = 0
+    val client = StructuredCommandClient({ "key" }, {
+      check(++attempts <= 2)
+      Connection(404, "")
+    })
+    val error = runCatching { client.extract("pedido") }.exceptionOrNull() as DecisionException
+    assertEquals(GeminiFailureKind.UNAVAILABLE, error.kind)
+    assertEquals(2, attempts)
+  }
+
+  @Test fun socketTimeoutDoesNotRetry() = runBlocking {
+    var attempts = 0
+    val client = StructuredCommandClient({ "key" }, {
+      attempts++
+      object : Connection(200, "") {
+        override fun getResponseCode(): Int = throw SocketTimeoutException()
+      }
+    })
+    val error = runCatching { client.extract("pedido") }.exceptionOrNull() as DecisionException
+    assertEquals(GeminiFailureKind.TIMEOUT, error.kind)
+    assertEquals(1, attempts)
+  }
+
+  @Test fun fallbackHasOnlyTheTimeRemainingInThePrimaryDeadline() = runBlocking {
+    val released = CountDownLatch(1)
+    val primary = object : Connection(404, "") {
+      override fun getResponseCode(): Int {
+        Thread.sleep(350)
+        return status
+      }
+    }
+    val fallback = object : Connection(200, "") {
+      override fun getResponseCode(): Int {
+        check(released.await(2, TimeUnit.SECONDS))
+        return status
+      }
+      override fun disconnect() {
+        super.disconnect()
+        released.countDown()
+      }
+    }
+    var attempts = 0
+    val client = StructuredCommandClient({ "key" }, { if (++attempts == 1) primary else fallback }, 1000)
+    val error = runCatching { client.extract("pedido") }.exceptionOrNull()
+    assertTrue(error is TimeoutCancellationException)
+    assertEquals(2, attempts)
+    assertTrue(fallback.closed)
+    assertTrue(fallback.readTimeout in 1..750)
+  }
 
   @Test fun structuredClientUsesTypedDraftInsteadOfTreatingMissingDataAsNetworkFailure() = runBlocking {
     val c = Connection(200, response("""{"kind":"draft","steps":[{"id":"s1","command":{"type":"timer","label":"Fideos"}}]}"""))

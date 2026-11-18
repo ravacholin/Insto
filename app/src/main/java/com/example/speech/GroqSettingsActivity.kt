@@ -87,6 +87,9 @@ class GroqSettingsActivity : ComponentActivity() {
                 }
               }) { Text(if (probing) "Probando Gemini…" else "Probar conexión de Gemini") }
               Text("Decisions: ${diagnostics.decisions} · extracción: ${diagnostics.extractions} · respaldo: ${diagnostics.fallbacks}\nÚltima interpretación: ${diagnostics.lastDurationMillis} ms${diagnostics.lastFailure?.let { " · ${it.label}" } ?: ""}", style = MaterialTheme.typography.bodySmall)
+              diagnostics.lastExtractionModel?.let {
+                Text("Último modelo de extracción: $it", style = MaterialTheme.typography.bodySmall)
+              }
               TextButton(onClick = {
                 probeJob?.cancel(); probing = false
                 runCatching { gemini.clear() }.onSuccess { geminiConfigured = false; hybridEnabled = false; geminiValue = ""; message = "Clave de Gemini borrada." }
