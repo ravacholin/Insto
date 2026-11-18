@@ -16,6 +16,13 @@ Queda pendiente medir en el teléfono antes y después con `python3 scripts/meas
 
 ## Verificación
 
-`testDebugUnitTest` completo quedó bloqueado al descargar `org.robolectric:nativeruntime-dist-compat:1.0.18`. El espejo de Maven respondió HTTP 403.
+- GitHub Actions aprobó `testDebugUnitTest` completo y `assembleDebug`.
+  [Ejecución de CI](https://github.com/ravacholin/Insto/actions/runs/44349716789).
+- En este entorno, la suite completa se frenó al descargar
+  `org.robolectric:nativeruntime-dist-compat:1.0.18`. El espejo de Maven respondió
+  HTTP 403. Pasaron 50 pruebas JVM del coordinador y del transporte sin Robolectric.
+- `assembleRelease` pasó en este entorno con R8 y reducción de recursos activos.
+  El APK de prueba informa 1.11.0, código 19. Se comprobó la firma v2 con una
+  clave temporal de debug y la alineación de 16 KiB.
 
 En el teléfono queda probar apertura y cancelación del panel, grabación con VAD y permisos, respuestas lentas de ambos proveedores, reinicio del cronómetro y arranque de los servicios y el widget desde el APK minificado.
