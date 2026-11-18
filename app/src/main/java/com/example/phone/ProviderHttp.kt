@@ -1,7 +1,5 @@
 package com.example.phone
 
-import android.util.Log
-import com.example.BuildConfig
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
@@ -25,6 +23,8 @@ import okhttp3.RequestBody
 import okio.BufferedSink
 
 internal object ProviderHttp {
+  @Volatile var connectionLogger: ((String) -> Unit)? = null
+
   private class Timings : EventListener() {
     private var dns = 0L
     private var tls = 0L
@@ -41,7 +41,7 @@ internal object ProviderHttp {
       val provider = if (call.request().url.host == "api.groq.com") GeminiTransport.Provider.GROQ else GeminiTransport.Provider.GEMINI
       val millis = total / 1_000_000
       GeminiDiagnostics.connection(provider, millis)
-      if (BuildConfig.DEBUG) runCatching { Log.d("InstoVoiceLatency", "${provider.label}_connection_ms=$millis") }
+      connectionLogger?.invoke("${provider.label}_connection_ms=$millis")
     }
   }
 

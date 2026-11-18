@@ -60,6 +60,9 @@ class AssistActivity : ComponentActivity() {
       return
     }
     viewModel.prepareFloatingAssistant()
+    if (com.example.BuildConfig.DEBUG) {
+      com.example.phone.ProviderHttp.connectionLogger = { android.util.Log.d("InstoVoiceLatency", it) }
+    }
     if (savedInstanceState == null) warmup = lifecycleScope.launch(Dispatchers.IO) {
       com.example.phone.ProviderHttp.warm(com.example.phone.GeminiSettings(this@AssistActivity).isEnabled())
     }
