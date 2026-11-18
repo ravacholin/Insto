@@ -152,6 +152,7 @@ class MainViewModel @JvmOverloads constructor(
     com.example.phone.GeminiDecisionsClient({ com.example.phone.GeminiSettings(application).readKey() })),
   private val structuredExtractor: StructuredCommandExtractor = StructuredCommandClient({ GeminiSettings(application).readKey() }),
   private val monotonicClock: () -> Long = android.os.SystemClock::elapsedRealtime,
+  groqFallback: StructuredCommandExtractor? = null,
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
@@ -174,8 +175,9 @@ class MainViewModel @JvmOverloads constructor(
   private val phoneParser = PhoneCommandParser()
   private val phoneExecutor = PhoneActionExecutor(application)
   private val conversation = ConversationSession()
+  private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).read() })
   private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor,
-    com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).read() }))
+    verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter)
   private var semanticDraft: DraftPlan? = null
   private data class QueryPreview(val text: String, val generation: Long)
   private var pendingQuery: QueryPreview? = null
@@ -575,7 +577,7 @@ class MainViewModel @JvmOverloads constructor(
         retainLocalAudio = true
         floatingState.value = floatingState.value.copy(
           mode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING,
-          status = "Gemini de respaldo propone enviar esta consulta a Instinct. Revisala y confirmá para enviar.",
+          status = "Groq propone enviar esta consulta a Instinct. Confirmá para enviar.",
           needsConfirmation = true, queryPreview = true, error = null)
       }
       is InterpretationResult.Direct -> {
@@ -598,14 +600,14 @@ class MainViewModel @JvmOverloads constructor(
         clarification = null; conversation.clear()
         semanticDraft = result.draft ?: runCatching { DraftPlan.fromCommands(result.commands) }.getOrNull()
         previewWorkflow(result.commands)
-        if (result.fallback) floatingState.value = floatingState.value.copy(status = "Gemini de respaldo: revisá los pasos y confirmá para ejecutarlos.")
+        if (result.fallback) floatingState.value = floatingState.value.copy(status = "Revisá el pedido interpretado con Groq y confirmá.")
       }
       is InterpretationResult.Incomplete -> {
         semanticDraft = result.draft; conversation.clear(); clarification = null
         workflow.invalidatePreview(); syncWorkflow()
         retainLocalAudio = true
         floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
-          status = (if (result.fallback) "Gemini de respaldo. " else "") + result.prompt)
+          status = result.prompt)
       }
       is InterpretationResult.Rejected -> retainDecisionRequest(result.message)
       is InterpretationResult.Failure -> retainDecisionRequest(result.message)

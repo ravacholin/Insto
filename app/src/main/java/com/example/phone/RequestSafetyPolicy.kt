@@ -57,6 +57,19 @@ object RequestSafetyPolicy {
     return Regex("^cuando (?:es|son|sera|seran|fue|fueron|juega|juegan|empieza|empiezan|comienza|comienzan|termina|terminan|hay|puedo|podemos|se juega|va a ser)\\b")
       .containsMatchIn(normalized)
   }
+  private val generalRequest = Regex(
+    "^(?:hola(?:[, ]+buen(?:os dias|as tardes|as noches| dia))?|buen(?:os dias|as tardes|as noches| dia)|" +
+      "ayudame (?:con esto|a (?:estudiar|aprender)(?: .*)?)|necesito ayuda con esto)[.!?]*$"
+  )
+  fun isGeneralRequest(text: String): Boolean =
+    isExplicitQuery(text) || isQuestion(text) || generalRequest.matches(PhoneCommandParser.normalize(text))
+
+  private val indirectPhoneRequest = Regex(
+    "^(?:(?:avisame|recordame) (?:en|dentro de|a las|manana)|ilumina)\\b"
+  )
+  fun isIndirectPhoneRequest(text: String): Boolean =
+    indirectPhoneRequest.containsMatchIn(PhoneCommandParser.normalize(text))
+
   fun fixedActionHasExtraParameters(text: String): Boolean {
     val s = PhoneCommandParser.normalize(withoutQuotedText(text))
     return ConversationSession.splitSteps(text).size > 1 ||
@@ -66,9 +79,12 @@ object RequestSafetyPolicy {
   fun rejection(text: String): String? {
     if (isExplicitQuery(text) || isQuestion(text)) return null
     val s = PhoneCommandParser.normalize(withoutQuotedText(text))
+    if (text.trimStart().firstOrNull() in listOf('"', '“', '«') ||
+      Regex("^(?:supone|imagina|dijo|dice|escribio|cito)\\b").containsMatchIn(s))
+      return "El pedido parece una cita o una hipótesis. Indicá qué querés hacer ahora."
     val command = PhoneCommandParser.canonicalRequest(s)
     if ((!isDoNotDisturbRequest(command) && Regex("^(?:no|nunca)\\b").containsMatchIn(command)) ||
-      Regex("\\b(?:cuando|hasta que|a menos que|siempre que)\\b|(?:^|\\s)si\\s+(?!confirmo\\b)").containsMatchIn(s))
+      Regex("\\b(?:cuando|hasta que|a menos que|siempre que|en caso de que|con tal de que)\\b|(?:^|\\s)si\\s+(?!confirmo\\b)").containsMatchIn(s))
       return "El pedido contiene una negación o condición. No se ejecutó ni se envió; indicá qué querés hacer ahora."
     if (Regex("\\b(?:sin peajes|evitando peajes|sin autopistas|evitando autopistas|pasando por|con una parada)\\b").containsMatchIn(s))
       return "Esa restricción de ruta no está disponible. No se omitió ni se ejecutó el pedido."

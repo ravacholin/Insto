@@ -30,7 +30,7 @@ class GeneralQueryRoutingRegressionTest {
     }
     val coordinator = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {
       throw DecisionException("unavailable", GeminiFailureKind.UNAVAILABLE)
-    }), extractor)
+    }), StructuredCommandExtractor { error("Gemini extraction") }, fallback = extractor)
     assertEquals(InterpretationResult.Query(), coordinator.interpret(
       InterpretationRequest("ayudame a estudiar"), PhoneRoute.Instinct))
   }
