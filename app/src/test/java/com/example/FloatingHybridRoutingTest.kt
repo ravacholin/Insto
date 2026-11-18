@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.data.emptyLearnedPhrasesForTest
+
 import android.app.Application
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -74,7 +76,7 @@ class FloatingHybridRoutingTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     var calls = 0
-    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
       calls++; SemanticDecision("volume_down", .99, .99, .99, .99)
     }))
     try {
@@ -95,7 +97,7 @@ class FloatingHybridRoutingTest {
     val app = ApplicationProvider.getApplicationContext<Application>()
     var extractions = 0
     val vm = MainViewModel(app,
-      hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { error("Already recognized as a phone request") }),
+      learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { error("Already recognized as a phone request") }),
       structuredExtractor = StructuredCommandExtractor { extractions++; listOf(PhoneCommand.Torch(true)) })
     try {
       vm.updateFloatingText("necesito la linterna ahora mismo")
@@ -117,7 +119,7 @@ class FloatingHybridRoutingTest {
     val before = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
     var calls = 0
     val original = "¿Podés bajar el volumen, por favor?"
-    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { text ->
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { text ->
       calls++; assertEquals(original, text); SemanticDecision("volume_down", .60, .60, .99, .99)
     }))
     try {
@@ -142,7 +144,7 @@ class FloatingHybridRoutingTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     var calls=0
-    val vm = MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {
+    val vm = MainViewModel(app,learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter=HybridPhoneRouter({true},DecisionClassifier {
       calls++; SemanticDecision("camera_photo",.99,.99,.99,.99)
     }))
     try {
@@ -158,7 +160,7 @@ class FloatingHybridRoutingTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app=ApplicationProvider.getApplicationContext<Application>()
     var calls=0
-    val vm=MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {calls++;SemanticDecision("app_open",.99,.99,.99,.99)}))
+    val vm=MainViewModel(app,learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter=HybridPhoneRouter({true},DecisionClassifier {calls++;SemanticDecision("app_open",.99,.99,.99,.99)}))
     try {
       vm.updateFloatingText("abrí AplicacionInexistente");vm.sendFloatingText {fail("No dispatch")}
       assertEquals(0,calls)
@@ -185,7 +187,8 @@ class FloatingHybridRoutingTest {
     var decisions = 0
     var dispatched = 0
     val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { "ayudame a estudiar" },
-      HybridPhoneRouter({ true }, DecisionClassifier { decisions++; SemanticDecision("instinct", .99, .99, .99, .99) }))
+      HybridPhoneRouter({ true }, DecisionClassifier { decisions++; SemanticDecision("instinct", .99, .99, .99, .99) }),
+      learnedPhrases = emptyLearnedPhrasesForTest())
     try {
       withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
       shadowOf(app.packageManager).installPackage(PackageInfo().apply {
@@ -212,7 +215,7 @@ class FloatingHybridRoutingTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     var calls = 0
-    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
       calls++; SemanticDecision("alarm", .99, .99, .99, .99)
     }))
     try {
@@ -237,7 +240,7 @@ class FloatingHybridRoutingTest {
       if (calls == 1) throw DecisionException("Gemini alcanzó su cuota.")
       try { awaitCancellation() } finally { cancelled = true }
     })
-    val vm = MainViewModel(app, hybridRouter = hybrid)
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = hybrid)
     try {
       vm.updateFloatingText("iluminá acá")
       vm.sendFloatingText { fail("No dispatch") }
@@ -260,7 +263,7 @@ class FloatingHybridRoutingTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     val answer = CompletableDeferred<Unit>()
-    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
       withContext(NonCancellable) { answer.await() }
       SemanticDecision("instinct", .99, .99, .99, .99)
     }))
@@ -295,7 +298,8 @@ class FloatingHybridRoutingTest {
     val vm = MainViewModel(app, capture, UnconfinedTestDispatcher(testScheduler),
       AudioTranscriber { transcripts++; "pedido desconocido" },
       HybridPhoneRouter({ true }, DecisionClassifier { calls++; throw DecisionException("Error de conexión") }),
-      groqFallback = StructuredCommandExtractor { groqCalls++; throw DecisionException("Groq sin conexión") })
+      groqFallback = StructuredCommandExtractor { groqCalls++; throw DecisionException("Groq sin conexión") },
+      learnedPhrases = emptyLearnedPhrasesForTest())
     try {
       vm.startFloatingListening { fail("No dispatch") }
       runCurrent()

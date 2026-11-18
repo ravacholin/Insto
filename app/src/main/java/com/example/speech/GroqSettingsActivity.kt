@@ -29,6 +29,7 @@ class GroqSettingsActivity : ComponentActivity() {
     window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
     val store = GroqKeyStore(this)
     val gemini = com.example.phone.GeminiSettings(this)
+    val learned = com.example.data.LearnedPhraseStore(this)
     setContent {
       PingAssistTheme {
         var value by remember { mutableStateOf("") }
@@ -110,6 +111,50 @@ class GroqSettingsActivity : ComponentActivity() {
                 .onFailure { message = "No se pudo borrar la clave." }
             }) { Text("Borrar clave") }
             TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))) } }) { Text("Abrir Groq para obtener una clave") }
+            HorizontalDivider()
+            val phrases by learned.uiSettings.collectAsState(initial = com.example.data.LearnedPhraseStore.Settings())
+            Text("Frases aprendidas", style = MaterialTheme.typography.headlineSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+              Switch(checked = phrases.enabled, onCheckedChange = { enabled ->
+                scope.launch {
+                  try { learned.setEnabled(enabled) }
+                  catch (_: java.io.IOException) { message = "No pude cambiar el aprendizaje." }
+                }
+              })
+              Text("Aprender y usar frases en este teléfono")
+            }
+            if (phrases.entries.isEmpty()) Text("Todavía no hay frases aprendidas.")
+            else {
+              var confirmDeleteAll by remember { mutableStateOf(false) }
+              TextButton(onClick = { confirmDeleteAll = true }) { Text("Borrar todas") }
+              if (confirmDeleteAll) AlertDialog(
+                onDismissRequest = { confirmDeleteAll = false },
+                title = { Text("¿Borrar todas las frases?") },
+                confirmButton = {
+                  TextButton(onClick = {
+                    confirmDeleteAll = false
+                    scope.launch {
+                      try { learned.clear() } catch (_: java.io.IOException) { message = "No pude borrar las frases." }
+                    }
+                  }) { Text("Borrar todas") }
+                },
+                dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancelar") } },
+              )
+              for (entry in phrases.entries) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                  Column(Modifier.weight(1f)) {
+                    Text(entry.phrase)
+                    Text(PhoneCommandCodec.summary(entry.command), style = MaterialTheme.typography.bodySmall)
+                  }
+                  TextButton(onClick = {
+                    scope.launch {
+                      try { learned.delete(entry.phrase) }
+                      catch (_: java.io.IOException) { message = "No pude borrar la frase." }
+                    }
+                  }) { Text("Borrar") }
+                }
+              }
+            }
             message?.let { Text(it) }
             TextButton(onClick = { finish() }) { Text("Volver") }
           }

@@ -14,6 +14,7 @@ class GeminiCoordinator(
   private val verifier: IntentVerifier? = null,
   private val fallback: StructuredCommandExtractor? = null,
   private val breaker: DecisionsCircuitBreaker = DecisionsCircuitBreaker(),
+  private val lookupLearnedPhrase: suspend (InterpretationRequest) -> PhoneCommand? = { null },
 ) {
   suspend fun interpret(
     request: InterpretationRequest,
@@ -64,6 +65,13 @@ class GeminiCoordinator(
         }
         PhoneRoute.Instinct -> if (canDeferToInstinct && RequestSafetyPolicy.isExplicitQuery(request.text)) return InterpretationResult.Query()
         else -> Unit
+      }
+    }
+    if (local != PhoneRoute.Cancel && local !is PhoneRoute.Local && local !is PhoneRoute.Clarify &&
+      !(local is PhoneRoute.Unsupported && !local.recoverable)) {
+      lookupLearnedPhrase(request)?.let {
+        currentCoroutineContext().ensureActive()
+        return InterpretationResult.Direct(it, learned = true)
       }
     }
     if (!router.needsDecision(request.text, local)) return when (local) {

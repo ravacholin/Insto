@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.data.emptyLearnedPhrasesForTest
+
 import android.Manifest
 import android.app.Application
 import android.content.ComponentName
@@ -49,7 +51,7 @@ class FloatingAvailabilityRegressionTest {
     pm.addIntentFilterForActivity(ComponentName(info.packageName, info.name), IntentFilter(Intent.ACTION_MAIN).apply {
       addCategory(Intent.CATEGORY_LAUNCHER)
     })
-    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { awaitCancellation() }))
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { awaitCancellation() }))
     try {
       vm.updateFloatingText("abrir spotify"); vm.sendFloatingText { fail("A native app request must not be sent") }; runCurrent()
       assertEquals("com.spotify.music", shadowOf(app).nextStartedActivity.component!!.packageName)
@@ -62,7 +64,7 @@ class FloatingAvailabilityRegressionTest {
   @Test fun prenderLinternaReachesAndroidPermissionInsteadOfConfidenceRejection() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     shadowOf(app).denyPermissions(Manifest.permission.CAMERA)
-    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
       SemanticDecision("torch_on", .62, .62, .87, .87)
     }))
     try {
@@ -85,7 +87,7 @@ class FloatingAvailabilityRegressionTest {
     configureInstinct()
     val disconnect = ConnectedAccessibility.start(app)
     var sent = 0
-    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
       throw DecisionException("quota", GeminiFailureKind.QUOTA)
     }))
     try {
@@ -133,7 +135,7 @@ class FloatingAvailabilityRegressionTest {
     }
     var sent = 0
     val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), transcriber,
-      HybridPhoneRouter({ true }, classifier), groqFallback = fallback)
+      HybridPhoneRouter({ true }, classifier), groqFallback = fallback, learnedPhrases = emptyLearnedPhrasesForTest())
     try {
       vm.startFloatingListening { sent++ }; runCurrent(); vm.sendFloatingAudio { sent++ }; advanceUntilIdle()
       assertEquals(1, sent)

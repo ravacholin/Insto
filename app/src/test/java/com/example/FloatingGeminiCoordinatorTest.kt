@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.data.emptyLearnedPhrasesForTest
+
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import com.example.phone.*
@@ -21,7 +23,7 @@ class FloatingGeminiCoordinatorTest {
   @Test fun editingAnUnconfirmedPlanImmediatelyPreventsItsExecution() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
-    val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { SemanticDecision("timer", .99, .99, .99, .99) }),
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { SemanticDecision("timer", .99, .99, .99, .99) }),
       structuredExtractor = StructuredCommandExtractor { listOf(PhoneCommand.Timer(600)) })
     try {
       vm.updateFloatingText("avisame en diez minutos"); vm.sendFloatingText { fail("Phone request") }; runCurrent()
@@ -43,7 +45,7 @@ class FloatingGeminiCoordinatorTest {
       override suspend fun interpret(request: InterpretationRequest): InterpretationResult = InterpretationResult.Incomplete(
         DraftPlan(listOf(CommandDraft("s1", JSONObject("""{"type":"timer","label":"Fideos"}""")))))
     }
-    val vm = MainViewModel(app, hybridRouter = router, structuredExtractor = extractor)
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = router, structuredExtractor = extractor)
     try {
       vm.updateFloatingText("avisame cuando termine el tiempo para los fideos")
       // Use an unconditional paraphrase; explicit conditions remain rejected.
@@ -66,7 +68,7 @@ class FloatingGeminiCoordinatorTest {
       override suspend fun extract(text: String): List<PhoneCommand> = error("Typed boundary expected")
       override suspend fun interpret(request: InterpretationRequest): InterpretationResult = InterpretationResult.Query()
     }
-    val vm = MainViewModel(app, hybridRouter = router, groqFallback = extractor)
+    val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = router, groqFallback = extractor)
     try {
       vm.updateFloatingText("ayudame a estudiar"); vm.sendFloatingText { fail("No contact configured") }; advanceUntilIdle()
       assertFalse(vm.floatingAssistant.value.needsConfirmation)

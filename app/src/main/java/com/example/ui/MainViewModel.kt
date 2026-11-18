@@ -38,6 +38,7 @@ import com.example.context.EffectiveContextRoute
 import com.example.data.AssistantActivationMode
 import com.example.data.AssistantPreferences
 import com.example.data.AssistantPreferencesRepository
+import com.example.data.LearnedPhraseStore
 import com.example.data.FloatingPillMode
 import com.example.data.OrbHoldBehavior
 import com.example.data.PingActionLog
@@ -154,6 +155,7 @@ class MainViewModel @JvmOverloads constructor(
   private val structuredExtractor: StructuredCommandExtractor = StructuredCommandClient({ GeminiSettings(application).readKey() }),
   private val monotonicClock: () -> Long = android.os.SystemClock::elapsedRealtime,
   groqFallback: StructuredCommandExtractor? = null,
+  private val learnedPhrases: LearnedPhraseStore = LearnedPhraseStore(application),
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
@@ -178,7 +180,9 @@ class MainViewModel @JvmOverloads constructor(
   private val conversation = ConversationSession()
   private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).read() })
   private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor,
-    verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter)
+    verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter, lookupLearnedPhrase = learnedPhrases::lookup)
+  private var learningPreview: InterpretationRequest? = null
+  private var learnedCommandConfirmation = false
   private var semanticDraft: DraftPlan? = null
   private data class QueryPreview(val text: String, val generation: Long)
   private var pendingQuery: QueryPreview? = null
@@ -238,6 +242,7 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun cancelFloatingWorkflow() {
+    learningPreview = null
     val hadWorkflow = activeWorkflow() != null
     floatingGeneration++; floatingJob?.cancel()
     cancelClockAutomation?.invoke(); cancelClockAutomation = null
@@ -249,11 +254,11 @@ class MainViewModel @JvmOverloads constructor(
     syncWorkflow()
   }
 
-  private fun advanceWorkflow() {
+  private fun advanceWorkflow(learning: InterpretationRequest? = null) {
     try {
       val command = workflow.next()
       syncWorkflow()
-      if (command != null) runPhoneCommand(command)
+      if (command != null) runPhoneCommand(command, learning = learning)
     } catch (_: Exception) { retainDecisionRequest("No se pudo guardar el progreso. Revisá la app antes de continuar.") }
   }
 
@@ -349,16 +354,22 @@ class MainViewModel @JvmOverloads constructor(
       }
       return
     }
+    val learning = learningPreview
+    learningPreview = null
     if (activeWorkflow()?.confirmed == false) {
       if (previewInvalidatedByEdit) { retainDecisionRequest("El pedido cambió. Enviá la corrección y revisá el nuevo plan antes de confirmar."); return }
       semanticDraft = null
-      if (accept) { workflow.confirm(); advanceWorkflow() } else cancelFloatingWorkflow()
+      if (accept) {
+        workflow.confirm()
+        advanceWorkflow(learning)
+      } else cancelFloatingWorkflow()
       return
     }
     val command = confirmation ?: return
+    learnedCommandConfirmation = false
     confirmation = null
     floatingState.value = floatingState.value.copy(needsConfirmation = false)
-    if (accept) runPhoneCommand(command, confirmed = true)
+    if (accept) runPhoneCommand(command, confirmed = true, learning = learning)
     else if (activeWorkflow() != null) cancelFloatingWorkflow()
     else floatingState.value = floatingState.value.copy(status = "Pedido cancelado.")
   }
@@ -402,7 +413,7 @@ class MainViewModel @JvmOverloads constructor(
     runPhoneCommand(PhoneCommand.Dial(option.number))
   }
 
-  private fun runPhoneCommand(command: PhoneCommand, confirmed: Boolean = false) {
+  private fun runPhoneCommand(command: PhoneCommand, confirmed: Boolean = false, learning: InterpretationRequest? = null) {
     if(command is PhoneCommand.Platform && command.action==PlatformAction.ROUTINE_RUN) {
       try {
         val routines=ConfiguredRoutineStore(java.io.File(getApplication<Application>().noBackupFilesDir,"configured-routines.json")).read()
@@ -422,26 +433,33 @@ class MainViewModel @JvmOverloads constructor(
       retainDecisionRequest("No se pudo guardar el paso. No se ejecutó la acción."); return
     }
     val result = phoneExecutor.execute(command, confirmed)
-    applyPhoneActionResult(command, confirmed, result)
+    if (learning != null && result.confirmation == command) learningPreview = learning
+    applyPhoneActionResult(command, confirmed, result, learning)
     result.stopwatchAutomation?.let { operation ->
       val generation = floatingGeneration
       floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING)
       cancelClockAutomation = com.example.assist.PingAutoSendAccessibilityService.requestStopwatch(operation) { completed ->
         if (generation == floatingGeneration) {
           cancelClockAutomation = null
-          applyPhoneActionResult(command, confirmed, completed)
+          applyPhoneActionResult(command, confirmed, completed, learning)
         }
       }
     }
   }
 
-  private fun applyPhoneActionResult(command: PhoneCommand, confirmed: Boolean, result: com.example.phone.PhoneActionResult) {
+  private fun applyPhoneActionResult(
+    command: PhoneCommand,
+    confirmed: Boolean,
+    result: com.example.phone.PhoneActionResult,
+    learning: InterpretationRequest? = null,
+  ) {
     val inWorkflow = activeWorkflow() != null
     if (inWorkflow) try {workflow.accept(result)} catch (_: Exception) {
       workflow.markUncertainInMemory()
       retainDecisionRequest("No se pudo guardar el resultado. Revisá la app antes de continuar; no se repetirá el paso.")
       syncWorkflow(); return
     }
+    if (learning != null && result.stopwatchAutomation == null) learnedPhrases.saveConfirmed(learning, command, result)
     confirmation = result.confirmation
     if (result.needsCamera) cameraCommand = command
     if (result.needsContacts) contactsCommand = command
@@ -497,6 +515,10 @@ class MainViewModel @JvmOverloads constructor(
       cancelFloatingWorkflow(); return true
     }
     val active = activeWorkflow()
+    if (normalized == "olvida esta frase" && text.none { it == '?' || it == '¿' }) {
+      forgetLastLearnedPhrase()
+      return true
+    }
     if (active != null) {
       if (!active.confirmed && normalized in listOf("si", "dale", "ejecutar", "confirmar", "confirmo", "ok")) { confirmFloatingAction(true); return true }
       if (active.confirmed && normalized in listOf("continua", "continuar", "listo", "ya esta", "verificado", "omiti ese paso")) { continueFloatingWorkflow(); return true }
@@ -562,6 +584,7 @@ class MainViewModel @JvmOverloads constructor(
         if (reply != null) return applyResolvedRoute(reply,text)
       }
     }
+    learningPreview = null
     // A new request has one classification gateway. Continuations above retain their selected intent.
     semanticDraft = null; conversation.clear(); clarification = null; clarificationRequest = null
     confirmation=null; cameraCommand=null; contactsCommand=null; notificationsCommand=null; appChoiceCommand=null; calendarQuery=null
@@ -573,6 +596,33 @@ class MainViewModel @JvmOverloads constructor(
     }
     routedRequestText = text
     return interpretWithGemini(text,local,null)
+  }
+
+  private suspend fun forgetLastLearnedPhrase() {
+    val generation = floatingGeneration
+    val job = kotlinx.coroutines.currentCoroutineContext()[Job]
+    decidingRequest = true
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true)
+    try {
+      val removed = learnedPhrases.forgetLast { job?.isActive != false }
+      if (generation == floatingGeneration && !floatingPaused) {
+        if (removed) {
+          pendingFloatingAudio?.file?.delete()
+          pendingFloatingAudio = null
+          pendingTranscript = null
+          floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "",
+            status = "Olvidé la última frase aprendida que usaste.", error = null)
+        } else retainDecisionRequest("Todavía no usaste ninguna frase aprendida.")
+      }
+    } catch (_: java.io.IOException) {
+      if (generation == floatingGeneration && !floatingPaused)
+        retainDecisionRequest("No pude borrar la frase. Volvé a intentarlo.")
+    } finally {
+      if (generation == floatingGeneration) {
+        decidingRequest = false
+        floatingState.value = floatingState.value.copy(deciding = false)
+      }
+    }
   }
 
   private fun openChatGptSearch(query: String, onDispatched: () -> Unit) {
@@ -610,11 +660,28 @@ class MainViewModel @JvmOverloads constructor(
     decidingRequest = true
     floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, error = null)
     return try {
-      val result = geminiCoordinator.interpret(InterpretationRequest(text, draft, sourceContext = floatingState.value.sourceContext), local) { stage ->
+      val request = InterpretationRequest(text, draft, sourceContext = floatingState.value.sourceContext)
+      val result = geminiCoordinator.interpret(request, local) { stage ->
         if (generation == floatingGeneration && !floatingPaused) floatingState.value = floatingState.value.copy(status = stage)
       }
       if (generation != floatingGeneration || !kotlinx.coroutines.currentCoroutineContext().isActive || floatingPaused) true
-      else applyInterpretation(result, text)
+      else {
+        val proposed = when (result) {
+          is InterpretationResult.Plan -> result.commands.singleOrNull()
+          is InterpretationResult.Direct -> result.command.takeIf { !result.learned && local !is PhoneRoute.Local }
+          else -> null
+        }
+        val canLearn = proposed != null && LearnedPhraseStore.allows(proposed) &&
+          LearnedPhraseStore.key(request) != null
+        if (result is InterpretationResult.Direct && result.learned) {
+          learnedPhrases.saveUse(request, result.command)
+        }
+        val handled = applyInterpretation(result, text)
+        learnedCommandConfirmation = result is InterpretationResult.Direct && result.learned && confirmation != null
+        learningPreview = request.takeIf { canLearn && (confirmation != null ||
+          result is InterpretationResult.Plan && activeWorkflow()?.confirmed == false && !previewInvalidatedByEdit) }
+        handled
+      }
     } catch (cancelled: kotlinx.coroutines.CancellationException) {
       if (generation == floatingGeneration) retainDecisionRequest("Interpretación cancelada. El pedido se conserva.")
       true
@@ -766,6 +833,7 @@ class MainViewModel @JvmOverloads constructor(
       floatingState.value = floatingState.value.copy(queryPreview = false, needsConfirmation = false)
     }
     floatingGeneration++
+    floatingJob?.cancel()
     decidingRequest = false
     transcribingAudio = false
     stopFloatingCapture(discard = true)
@@ -787,6 +855,12 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private fun invalidatePreviewForEditing() {
+    if ((learnedCommandConfirmation || learningPreview != null) && activeWorkflow() == null && confirmation != null) {
+      confirmation = null
+      floatingState.value = floatingState.value.copy(needsConfirmation = false)
+    }
+    learnedCommandConfirmation = false
+    learningPreview = null
     if (activeWorkflow()?.confirmed != false) return
     previewInvalidatedByEdit = true
     runCatching { workflow.invalidatePreview() }.onFailure {
@@ -884,6 +958,7 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun dismissFloatingAssistant() {
+    learningPreview = null
     cancelClockAutomation?.invoke()
     cancelClockAutomation = null
     floatingGeneration++

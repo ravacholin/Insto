@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.data.emptyLearnedPhrasesForTest
+
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import com.example.phone.*
@@ -20,7 +22,7 @@ class FloatingWorkflowTest {
  @Test fun newFreeSequenceDoesNotCreateOrExecuteLocalWorkflow() = runTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()
-  val vm=MainViewModel(app,hybridRouter=router("instinct"))
+  val vm=MainViewModel(app,learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter=router("instinct"))
   try {
    vm.updateFloatingText("bajá el volumen y abrí AplicacionInexistente")
    vm.sendFloatingText {}
@@ -33,7 +35,7 @@ class FloatingWorkflowTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app = ApplicationProvider.getApplicationContext<Application>()
   org.robolectric.Shadows.shadowOf(app).denyPermissions(android.Manifest.permission.READ_CALENDAR)
-  val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
+  val vm = MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
    error("Calendar lookup must bypass Decisions")
   }))
   try {
@@ -53,7 +55,7 @@ class FloatingWorkflowTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()
   var calls=0
-  val vm=MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {calls++;SemanticDecision("calendar",.99,.99,.99,.99)}))
+  val vm=MainViewModel(app,learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter=HybridPhoneRouter({true},DecisionClassifier {calls++;SemanticDecision("calendar",.99,.99,.99,.99)}))
   try {
    vm.updateFloatingText("agendá reunión mañana");vm.sendFloatingText {fail("No WhatsApp")}
    assertEquals(0,calls)
@@ -67,7 +69,7 @@ class FloatingWorkflowTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()
   val gate=CompletableDeferred<Unit>()
-  val vm=MainViewModel(app,hybridRouter=HybridPhoneRouter({true},DecisionClassifier {
+  val vm=MainViewModel(app,learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter=HybridPhoneRouter({true},DecisionClassifier {
    withContext(NonCancellable) {gate.await()};SemanticDecision("calendar",.99,.99,.99,.99)
   }))
   try {
@@ -82,7 +84,7 @@ class FloatingWorkflowTest {
  @Test fun invalidCorrectionInvalidatesEarlierCalendarPreview() = runTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()
-  val vm=MainViewModel(app,hybridRouter=router("calendar"))
+  val vm=MainViewModel(app,learnedPhrases = emptyLearnedPhrasesForTest(), hybridRouter=router("calendar"))
   try {
    vm.updateFloatingText("agendá reunión mañana a las 17:00");vm.sendFloatingText {fail("No WhatsApp")}
    assertTrue(vm.floatingAssistant.value.needsConfirmation)
