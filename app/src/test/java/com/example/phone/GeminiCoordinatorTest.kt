@@ -59,6 +59,59 @@ class GeminiCoordinatorTest {
     }
   }
 
+  @Test fun nearbyGroqAgreementKeepsTargetAndRequiresReview() = runTest {
+    val router = HybridPhoneRouter({ true }, DecisionClassifier {
+      SemanticDecision("media_stop_spotify", .94, .94, .99, .99)
+    })
+    val verifier = IntentVerifier { request, choice ->
+      assertEquals("cortá lo que está reproduciendo Spotify", request.text)
+      assertEquals("media_stop_spotify", choice)
+      true
+    }
+    val result = GeminiCoordinator(router, StructuredCommandExtractor { error("No extraction") }, verifier)
+      .interpret(InterpretationRequest("cortá lo que está reproduciendo Spotify"), PhoneRoute.Instinct)
+    assertEquals(InterpretationResult.Plan(listOf(PhoneCommand.Media(MediaOp.STOP, MediaApp.SPOTIFY.packageName))), result)
+  }
+
+  @Test fun groqDisagreementOrTimeoutRetainsTheRequest() = runTest {
+    val router = HybridPhoneRouter({ true }, DecisionClassifier {
+      SemanticDecision("vibrate_on", .945, .945, .98, .98)
+    })
+    for (verifier in listOf(IntentVerifier { _, _ -> false }, IntentVerifier { _, _ -> awaitCancellation() })) {
+      val result = GeminiCoordinator(router, StructuredCommandExtractor { error("No extraction") }, verifier)
+        .interpret(InterpretationRequest("dejalo solo con vibraciones"), PhoneRoute.Instinct)
+      assertTrue(result is InterpretationResult.Failure)
+    }
+  }
+
+  @Test fun groqIsSkippedForCertainDecisionsAndUncertainSafety() = runTest {
+    val extractor = StructuredCommandExtractor { error("No extraction") }
+    val verifier = IntentVerifier { _, _ -> error("Groq must be skipped") }
+    val certain = HybridPhoneRouter({ true }, DecisionClassifier { decision("vibrate_on") })
+    assertEquals(InterpretationResult.Direct(PhoneCommand.Platform(PlatformAction.VIBRATE_ON)),
+      GeminiCoordinator(certain, extractor, verifier)
+        .interpret(InterpretationRequest("dejalo solo con vibraciones"), PhoneRoute.Instinct))
+    for (reading in listOf(
+      SemanticDecision("vibrate_on", .939, .939, .99, .99),
+      SemanticDecision("vibrate_on", .945, .945, .97, .99),
+      SemanticDecision("workflow", .945, .945, .99, .99),
+    )) {
+      val router = HybridPhoneRouter({ true }, DecisionClassifier { reading })
+      assertEquals(InterpretationResult.Query(), GeminiCoordinator(router, extractor, verifier)
+        .interpret(InterpretationRequest("dejalo solo con vibraciones"), PhoneRoute.Instinct))
+    }
+  }
+
+  @Test fun workflowCanReviewSoundModeAndTargetedMediaTogether() = runTest {
+    val commands = listOf(PhoneCommand.Platform(PlatformAction.VIBRATE_ON),
+      PhoneCommand.Media(MediaOp.STOP, MediaApp.YOUTUBE.packageName))
+    val result = coordinator("workflow", StructuredCommandExtractor { commands })
+      .interpret(InterpretationRequest("activá vibración y detené YouTube"), PhoneRoute.Instinct)
+    assertEquals(commands, (result as InterpretationResult.Plan).commands)
+    assertTrue(CapabilityCatalog.choices.getValue("media_stop_youtube").contains("parar YouTube"))
+    assertTrue(CapabilityCatalog.choices.getValue("media_pause").contains("Equivalentes"))
+  }
+
   @Test fun extractionCannotExtendTheSharedDeadline() = runTest {
     val router = HybridPhoneRouter({ true }, DecisionClassifier { delay(3900); decision("timer") })
     val c = GeminiCoordinator(router, StructuredCommandExtractor { delay(9000); listOf(PhoneCommand.Timer(1)) })

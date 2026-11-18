@@ -48,7 +48,7 @@ def main():
     # without Android executors, preferences/storage or permission adapters.
     names = ["PhoneCommand", "PhoneActionResult", "PhoneCommandCodec", "PhoneCommandParser",
              "EverydayCommandParser", "ExtendedCommandParser", "CalendarRequestParser",
-             "CommandDuration", "HybridPhoneRouter", "GeminiDecisionsClient", "StructuredCommandClient",
+             "CommandDuration", "HybridPhoneRouter", "GeminiDecisionsClient", "GroqIntentVerifier", "StructuredCommandClient",
              "ConversationSession", "WorkflowRunner", "TemporaryModePolicy", "MediaSessionPolicy",
              "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "GeminiTransport", "CapabilityCatalog",
              "Interpretation", "CommandDraft", "RequestSafetyPolicy", "GeminiCoordinator", "GeminiDiagnostics",

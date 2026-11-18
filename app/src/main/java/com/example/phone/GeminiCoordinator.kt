@@ -10,6 +10,7 @@ import kotlinx.coroutines.withTimeout
 class GeminiCoordinator(
   private val router: HybridPhoneRouter,
   private val extractor: StructuredCommandExtractor,
+  private val verifier: IntentVerifier? = null,
 ) {
   suspend fun interpret(
     request: InterpretationRequest,
@@ -20,7 +21,8 @@ class GeminiCoordinator(
     val canDeferToInstinct = request.draft == null && local == PhoneRoute.Instinct
     // Google may be slow, unavailable or uncertain. It must not gate a fully parsed request.
     // Multi-step requests still go through planning so that no trailing action is discarded.
-    if (request.draft == null && ConversationSession.splitSteps(request.text).size == 1) {
+    val isSingleNewTurn = request.draft == null && ConversationSession.splitSteps(request.text).size == 1
+    if (isSingleNewTurn) {
       when (local) {
         is PhoneRoute.Local -> return InterpretationResult.Direct(local.command)
         is PhoneRoute.Clarify -> {
@@ -47,6 +49,10 @@ class GeminiCoordinator(
       GeminiFailureKind.INVALID_REQUEST, "El pedido o su contexto es demasiado largo. Se conserva para editarlo.")
     val start = System.nanoTime()
     var failure: GeminiFailureKind? = null
+    var verifiedByGroq = false
+    fun failureRoute(kind: GeminiFailureKind, message: String): InterpretationResult =
+      if (verifiedByGroq) InterpretationResult.Failure(kind, message)
+      else unavailableRoute(request, local, kind, message)
     try {
       return withTimeout(12000) {
         stage("Decidiendo con Gemini…")
@@ -62,7 +68,27 @@ class GeminiCoordinator(
         }
         currentCoroutineContext().ensureActive()
         val scores = listOf(decision.probability, decision.confidence, decision.unconditional, decision.safetyConfidence)
-        if (scores.any { !it.isFinite() || it !in .95..1.0 }) {
+        if (verifier != null && isSingleNewTurn && request.sourceContext == null &&
+          router.hasIntent(decision.choice) &&
+          scores.all { it in .94..1.0 } &&
+          decision.unconditional >= .98 && decision.safetyConfidence >= .98 &&
+          scores.any { it < .95 }) {
+          val confirmed = try {
+            stage("Verificando la clasificación con Groq…")
+            withTimeout(1500) { verifier.confirm(request, decision.choice) }
+          } catch (_: TimeoutCancellationException) {
+            currentCoroutineContext().ensureActive()
+            false
+          } catch (error: CancellationException) {
+            throw error
+          } catch (_: Exception) {
+            false
+          }
+          if (confirmed == false) return@withTimeout InterpretationResult.Failure(
+            GeminiFailureKind.INVALID_RESPONSE, "No pude confirmar la intención con Groq. El pedido se conserva para reformularlo.")
+          verifiedByGroq = confirmed == true
+        }
+        if (!verifiedByGroq && scores.any { !it.isFinite() || it !in .95..1.0 }) {
           if (request.draft == null) router.recoverSearch(request.text)?.let { return@withTimeout InterpretationResult.Direct(it.command) }
           return@withTimeout unavailableRoute(request, local, GeminiFailureKind.INVALID_RESPONSE,
             "No pude decidir con suficiente certeza. El pedido se conserva; reformulalo.")
@@ -71,10 +97,11 @@ class GeminiCoordinator(
           router.recoverSearch(request.text)?.let { return@withTimeout InterpretationResult.Direct(it.command) }
         if (request.draft == null && router.hasIntent(decision.choice)) {
           when (val registered = router.resolve(decision.choice, request.text)) {
-            is PhoneRoute.Local -> return@withTimeout InterpretationResult.Direct(registered.command)
+            is PhoneRoute.Local -> return@withTimeout if (verifiedByGroq)
+              InterpretationResult.Plan(listOf(registered.command)) else InterpretationResult.Direct(registered.command)
             is PhoneRoute.Unsupported -> return@withTimeout InterpretationResult.Rejected(registered.message)
             is PhoneRoute.Clarify -> {
-              val type = when (decision.choice) { "volume_set" -> "volume"; "app_open" -> "open_app"; else -> decision.choice }
+              val type = CapabilityCatalog.extractionType(decision.choice)
               if (type !in CapabilityCatalog.specs || local is PhoneRoute.Clarify && request.sourceContext == null)
                 return@withTimeout InterpretationResult.Clarification(registered.prompt, registered.context)
             }
@@ -88,45 +115,48 @@ class GeminiCoordinator(
             else InterpretationResult.Query()
           decision.choice in CapabilityCatalog.fixed && request.draft == null -> {
             if (RequestSafetyPolicy.fixedActionHasExtraParameters(request.text)) InterpretationResult.Rejected("La acción simple no representa todos los datos del pedido. No se ejecutó ni se envió.")
-            else InterpretationResult.Direct(CapabilityCatalog.fixed.getValue(decision.choice))
+            else {
+              val command = CapabilityCatalog.fixed.getValue(decision.choice)
+              if (verifiedByGroq) InterpretationResult.Plan(listOf(command)) else InterpretationResult.Direct(command)
+            }
           }
           decision.choice in CapabilityCatalog.parameterChoices || decision.choice in setOf("app_open", "spotify") || request.draft != null && router.hasIntent(decision.choice) || request.draft != null && decision.choice in CapabilityCatalog.fixed -> {
             stage("Completando los datos con Gemini…")
             val result = extract(request, fallback = false)
             if (result is InterpretationResult.Failure)
-              return@withTimeout unavailableRoute(request, local, result.kind, result.message)
+              return@withTimeout failureRoute(result.kind, result.message)
             val commands = (result as? InterpretationResult.Plan)?.commands
             val drafts = (result as? InterpretationResult.Incomplete)?.draft?.steps
             val selectedIndex = request.draft?.let { active -> active.steps.indexOfFirst { it.id == active.selectedStepId }.takeIf { it >= 0 } }
             val consistent = if (selectedIndex != null && decision.choice != "workflow") {
               commands?.getOrNull(selectedIndex)?.let { CapabilityCatalog.accepts(decision.choice, it) }
-                ?: drafts?.getOrNull(selectedIndex)?.let { it.type == (if (decision.choice == "volume_set") "volume" else decision.choice) }
+                ?: drafts?.getOrNull(selectedIndex)?.let { CapabilityCatalog.acceptsDraft(decision.choice, it) }
                 ?: false
             } else if (decision.choice == "workflow") (commands?.size ?: drafts?.size ?: 0) in 2..10 else
               commands?.let { it.size == 1 && CapabilityCatalog.accepts(decision.choice, it.single()) }
-                ?: drafts?.let { it.size == 1 && it.single().type == (if (decision.choice == "volume_set") "volume" else decision.choice) }
+                ?: drafts?.let { it.size == 1 && CapabilityCatalog.acceptsDraft(decision.choice, it.single()) }
                 ?: false
             when {
               consistent || result is InterpretationResult.Rejected -> result
-              canDeferToInstinct -> InterpretationResult.Query()
+              canDeferToInstinct && !verifiedByGroq -> InterpretationResult.Query()
               else -> InterpretationResult.Rejected("La clasificación y los datos no coinciden. No se ejecutó ni se envió; reformulá el pedido.")
             }
           }
-          else -> if (canDeferToInstinct) InterpretationResult.Query()
+          else -> if (canDeferToInstinct && !verifiedByGroq) InterpretationResult.Query()
             else InterpretationResult.Rejected("Ese pedido no está disponible o tiene restricciones no admitidas. No se ejecutó ni se envió.")
         }
       }
     } catch (error: TimeoutCancellationException) {
       currentCoroutineContext().ensureActive()
       failure = GeminiFailureKind.TIMEOUT
-      return unavailableRoute(request, local, failure, "Gemini tardó demasiado. El pedido se conserva para reintentar.")
+      return failureRoute(failure, "Gemini tardó demasiado. El pedido se conserva para reintentar.")
     } catch (error: CancellationException) { throw error
     } catch (error: DecisionException) {
       failure = error.kind
-      return unavailableRoute(request, local, error.kind, error.message ?: "Gemini no pudo interpretar. El pedido se conserva.")
+      return failureRoute(error.kind, error.message ?: "Gemini no pudo interpretar. El pedido se conserva.")
     } catch (_: Exception) {
       failure = GeminiFailureKind.INVALID_RESPONSE
-      return unavailableRoute(request, local, failure, "No se pudo validar la interpretación de Gemini. El pedido se conserva.")
+      return failureRoute(failure, "No se pudo validar la interpretación de Gemini. El pedido se conserva.")
     } finally { GeminiDiagnostics.finish((System.nanoTime() - start) / 1000000, failure) }
   }
 

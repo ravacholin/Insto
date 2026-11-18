@@ -32,6 +32,22 @@ class GeminiTransportTest {
     assertEquals("private-key", c.getRequestProperty("x-goog-api-key"))
     assertFalse(c.output.toString().contains("private-key"))
   }
+  @Test fun groqUsesBearerAuthAndAcceptsOnlyAnExplicitConfirmation() = runBlocking {
+    for ((answer, expected) in listOf("SI" to true, "NO" to false, "SI, ejecutalo" to false)) {
+      val c = Connection(200, """{"choices":[{"finish_reason":"stop","message":{"content":"$answer"}}]}""")
+      val verifier = GroqIntentVerifier({ "private-key" }, { c })
+      assertEquals(expected, verifier.confirm(InterpretationRequest("cortá Spotify"), "media_stop_spotify"))
+      assertEquals("Bearer private-key", c.getRequestProperty("Authorization"))
+      assertNull(c.getRequestProperty("x-goog-api-key"))
+      assertFalse(c.output.toString().contains("private-key"))
+      val request = JSONObject(c.output.toString())
+      assertEquals("llama-3.1-8b-instant", request.getString("model"))
+      assertEquals("cortá Spotify", request.getJSONArray("messages").getJSONObject(1).getString("content"))
+    }
+    assertNull(GroqIntentVerifier({ null }, { error("No network without credentials") })
+      .confirm(InterpretationRequest("cortá Spotify"), "media_stop_spotify"))
+  }
+
   @Test fun bothClientsClassifyHttpFailuresWithoutProviderBodyLeakage() = runBlocking {
     for ((status, kind) in listOf(401 to GeminiFailureKind.AUTH, 403 to GeminiFailureKind.AUTH,
       429 to GeminiFailureKind.QUOTA, 404 to GeminiFailureKind.UNAVAILABLE, 405 to GeminiFailureKind.UNAVAILABLE,

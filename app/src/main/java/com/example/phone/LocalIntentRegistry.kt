@@ -217,7 +217,7 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
         PhoneCommand.Media(MediaOp.STOP), "MediaSession.TransportControls", media, "Se envía la orden de parar o pausar a la sesión elegida")
       for (app in MediaApp.entries) {
         for ((verb, operation) in listOf("pausar" to MediaOp.PAUSE, "parar" to MediaOp.STOP)) {
-          val id = "media_${operation.name.lowercase()}_${app.name.lowercase()}"
+          val id = "media_${operation.name.lowercase(java.util.Locale.ROOT)}_${app.name.lowercase(java.util.Locale.ROOT)}"
           fixed(id, IntentCategory.MEDIA, "${verb.replaceFirstChar(Char::uppercaseChar)} la reproducción de ${app.label}",
             "$verb ${app.label}", "$verb la reproducción en ${app.label}", PhoneCommand.Media(operation, app.packageName),
             "MediaSession.TransportControls", media, "Se envía el control a la sesión de ${app.label}")
