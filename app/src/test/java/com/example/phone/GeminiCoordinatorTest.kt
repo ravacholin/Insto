@@ -11,6 +11,71 @@ class GeminiCoordinatorTest {
   private fun coordinator(choice: String, extractor: StructuredCommandExtractor = StructuredCommandExtractor { error("No extraction expected") }) =
     GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { decision(choice) }), extractor)
 
+  @Test fun recognizedButUnparsedRequestsUseStructuredResolutionAcrossCapabilities() = runTest {
+    val parser = PhoneCommandParser()
+    val requests = listOf(
+      "necesito la linterna ahora mismo" to PhoneCommand.Torch(true),
+      "necesito el cronómetro contando ya" to PhoneCommand.Stopwatch(StopwatchOp.START),
+      "¿qué tengo la próxima semana?" to CalendarSelection(from = "2026-11-23", until = "2026-11-30")
+        .command(PlatformAction.CALENDAR_QUERY),
+    )
+    for ((text, command) in requests) {
+      var decisions = 0
+      val router = HybridPhoneRouter({ true }, DecisionClassifier { decisions++; decision("unsupported") })
+      val local = parser.parse(text)
+      assertTrue("$text: $local", local is PhoneRoute.Unsupported && local.recoverable)
+      val result = GeminiCoordinator(router, StructuredCommandExtractor { listOf(command) })
+        .interpret(InterpretationRequest(text), local)
+      assertEquals(text, listOf(command), (result as? InterpretationResult.Plan)?.commands)
+      assertEquals(text, 0, decisions)
+    }
+  }
+
+  @Test fun invalidOrIncompatiblePrimaryProposalUsesTheSameFallbackForAnyRoute() = runTest {
+    val text = "Encendé la linterna y abrí Spotify"
+    val parser = PhoneCommandParser()
+    val expected = listOf(PhoneCommand.Torch(true), PhoneCommand.OpenApp("spotify"))
+    for (primary in listOf(
+      StructuredCommandExtractor { throw DecisionException("malformed", GeminiFailureKind.INVALID_RESPONSE) },
+      StructuredCommandExtractor { expected.reversed() },
+    )) {
+      val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { error("No classification") }),
+        primary, fallback = StructuredCommandExtractor { expected })
+      val result = c.interpret(InterpretationRequest(text), parser.parse(text)) as? InterpretationResult.Plan
+      assertEquals(expected, result?.commands)
+      assertEquals(true, result?.fallback)
+    }
+  }
+
+  @Test fun affirmativeClassificationMismatchCanRecoverWithValidatedFallback() = runTest {
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { decision("timer") }),
+      StructuredCommandExtractor { listOf(PhoneCommand.Alarm(7, 0)) },
+      fallback = StructuredCommandExtractor { listOf(PhoneCommand.Timer(600)) })
+    val result = c.interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
+      as? InterpretationResult.Plan
+    assertEquals(listOf(PhoneCommand.Timer(600)), result?.commands)
+    assertEquals(true, result?.fallback)
+  }
+
+  @Test fun unsupportedCategoryWithAffirmativeSafetyGetsAnIndependentProposal() = runTest {
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { decision("unsupported") }),
+      StructuredCommandExtractor { error("No classified extraction") },
+      fallback = StructuredCommandExtractor { listOf(PhoneCommand.Timer(600)) })
+    val result = c.interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
+      as? InterpretationResult.Plan
+    assertEquals(listOf(PhoneCommand.Timer(600)), result?.commands)
+    assertEquals(true, result?.fallback)
+  }
+
+  @Test fun fallbackCannotAppendASecondActionToASingleRequest() = runTest {
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {
+      throw DecisionException("offline", GeminiFailureKind.NETWORK)
+    }), StructuredCommandExtractor { error("Primary extraction") },
+      fallback = StructuredCommandExtractor { listOf(PhoneCommand.Timer(600), PhoneCommand.Torch(true)) })
+    assertTrue(c.interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
+      is InterpretationResult.Rejected)
+  }
+
   @Test fun explicitSequenceWithAnAppUsesOnlyStructuredExtractionAndKeepsOrder() = runTest {
     val text = "Poné un temporizador de diez minutos y abrí Spotify"
     val parser = PhoneCommandParser()
@@ -336,7 +401,7 @@ class GeminiCoordinatorTest {
       override suspend fun extract(text: String): List<PhoneCommand> = error("Typed result expected")
       override suspend fun interpret(request: InterpretationRequest): InterpretationResult = InterpretationResult.Query()
     }
-    val result = GeminiCoordinator(router, StructuredCommandExtractor { error("Gemini extraction") }, fallback = extractor).interpret(InterpretationRequest("necesito luz con la linterna"),
+    val result = GeminiCoordinator(router, StructuredCommandExtractor { throw DecisionException("offline") }, fallback = extractor).interpret(InterpretationRequest("necesito luz con la linterna"),
       PhoneRoute.Unsupported("Recognized phone request", recoverable = true))
     assertTrue(result is InterpretationResult.Rejected)
   }

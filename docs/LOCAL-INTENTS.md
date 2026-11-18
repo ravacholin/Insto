@@ -4,7 +4,9 @@ El catálogo reúne `LocalIntentRegistry`, `LocalIntentPhrases`, `NativeActionPa
 
 Podés decir «Modo silenciar», «Cuenta atrás de cinco minutos», «Más volumen», «Siguiente canción» o «Guíame hasta Córdoba en bici». Con «Modo silencio por veinte minutos», Insto programa la restauración del ajuste anterior. También admite «Silenciar teléfono hasta las 11 am» y «Poné No molestar hasta las 23:30». Si omitís el día, se toma la próxima vez que ocurra esa hora. La hora de restauración se conserva durante la confirmación.
 
-Con Gemini Decisions activado, Groq puede interpretar el pedido como respaldo si Gemini falla al clasificar o extraer datos, o si la clasificación es incierta pero la evaluación de seguridad es afirmativa. También puede verificar una categoría propuesta por Gemini. Usa la clave de **IA → Groq** y el modelo `openai/gpt-oss-20b`. Los planes interpretados con Groq pasan por validación y revisión antes de ejecutar.
+Los pedidos completos y los datos faltantes identificados se resuelven en el teléfono. Cuando hace falta interpretar un pedido ya reconocido, recuperar datos de una referencia o completar un borrador activo, Insto pasa directamente a la extracción estructurada. La clasificación se usa para los pedidos de intención todavía indeterminada.
+
+Con Gemini Decisions activado, Groq puede verificar una categoría o interpretar el pedido como respaldo ante fallos del proveedor principal, respuestas incompatibles o una categoría incierta con evaluación de seguridad afirmativa. Usa la clave de **IA → Groq** y el modelo `openai/gpt-oss-20b`. Ambos proveedores deben conservar los pasos y datos ya reconocidos. Los planes propuestos pasan por revisión antes de ejecutar.
 
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 

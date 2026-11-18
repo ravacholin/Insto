@@ -98,7 +98,8 @@ class RoutingAvailabilityTest {
   }
 
   @Test fun pendingDraftAndExplicitRestrictionsRemainLocalOnFailure() = runTest {
-    val c = coordinator(DecisionClassifier { throw DecisionException("offline") })
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { error("No classification for a draft") }),
+      StructuredCommandExtractor { throw DecisionException("offline") })
     val draft = DraftPlan.fromCommands(listOf(PhoneCommand.Timer(600)))
     assertEquals(draft, (c.interpret(InterpretationRequest("cambiá ese dato", draft), PhoneRoute.Instinct) as InterpretationResult.Incomplete).draft)
     for (text in listOf("no prender linterna", "prender linterna cuando llegue", "llevame a Retiro sin peajes"))

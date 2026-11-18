@@ -202,9 +202,10 @@ data class DraftPlan(
   /** Provider corrections preserve ids, order and all previously known omitted fields. */
   fun merge(proposed: DraftPlan): DraftPlan {
     require(steps.map { it.id } == proposed.steps.map { it.id })
+    val editableStepId = selectedStepId ?: steps.singleOrNull { it.missing().isNotEmpty() }?.id
     val merged = steps.zip(proposed.steps).map { (old, next) ->
       val patched = old.patch(next.json())
-      if (selectedStepId != null && old.id != selectedStepId) {
+      if (editableStepId != null && old.id != editableStepId) {
         val previous = old.json(); val updated = patched.json()
         require(previous.keys().asSequence().toSet() == updated.keys().asSequence().toSet())
         previous.keys().forEach { key -> require(previous.get(key).toString() == updated.get(key).toString()) { "Se modificó otro paso" } }
