@@ -37,6 +37,8 @@ class AssistantPreferencesRepository(private val context: Context) {
     val NIGHT_WINDOW_ENABLED = booleanPreferencesKey("night_window_enabled")
     val NIGHT_START_HOUR = intPreferencesKey("night_start_hour")
     val NIGHT_END_HOUR = intPreferencesKey("night_end_hour")
+    val GROQ_VOCABULARY = booleanPreferencesKey("groq_vocabulary")
+    val GROQ_PINNED_CONTACT_HINTS = booleanPreferencesKey("groq_pinned_contact_hints")
     val RECENT_LOGS = stringPreferencesKey("recent_logs_json")
   }
 
@@ -119,6 +121,14 @@ class AssistantPreferencesRepository(private val context: Context) {
 
   suspend fun setNightWindowEnabled(enabled: Boolean) {
     context.assistantDataStore.edit { prefs -> prefs[Keys.NIGHT_WINDOW_ENABLED] = enabled }
+  }
+
+  suspend fun setGroqVocabularyEnabled(enabled: Boolean) {
+    context.assistantDataStore.edit { it[Keys.GROQ_VOCABULARY] = enabled }
+  }
+
+  suspend fun setGroqPinnedContactHintsEnabled(enabled: Boolean) {
+    context.assistantDataStore.edit { it[Keys.GROQ_PINNED_CONTACT_HINTS] = enabled }
   }
 
   suspend fun appendActionLog(entry: PingActionLog) {
@@ -210,6 +220,8 @@ class AssistantPreferencesRepository(private val context: Context) {
       hasPromptedMicPermission = prefs[Keys.MIC_PROMPTED_ONCE] ?: false,
       contextRule = contextRule,
       recentLogs = decodeLogs(prefs[Keys.RECENT_LOGS]),
+      groqVocabularyEnabled = prefs[Keys.GROQ_VOCABULARY] ?: true,
+      groqPinnedContactHintsEnabled = prefs[Keys.GROQ_PINNED_CONTACT_HINTS] ?: false,
     )
   }
 

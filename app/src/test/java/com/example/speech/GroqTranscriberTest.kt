@@ -18,6 +18,25 @@ class GroqTranscriberTest {
     override fun getInputStream() = body.byteInputStream()
     override fun getOutputStream() = output
   }
+  @Test fun uploadsOnlyNonBlankPrompts() = runBlocking {
+    val file = File.createTempFile("test-audio", ".m4a").apply { writeText("audio") }
+    try {
+      val hint = "Podés decir: Instinct, Café."
+      for (value in listOf(hint, null, "", "   ")) {
+        val connection = Connection(200, """{"text":"Abrí Café"}""")
+        val transcriber = GroqTranscriber({ "personal-key" }, { connection }, prompt = { value })
+        assertEquals("Abrí Café", transcriber.transcribe(file))
+        val body = connection.output.toString("UTF-8")
+        val header = "name=\"prompt\""
+        if (value.isNullOrBlank()) {
+          assertFalse(body.contains(header))
+        } else {
+          assertTrue(body.contains("$header\r\n\r\n$value\r\n"))
+        }
+      }
+    } finally { file.delete() }
+  }
+
   @Test fun originalAudioAndSpanishModelAreUploaded() = runBlocking {
     val file = File.createTempFile("test-audio", ".m4a").apply { writeBytes(byteArrayOf(0, 1, 2, 3, 127)) }
     try {
