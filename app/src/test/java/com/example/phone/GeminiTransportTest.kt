@@ -33,7 +33,7 @@ class GeminiTransportTest {
     assertEquals("minimal", config.getJSONObject("thinkingConfig").getString("thinkingLevel"))
     assertEquals(2048, config.getInt("maxOutputTokens"))
     assertEquals("application/json", config.getString("responseMimeType"))
-    assertTrue(StructuredCommandClient.proposalSchema().similar(config.getJSONObject("responseJsonSchema")))
+    assertEquals(StructuredCommandClient.proposalSchema().toString(), config.getJSONObject("responseJsonSchema").toString())
   }
 
   @Test fun structuredClientRetriesOnlyModelErrorsAndReportsTheRespondingModel() = runBlocking {
