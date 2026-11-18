@@ -110,4 +110,6 @@ data class AssistantPreferences(
   val hasPromptedMicPermission: Boolean = false,
   val contextRule: ContextRuleConfig = ContextRuleConfig(),
   val recentLogs: List<PingActionLog> = emptyList(),
+  val groqVocabularyEnabled: Boolean = true,
+  val groqPinnedContactHintsEnabled: Boolean = false,
 )

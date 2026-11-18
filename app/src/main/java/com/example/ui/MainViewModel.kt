@@ -17,9 +17,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.phone.*
 import com.example.speech.AudioTranscriber
-import com.example.speech.GroqTranscriber
 import com.example.speech.GroqKeyStore
+import com.example.speech.GroqTranscriber
 import com.example.speech.TranscriptionException
+import com.example.speech.VocabularyHintProvider
 import com.example.assist.AssistantRoleHelper
 import com.example.assist.HotkeyHoldTracker
 import com.example.assist.PingAssistWidgetProvider
@@ -148,7 +149,7 @@ class MainViewModel @JvmOverloads constructor(
   application: Application,
   private val floatingCapture: FloatingAudioCapture = FloatingVoiceCapture(application),
   private val audioDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
-  private val audioTranscriber: AudioTranscriber = GroqTranscriber({ GroqKeyStore(application).read() }),
+  audioTranscriber: AudioTranscriber? = null,
   private val hybridRouter: com.example.phone.HybridPhoneRouter = com.example.phone.HybridPhoneRouter(
     { com.example.phone.GeminiSettings(application).isEnabled() },
     com.example.phone.GeminiDecisionsClient({ com.example.phone.GeminiSettings(application).readKey() })),
@@ -159,6 +160,10 @@ class MainViewModel @JvmOverloads constructor(
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
+  private val vocabularyHints = VocabularyHintProvider(application, learnedPhrases)
+  private val audioTranscriber = audioTranscriber ?: GroqTranscriber(
+    { GroqKeyStore(application).read() }, prompt = vocabularyHints::cached,
+  )
   private val recorder = VoiceRecorderManager(application)
   private val floatingState = MutableStateFlow(FloatingAssistantState())
   val floatingAssistant: StateFlow<FloatingAssistantState> = floatingState
@@ -751,6 +756,7 @@ class MainViewModel @JvmOverloads constructor(
   fun prepareFloatingAssistant() {
     runCatching {TemporaryModeManager(getApplication()).reconcile()}
     val prefs = runBlockingPrefs(getApplication())
+    vocabularyHints.refresh(viewModelScope, prefs)
     floatingPrefs = prefs
     floatingReturnPackage = com.example.assist.AutoSendCoordinator.lastKnownForegroundPackage
     floatingContact = prefs.pinnedContact

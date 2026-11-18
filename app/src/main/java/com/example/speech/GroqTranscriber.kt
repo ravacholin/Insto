@@ -14,6 +14,7 @@ import org.json.JSONObject
 class GroqTranscriber(
   private val key: () -> String?,
   private val connectionFactory: (() -> HttpURLConnection)? = null,
+  private val prompt: () -> String? = { null },
 ) : AudioTranscriber {
   override suspend fun transcribe(file: File): String {
     val token = key()?.trim()?.takeIf { it.isNotEmpty() }
@@ -35,6 +36,7 @@ class GroqTranscriber(
             field("language", "es")
             field("response_format", "json")
             field("temperature", "0")
+            prompt()?.takeIf { it.isNotBlank() }?.let { field("prompt", it) }
             output.write("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"recording.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n".toByteArray())
             file.inputStream().use { input ->
               val bytes = ByteArray(8192)

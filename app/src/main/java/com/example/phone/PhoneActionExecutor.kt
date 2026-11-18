@@ -88,12 +88,8 @@ class PhoneActionExecutor(
       catch (_: Exception) { PhoneActionResult("No se pudo completar el pedido en este teléfono. Podés volver a intentarlo.", outcome = PhoneActionOutcome.REJECTED) }
   }
 
-  @Suppress("DEPRECATION")
   internal fun matchingApps(name: String): List<AppOption> {
-    val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-    val apps = context.packageManager.queryIntentActivities(query, 0).map {
-      AppOption(it.loadLabel(context.packageManager).toString(), it.activityInfo.packageName)
-    }.distinctBy { it.packageName }
+    val apps = launcherApps(context)
     val normalized = PhoneCommandParser.normalize(name)
     val exact = apps.filter { PhoneCommandParser.normalize(it.label) == normalized || it.packageName == name }
     return exact.ifEmpty { apps.filter { PhoneCommandParser.normalize(it.label).contains(normalized) } }
@@ -126,4 +122,13 @@ class PhoneActionExecutor(
       else -> null
     }
   }
+}
+
+@Suppress("DEPRECATION")
+internal fun launcherApps(context: Context): List<AppOption> {
+  val packageManager = context.packageManager
+  val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+  return packageManager.queryIntentActivities(query, 0).map {
+    AppOption(it.loadLabel(packageManager).toString(), it.activityInfo.packageName)
+  }.distinctBy { it.packageName }
 }

@@ -16,7 +16,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.data.AssistantPreferencesRepository
 import com.example.ui.theme.PingAssistTheme
+import java.io.IOException
 import com.example.phone.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -28,6 +30,7 @@ class GroqSettingsActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
     val store = GroqKeyStore(this)
+    val preferences = AssistantPreferencesRepository(this)
     val gemini = com.example.phone.GeminiSettings(this)
     val learned = com.example.data.LearnedPhraseStore(this)
     setContent {
@@ -39,6 +42,7 @@ class GroqSettingsActivity : ComponentActivity() {
         var geminiConfigured by remember { mutableStateOf(gemini.readKey() != null) }
         var hybridEnabled by remember { mutableStateOf(gemini.isEnabled()) }
         val scope = rememberCoroutineScope()
+        val assistantPrefs by preferences.preferencesFlow.collectAsState(initial = null)
         var probeJob by remember { mutableStateOf<Job?>(null) }
         var probing by remember { mutableStateOf(false) }
         var diagnostics by remember { mutableStateOf(GeminiDiagnostics.snapshot()) }
@@ -100,7 +104,34 @@ class GroqSettingsActivity : ComponentActivity() {
             TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/docs/pricing#gemini-decision"))) } }) { Text("Cuotas, precios y uso de datos de Gemini") }
             HorizontalDivider()
             Text("Interpretar voz con Groq", style = MaterialTheme.typography.headlineSmall)
-            Text("Se envía una copia de cada grabación a Groq para transcribirla en español y decidir si es un pedido del teléfono o para Instinct. Si es para Instinct, se manda el audio original por WhatsApp. En casos excepcionales, un modelo rápido de Groq recibe solo el texto del pedido para verificar un intent de Gemini Decisions.")
+            Text("Para transcribir en español se envía una copia de la grabación a Groq, con vocabulario si lo habilitaste. Si el pedido es para Instinct, el audio original se manda por WhatsApp. En casos excepcionales, un modelo rápido de Groq recibe solo el texto del pedido para verificar un intent de Gemini Decisions.")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+              Switch(
+                checked = assistantPrefs?.groqVocabularyEnabled ?: true,
+                enabled = assistantPrefs != null,
+                onCheckedChange = { enabled ->
+                  scope.launch {
+                    try { preferences.setGroqVocabularyEnabled(enabled) }
+                    catch (_: IOException) { message = "No se pudo guardar el ajuste de vocabulario." }
+                  }
+                },
+              )
+              Text("Mejorar el reconocimiento con nombres de apps, rutinas y lugares")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+              Switch(
+                checked = assistantPrefs?.groqPinnedContactHintsEnabled ?: false,
+                enabled = assistantPrefs?.groqVocabularyEnabled == true,
+                onCheckedChange = { enabled ->
+                  scope.launch {
+                    try { preferences.setGroqPinnedContactHintsEnabled(enabled) }
+                    catch (_: IOException) { message = "No se pudo guardar el ajuste de contactos." }
+                  }
+                },
+              )
+              Text("Incluir los nombres de los contactos fijados")
+            }
+            Text("Con estas opciones, una lista corta de nombres, alias y frases aprendidas viaja a Groq junto con el audio. La opción de contactos agrega solo los nombres del contacto fijado y del contacto de manejo.")
             Text("Requiere internet. El plan gratuito tiene cuotas; consultá los límites de tu cuenta. Tu clave se guarda cifrada solo en este teléfono.")
             Text(if (configured) "Hay una clave guardada. Podés reemplazarla o borrarla." else "Cargá tu clave personal una sola vez.")
             OutlinedTextField(value, { value = it }, label = { Text("Clave de Groq") }, singleLine = true,

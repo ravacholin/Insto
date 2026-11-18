@@ -83,3 +83,9 @@ mezclen con el registro del flotante.
 El precalentamiento usa HEAD sin claves ni contenido del usuario. Las respuestas
 de interpretación siguen sujetas a la sesión activa, al plazo total y a las
 mismas validaciones locales aunque las solicitudes se superpongan.
+
+## Comparar el reconocimiento de nombres propios
+
+1. Prepará 20 frases con su comando esperado. Usá 8 para abrir apps, 8 para ejecutar rutinas y 4 para pedir indicaciones a los lugares guardados. Incluí nombres que suelen transcribirse mal.
+2. Decí las mismas 20 frases en el mismo teléfono con 1.11.0 y luego con 1.11.1, en el mismo orden y con la misma configuración, red y ruido ambiente. En 1.11.1 activá el vocabulario y dejá apagado el interruptor de contactos.
+3. Anotá para cada frase si el primer intento llegó al comando correcto sin aclaración. Una confirmación prevista por el comando cuenta como acierto si el comando y sus datos son correctos. Registrá los totales sobre 20 y la diferencia en aciertos entre versiones.
