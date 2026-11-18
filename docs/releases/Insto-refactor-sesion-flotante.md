@@ -7,9 +7,10 @@ quedan en clases separadas.
 
 ## Verificación
 
-- Las pruebas JVM nuevas recorren los estados de captura, interpretación,
-  retención, revisión, permisos y cierre. Incluyen resultados obsoletos y
-  reintento con transcripción conservada.
+- Pasaron cuatro pruebas JVM del reductor. Cubren captura, interpretación,
+  retención, permisos, cierre, resultados obsoletos y reintento con la
+  transcripción conservada. El ensamblado debug y la compilación de los tests
+  también completaron localmente.
 - La suite completa local depende del artefacto nativo de Robolectric, cuyo
   mirror respondió HTTP 403. El estado de la suite completa queda en el PR.
 - Pendiente en el Motorola: enviar texto y audio a Instinct y ejecutar una

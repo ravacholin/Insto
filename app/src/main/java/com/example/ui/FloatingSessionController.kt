@@ -712,7 +712,9 @@ internal class FloatingSessionController(
     }
     screen = screen.copy(mode = FloatingMode.LISTENING, text = "", elapsedMs = 0, error = null, needsGroqKey = false, transcript = null, voiceLatency = null, needsWhatsAppAccessibility = false)
     floatingJob = scope.launch {
-      while (acceptResult(sessionId, isActive, allowPaused = false)) {
+      // A microphone permission result can start this capture before Activity.onResume.
+      // Pausing a running capture invalidates its id before starting finalization.
+      while (acceptResult(sessionId, isActive)) {
         val sample = floatingCapture.snapshot
         if (sample.error != null) {
           pauseFloatingAssistant(sample.error)
