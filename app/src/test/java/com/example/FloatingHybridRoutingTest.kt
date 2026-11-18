@@ -90,6 +90,24 @@ class FloatingHybridRoutingTest {
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
   }
 
+  @Test fun recognizedParaphraseReachesReviewWithoutDecisionsOrInstinct() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    var extractions = 0
+    val vm = MainViewModel(app,
+      hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { error("Already recognized as a phone request") }),
+      structuredExtractor = StructuredCommandExtractor { extractions++; listOf(PhoneCommand.Torch(true)) })
+    try {
+      vm.updateFloatingText("necesito la linterna ahora mismo")
+      vm.sendFloatingText { fail("The request must stay in the phone workflow") }
+      runCurrent()
+      assertEquals(1, extractions)
+      assertTrue(vm.floatingAssistant.value.needsConfirmation)
+      assertTrue(vm.floatingAssistant.value.workflowLines.single().contains("linterna", ignoreCase = true))
+      assertNull(vm.consumePhoneActionCompletion())
+    } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
+  }
+
   @Test fun recognizedPhoneCommandExecutesWithoutWaitingForModelConfidence() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()

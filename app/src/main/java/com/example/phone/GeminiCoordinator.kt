@@ -87,21 +87,11 @@ class GeminiCoordinator(
     var failure: GeminiFailureKind? = null
     try {
       return withTimeout(12_000) {
-        if (directSequence) {
-          GeminiDiagnostics.extraction()
-          val result = try {
-            extract(request, extractor, fallback = false, timeout = 8_000)
-          } catch (error: DecisionException) {
-            if (error.kind in setOf(GeminiFailureKind.INVALID_REQUEST, GeminiFailureKind.INVALID_RESPONSE)) throw error
-            InterpretationResult.Failure(error.kind, error.message.orEmpty())
-          }
-          if (result is InterpretationResult.Failure) {
-            failure = result.kind
-            return@withTimeout interpretWithFallback(request, local, steps, stage, result.kind)
-          }
-          return@withTimeout if (result is InterpretationResult.Query || !preservesSteps(request, steps, result))
-            InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
-          else result
+        if (request.draft != null || directSequence || isSingleNewTurn && (
+            local is PhoneRoute.Unsupported && local.recoverable ||
+              local is PhoneRoute.Clarify && request.sourceContext != null
+          )) {
+          return@withTimeout resolveStructured(request, local, steps, stage)
         }
         val decision = try {
           classify(request)
@@ -162,6 +152,8 @@ class GeminiCoordinator(
         }
         when {
           decision.choice == "unsupported" && canDeferToInstinct -> InterpretationResult.Query()
+          decision.choice == "unsupported" && fallback != null ->
+            interpretWithFallback(request, local, steps, stage, GeminiFailureKind.INVALID_RESPONSE)
           decision.choice == "instinct" -> if (request.draft != null || local != PhoneRoute.Instinct || indirectPhoneRequest)
             InterpretationResult.Rejected("Hay un pedido del teléfono pendiente. Completalo o cancelalo; no se envió a Instinct.")
             else InterpretationResult.Query()
@@ -172,39 +164,8 @@ class GeminiCoordinator(
               if (verifiedByGroq) InterpretationResult.Plan(listOf(command)) else InterpretationResult.Direct(command)
             }
           }
-          decision.choice in CapabilityCatalog.parameterChoices || decision.choice in setOf("app_open", "spotify") || request.draft != null && router.hasIntent(decision.choice) || request.draft != null && decision.choice in CapabilityCatalog.fixed -> {
-            GeminiDiagnostics.extraction()
-            // Leave time for a second provider inside the shared interpretation deadline.
-            val result = try {
-              extract(request, extractor, fallback = false, timeout = if (fallback == null) 8_000 else 4_000)
-            } catch (error: DecisionException) {
-              InterpretationResult.Failure(error.kind, error.message ?: error.kind.label)
-            }
-            if (result is InterpretationResult.Failure) {
-              failure = result.kind
-              if (fallback != null && result.kind != GeminiFailureKind.INVALID_REQUEST)
-                return@withTimeout interpretWithFallback(request, local, steps, stage, result.kind)
-              return@withTimeout unavailableRoute(request, local, result.kind, result.message)
-            }
-            if (!preservesSteps(request, steps, result))
-              return@withTimeout InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
-            val commands = (result as? InterpretationResult.Plan)?.commands
-            val drafts = (result as? InterpretationResult.Incomplete)?.draft?.steps
-            val selectedIndex = request.draft?.let { active -> active.steps.indexOfFirst { it.id == active.selectedStepId }.takeIf { it >= 0 } }
-            val consistent = if (selectedIndex != null && decision.choice != "workflow") {
-              commands?.getOrNull(selectedIndex)?.let { CapabilityCatalog.accepts(decision.choice, it) }
-                ?: drafts?.getOrNull(selectedIndex)?.let { CapabilityCatalog.acceptsDraft(decision.choice, it) }
-                ?: false
-            } else if (decision.choice == "workflow") (commands?.size ?: drafts?.size ?: 0) in 2..10 &&
-              (steps.size == 1 || (commands?.size ?: drafts?.size) == steps.size) else
-              commands?.let { it.size == 1 && CapabilityCatalog.accepts(decision.choice, it.single()) }
-                ?: drafts?.let { it.size == 1 && CapabilityCatalog.acceptsDraft(decision.choice, it.single()) }
-                ?: false
-            when {
-              consistent || result is InterpretationResult.Rejected -> result
-              canDeferToInstinct && !verifiedByGroq -> InterpretationResult.Query()
-              else -> InterpretationResult.Rejected("La clasificación y los datos no coinciden. No se ejecutó ni se envió; reformulá el pedido.")
-            }
+          decision.choice in CapabilityCatalog.parameterChoices || decision.choice in setOf("app_open", "spotify") -> {
+            resolveStructured(request, local, steps, stage, decision.choice)
           }
           else -> if (canDeferToInstinct && !verifiedByGroq) InterpretationResult.Query()
             else InterpretationResult.Rejected("Ese pedido no está disponible o tiene restricciones no admitidas. No se ejecutó ni se envió.")
@@ -246,9 +207,32 @@ class GeminiCoordinator(
     }
   }
 
+  private suspend fun resolveStructured(
+    request: InterpretationRequest, local: PhoneRoute, steps: List<String>,
+    stage: (String) -> Unit, choice: String? = null,
+  ): InterpretationResult {
+    GeminiDiagnostics.extraction()
+    val proposal = try {
+      extract(request, extractor, fallback = false, timeout = if (fallback == null) 8_000 else 4_000)
+    } catch (error: DecisionException) {
+      InterpretationResult.Failure(error.kind, error.message ?: error.kind.label)
+    } catch (_: IllegalArgumentException) {
+      InterpretationResult.Failure(GeminiFailureKind.INVALID_RESPONSE, "Gemini devolvió datos inválidos.")
+    }
+    val result = validateProposal(request, local, steps, proposal, choice)
+    if (result is InterpretationResult.Failure) {
+      if (fallback != null && result.kind != GeminiFailureKind.INVALID_REQUEST)
+        return interpretWithFallback(request, local, steps, stage, result.kind, choice)
+      return unavailableRoute(request, local, result.kind, result.message)
+    }
+    if (result is InterpretationResult.Rejected && proposal !is InterpretationResult.Rejected && fallback != null)
+      return interpretWithFallback(request, local, steps, stage, GeminiFailureKind.INVALID_RESPONSE, choice)
+    return result
+  }
+
   private suspend fun interpretWithFallback(
     request: InterpretationRequest, local: PhoneRoute, steps: List<String>,
-    stage: (String) -> Unit, failure: GeminiFailureKind?,
+    stage: (String) -> Unit, failure: GeminiFailureKind?, choice: String? = null,
   ): InterpretationResult {
     val provider = fallback ?: return unavailableRoute(request, local,
       failure ?: GeminiFailureKind.UNAVAILABLE,
@@ -262,30 +246,51 @@ class GeminiCoordinator(
         if (error.kind == GeminiFailureKind.TIMEOUT) "Groq tardó demasiado. Reintentá el pedido."
         else error.message ?: error.kind.label)
     }
-    if (result is InterpretationResult.Query) {
-      return if (canDeferToInstinct(request, local)) InterpretationResult.Query()
-      else if (request.draft == null && local == PhoneRoute.Instinct && steps.size == 1 &&
-        !RequestSafetyPolicy.isIndirectPhoneRequest(request.text))
-        InterpretationResult.Query(needsConfirmation = true)
-      else InterpretationResult.Rejected("Groq no identificó una acción válida del teléfono. Indicá la acción y sus datos.")
-    }
     if (result is InterpretationResult.Failure) return unavailableRoute(request, local, result.kind, result.message)
-    if (!preservesSteps(request, steps, result)) return InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
-    if (request.draft == null && steps.size == 1 && result is InterpretationResult.Plan &&
-      result.commands.any { command ->
-        command in CapabilityCatalog.fixed.values ||
-          command is PhoneCommand.Platform && command.action in setOf(
-            PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
-            PlatformAction.DND_ON, PlatformAction.DND_OFF)
-      } &&
-      RequestSafetyPolicy.fixedActionHasExtraParameters(request.text)) {
-      return InterpretationResult.Rejected("La acción propuesta por Groq omite detalles del pedido. Indicá la acción y su duración u horario.")
-    }
-    return result
+    if (result is InterpretationResult.Query && choice == null && request.draft == null &&
+      local == PhoneRoute.Instinct && steps.size == 1 && !RequestSafetyPolicy.isIndirectPhoneRequest(request.text) &&
+      !canDeferToInstinct(request, local)) return InterpretationResult.Query(needsConfirmation = true)
+    return validateProposal(request, local, steps, result, choice)
   }
 
-  private fun preservesSteps(request: InterpretationRequest, steps: List<String>, result: InterpretationResult): Boolean {
-    if (request.draft != null || steps.size == 1) return true
+  /** Provider output never defines how many explicit actions there were or overwrites locally known fields. */
+  private fun validateProposal(
+    request: InterpretationRequest, local: PhoneRoute, steps: List<String>,
+    result: InterpretationResult, choice: String?,
+  ): InterpretationResult {
+    if (result is InterpretationResult.Query) return if (canDeferToInstinct(request, local))
+      InterpretationResult.Query()
+    else InterpretationResult.Rejected("El intérprete no identificó una acción válida del teléfono. Revisá la acción y los datos.")
+    val commands = (result as? InterpretationResult.Plan)?.commands
+    val drafts = when (result) {
+      is InterpretationResult.Plan -> result.draft?.steps
+      is InterpretationResult.Incomplete -> result.draft.steps
+      else -> null
+    }
+    val count = commands?.size ?: drafts?.size ?: return result
+    val expectedCount = request.draft?.steps?.size ?: steps.size
+    val inferredWorkflow = choice == "workflow" && request.draft == null && steps.size == 1 && count in 2..10
+    if (count != expectedCount && !inferredWorkflow)
+      return InterpretationResult.Rejected("La propuesta cambió la cantidad de pasos. Revisá las acciones del pedido.")
+    if (!preservesSteps(request, local, steps, result))
+      return InterpretationResult.Rejected("La propuesta cambió datos o pasos ya reconocidos. Revisá el pedido.")
+    if (request.draft == null && steps.size == 1 && commands != null &&
+      RequestSafetyPolicy.fixedActionHasExtraParameters(request.text) &&
+      commands.any(router::isFixedCommand)) {
+      return InterpretationResult.Rejected("La acción propuesta omite detalles del pedido. Indicá la acción y su duración u horario.")
+    }
+    if (choice == null || choice == "workflow") return result
+    val index = request.draft?.let { active -> active.steps.indexOfFirst { it.id == active.selectedStepId } }
+      ?.takeIf { it >= 0 } ?: 0
+    val matches = commands?.getOrNull(index)?.let { CapabilityCatalog.accepts(choice, it) }
+      ?: drafts?.getOrNull(index)?.let { CapabilityCatalog.acceptsDraft(choice, it) } ?: false
+    return if (matches) result
+    else if (canDeferToInstinct(request, local)) InterpretationResult.Query()
+    else InterpretationResult.Rejected("La clasificación y los datos no coinciden. Revisá el pedido.")
+  }
+
+  private fun preservesSteps(request: InterpretationRequest, local: PhoneRoute, steps: List<String>, result: InterpretationResult): Boolean {
+    if (request.draft != null || steps.size == 1 && local !is PhoneRoute.Clarify) return true
     val proposed = when (result) {
       is InterpretationResult.Plan -> result.draft?.steps
       is InterpretationResult.Incomplete -> result.draft.steps
@@ -294,7 +299,7 @@ class GeminiCoordinator(
     if (result !is InterpretationResult.Plan && result !is InterpretationResult.Incomplete) return true
     if (proposed?.size != steps.size) return false
     return steps.zip(proposed).all { (text, step) ->
-      RequestSafetyPolicy.rejection(text) == null && when (val route = PhoneCommandParser { request.now }.parse(text)) {
+      RequestSafetyPolicy.rejection(text) == null && when (val route = if (steps.size == 1) local else PhoneCommandParser { request.now }.parse(text)) {
         is PhoneRoute.Local -> {
           val completed = step.complete(request.now)
           if (completed is PhoneCommand.Platform && route.command is PhoneCommand.Platform &&

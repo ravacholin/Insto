@@ -24,6 +24,10 @@ class HybridPhoneRouter(
   private val registry: LocalIntentRegistry = LocalIntentRegistry.default,
   internal val policy: DecisionsPolicy = DecisionsPolicy(),
 ) {
+  private val fixedCommands = (CapabilityCatalog.fixed.values + registry.definitions.mapNotNull { it.fixed }).toSet()
+
+  internal fun isFixedCommand(command: PhoneCommand): Boolean = command in fixedCommands
+
   fun isEnabled(): Boolean = enabled()
   fun needsDecision(text: String, local: PhoneRoute): Boolean = enabled() && local != PhoneRoute.Cancel
   suspend fun classify(request: InterpretationRequest): SemanticDecision = classifier.classify(request)
