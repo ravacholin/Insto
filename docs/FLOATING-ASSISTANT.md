@@ -320,7 +320,7 @@ Calendario conserva título, fecha, hora y duración durante la conversación: �
 
 El panel muestra el resultado de cada paso. Una entrega a otra app pausa la secuencia: al volver, «Ya lo revisé · continuar sin repetir» reconoce la entrega sin repetirla. «Reintentar solo este paso» conserva los completados. Un paso interrumpido durante el despacho se recupera como incierto y requiere revisar la app; nunca se reenvía automáticamente. Cancelar o cerrar impide los pasos futuros y no revierte los realizados. El progreso se guarda atómicamente en almacenamiento privado sin backup. No se guarda un historial de conversaciones ni una biblioteca de rutinas.
 
-El parser local sigue siendo la primera opción. Cuando el híbrido necesita interpretar una redacción no reconocida, la clave Gemini habilita una propuesta de comandos/parámetros por `models/gemini-2.5-flash:generateContent`, con JSON Schema y validación local estricta. Decisions conserva la clasificación. El modelo no emite intents, código ni URLs; las propuestas extraídas se muestran antes de ejecutarse. La llamada tiene timeout total de diez segundos, cuerpo de respuesta limitado a 64 KiB, sin redirecciones ni reintentos automáticos. Se comparte el texto del pedido, no la libreta de contactos. La disponibilidad, cuota y precisión reales del proveedor requieren una clave y no se infieren de las pruebas con respuestas simuladas.
+El parser local sigue siendo la primera opción. Cuando el híbrido necesita interpretar una redacción no reconocida, la clave Gemini habilita una propuesta de comandos/parámetros por `models/gemini-3.5-flash-lite:generateContent`, con JSON Schema y validación local estricta. Decisions conserva la clasificación. El modelo no emite intents, código ni URLs; las propuestas extraídas se muestran antes de ejecutarse. La extracción usa razonamiento mínimo y admite un solo intento con `gemini-3.1-flash-lite` si el principal devuelve HTTP 404 o un HTTP 400 que indica que el modelo no existe o no está soportado. Ambos intentos comparten un plazo de ocho segundos. Cada cuerpo de respuesta se limita a 64 KiB y las redirecciones están deshabilitadas. Se comparte el texto del pedido, no la libreta de contactos. La disponibilidad, cuota y precisión reales del proveedor requieren una clave y no se infieren de las pruebas con respuestas simuladas.
 
 ### Multimedia
 
@@ -370,7 +370,8 @@ ya ejecutados ni se omiten restricciones para completar una secuencia.
 
 En configuración, «Probar conexión de Gemini» envía una frase sintética, interpreta
 la respuesta y nunca ejecuta ni despacha acciones. Se cancela al salir. El
-diagnóstico conserva contadores, tiempos y categorías de fallo en memoria; no
+diagnóstico conserva en memoria contadores, tiempos, categorías de fallo y el
+último modelo de extracción que devolvió una respuesta válida. No
 almacena textos, cuerpos del proveedor, audio ni credenciales.
 
 Verificación reproducible:

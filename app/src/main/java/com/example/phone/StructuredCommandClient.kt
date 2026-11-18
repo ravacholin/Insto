@@ -1,7 +1,10 @@
 package com.example.phone
 
 import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Calendar
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -13,7 +16,8 @@ fun interface StructuredCommandExtractor {
 /** generateContent proposes data; every result is validated and reviewed before effects. */
 class StructuredCommandClient(
   private val key: () -> String?,
-  private val connectionFactory: (() -> HttpURLConnection)? = null,
+  private val connectionFactory: ((URL) -> HttpURLConnection)? = null,
+  private val timeoutMillis: Long = 8_000,
 ) : StructuredCommandExtractor {
   override suspend fun extract(text: String): List<PhoneCommand> = when (val result = interpret(InterpretationRequest(text))) {
     is InterpretationResult.Plan -> result.commands
@@ -23,13 +27,55 @@ class StructuredCommandClient(
   override suspend fun interpret(request: InterpretationRequest): InterpretationResult {
     val input = request.modelInput()
     if (input.isBlank() || input.length > 16000) throw DecisionException("El pedido o su contexto es demasiado largo. Se conserva para editarlo.", GeminiFailureKind.INVALID_REQUEST)
-    val body = GeminiTransport.post(key, buildRequest(input, request.now).toString(), "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent", connectionFactory, 8000)
-    return try { parseInterpretation(body, request.now) } catch (_: Exception) {
-      throw DecisionException("Respuesta inválida de la extracción de Gemini. El pedido se conserva.", GeminiFailureKind.INVALID_RESPONSE)
+    val payload = buildRequest(input, request.now).toString()
+    return withTimeout(timeoutMillis) {
+      val started = System.nanoTime()
+      var model = PRIMARY_MODEL
+      val body = try {
+        post(payload, PRIMARY_MODEL, timeoutMillis,
+          modelRejected = ::isModelError)
+      } catch (_: GeminiTransport.ModelUnavailable) {
+        model = FALLBACK_MODEL
+        val remaining = timeoutMillis - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        if (remaining <= 0) {
+          throw DecisionException("Gemini tardó demasiado. El pedido se conserva.", GeminiFailureKind.TIMEOUT)
+        }
+        post(payload, FALLBACK_MODEL, remaining)
+      }
+      val result = try { parseInterpretation(body, request.now) } catch (_: Exception) {
+        throw DecisionException("Respuesta inválida de la extracción de Gemini. El pedido se conserva.", GeminiFailureKind.INVALID_RESPONSE)
+      }
+      GeminiDiagnostics.extractionModel(model)
+      result
     }
   }
 
+  private suspend fun post(
+    payload: String,
+    model: String,
+    remainingMillis: Long,
+    modelRejected: ((String) -> Boolean)? = null,
+  ): String {
+    val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+    val legacy = connectionFactory?.let { factory -> { factory(URL(url)) } }
+    return GeminiTransport.post(key, payload, url, legacy, remainingMillis, modelRejected = modelRejected)
+  }
+
   companion object {
+    private const val PRIMARY_MODEL = "gemini-3.5-flash-lite"
+    private const val FALLBACK_MODEL = "gemini-3.1-flash-lite"
+    private val modelError = Regex(
+      """(?:\b${Regex.escape(PRIMARY_MODEL)}\b|^\s*(?:the\s+)?model\b)["']?\s+""" +
+        """(?:(?:is|was)\s+)?(?:not\s+(?:found|supported|available)|does\s+not\s+exist)\b""" +
+        """|^\s*(?:unsupported|unknown|unrecognized)\s+model(?:\s*[:.]|$)""",
+      RegexOption.IGNORE_CASE,
+    )
+
+    private fun isModelError(body: String): Boolean {
+      val error = runCatching { JSONObject(body).optJSONObject("error") }.getOrNull() ?: return false
+      return modelError.containsMatchIn(error.optString("message"))
+    }
+
     private fun content(body: String): JSONObject {
       val candidates = JSONObject(body).getJSONArray("candidates")
       require(candidates.length() == 1)
@@ -112,7 +158,8 @@ Ahora: ${java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale
       return JSONObject()
         .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", instructions(now)))))
         .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", text)))))
-        .put("generationConfig", JSONObject().put("temperature", 0).put("maxOutputTokens", 2048)
+        .put("generationConfig", JSONObject().put("maxOutputTokens", 2048)
+          .put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
           .put("responseMimeType", "application/json").put("responseJsonSchema", proposalSchema()))
     }
   }

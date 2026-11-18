@@ -8,6 +8,9 @@ import kotlinx.coroutines.withTimeout
 internal object GeminiTransport {
   enum class Provider(val label: String) { GEMINI("Gemini"), GROQ("Groq") }
 
+  class ModelUnavailable : Exception()
+  private class OversizedErrorBody : Exception()
+
   suspend fun post(
     key: () -> String?,
     body: String,
@@ -15,6 +18,7 @@ internal object GeminiTransport {
     connectionFactory: (() -> HttpURLConnection)?,
     timeoutMillis: Long,
     provider: Provider = Provider.GEMINI,
+    modelRejected: ((String) -> Boolean)? = null,
   ): String {
     val service = provider.label
     val token = key()?.trim()?.takeIf { it.isNotBlank() }
@@ -29,6 +33,17 @@ internal object GeminiTransport {
         ProviderHttp.post(url, headers, "application/json; charset=utf-8", bytes.size.toLong(),
           minOf(5000, timeoutMillis.toInt()), minOf(8000, timeoutMillis.toInt()),
           connectionFactory, { it.write(bytes) }) { status, input ->
+          if (modelRejected != null) {
+            if (status == 404) throw ModelUnavailable()
+            if (status == 400) {
+              val errorBody = try {
+                input().use { it.readBounded(65536) { OversizedErrorBody() }.toString(Charsets.UTF_8) }
+              } catch (_: OversizedErrorBody) {
+                ""
+              }
+              if (modelRejected(errorBody)) throw ModelUnavailable()
+            }
+          }
           if (status !in 200..299) throw when (status) {
             401, 403 -> DecisionException("$service rechazó la clave o el acceso. Revisá la configuración; el pedido se conserva.", GeminiFailureKind.AUTH)
             408 -> DecisionException("$service tardó demasiado. El pedido se conserva.", GeminiFailureKind.TIMEOUT)
@@ -45,6 +60,8 @@ internal object GeminiTransport {
           }
         }
       } catch (error: CancellationException) {
+        throw error
+      } catch (error: ModelUnavailable) {
         throw error
       } catch (error: DecisionException) {
         throw error

@@ -12,11 +12,13 @@ object GeminiDiagnostics {
     val groqConnectionMillis: Long? = null,
     val geminiConnectionMillis: Long? = null,
     val lastFailure: GeminiFailureKind? = null,
+    val lastExtractionModel: String? = null,
   )
   @Volatile private var current = Snapshot()
   fun snapshot(): Snapshot = current
   @Synchronized internal fun decision() { current = current.copy(decisions = current.decisions + 1) }
   @Synchronized internal fun extraction() { current = current.copy(extractions = current.extractions + 1) }
+  @Synchronized internal fun extractionModel(model: String) { current = current.copy(lastExtractionModel = model) }
   @Synchronized internal fun verification() { current = current.copy(verifications = current.verifications + 1) }
   @Synchronized internal fun fallback() { current = current.copy(fallbacks = current.fallbacks + 1) }
   @Synchronized internal fun connection(provider: GeminiTransport.Provider, millis: Long) {
