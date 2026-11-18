@@ -11,6 +11,12 @@ object ShareConfirmationPolicy {
   fun isConfirmationLabel(label: String?) = clean(label.orEmpty()) in confirmLabels
   fun isPositiveLabel(label: String?) = clean(label.orEmpty()) in confirmLabels + sendLabels
 
+  private val pickerHeading = Regex("^(?:enviar a|send to|compartir (?:con|a)|share (?:with|to))[ :?.…]*$")
+  private val negative = Regex("\\b(?:error|failed|cannot|permission|permiso|acceso|bloqueado)\\b|no se pudo|no se puede|no puedes|no es compatible|no son compatibles|archivo no valido|unsupported|unable|could not|can't|couldn't")
+
+  internal fun hasUnrelatedShareHeading(labels: List<String>): Boolean =
+    labels.map(::clean).any { pickerHeading.matches(it) || negative.containsMatchIn(it) }
+
   fun canConfirm(request: Long, launchRequest: Long, freshWindow: Boolean, fileName: String?,
     caption: String?, composer: String?, expectedName: String?, expectedPhone: String,
     labels: List<String>, positiveLabel: String?, hasAudioControls: Boolean, recipientPreviouslyVerified: Boolean = false): Boolean {
@@ -18,12 +24,9 @@ object ShareConfirmationPolicy {
       fileName?.startsWith("instinct_") != true || !fileName.endsWith(".m4a") ||
       caption != null || !composer.isNullOrBlank()) return false
     val body = labels.map(::clean).filter { it.isNotBlank() && !isPositiveLabel(it) }
-    val pickerHeading = Regex("^(?:enviar a|send to|compartir (?:con|a)|share (?:with|to))[ :?.…]*$")
-    if (body.any { pickerHeading.matches(it) }) return false
+    if (hasUnrelatedShareHeading(body)) return false
     val ownedFile = clean(fileName.orEmpty())
     val ownedStem = ownedFile.substringBeforeLast('.')
-    val negative = Regex("\\b(?:error|failed|cannot|permission|permiso|acceso|bloqueado)\\b|no se pudo|no se puede|no puedes|no es compatible|no son compatibles|archivo no valido|unsupported|unable|could not|can't|couldn't")
-    if (body.any { negative.containsMatchIn(it) }) return false
     val name = clean(expectedName.orEmpty())
     val phone = PhoneNumberUtils.normalizeDigits(expectedPhone)
     // Keep PR #5's exact recipient check for WhatsApp's native Share with …? dialog.

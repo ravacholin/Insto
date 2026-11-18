@@ -1,0 +1,30 @@
+{
+  "origin": "synthetic",
+  "root": {
+    "className": "android.widget.FrameLayout",
+    "children": [
+      {
+        "id": "com.whatsapp:id/conversation_contact_name",
+        "text": "Instinct"
+      },
+      {
+        "id": "com.whatsapp:id/entry",
+        "text": "Mensaje sintético",
+        "editable": true,
+        "focused": true
+      },
+      {
+        "id": "com.whatsapp:id/send",
+        "className": "android.widget.Button",
+        "controlName": "Enviar",
+        "clickable": true,
+        "bounds": [
+          100,
+          100,
+          180,
+          150
+        ]
+      }
+    ]
+  }
+}

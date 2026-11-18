@@ -1,0 +1,23 @@
+{
+  "origin": "synthetic",
+  "root": {
+    "className": "android.widget.FrameLayout",
+    "children": [
+      {
+        "text": "Permiso de acceso al micrófono"
+      },
+      {
+        "id": "android:id/button1",
+        "className": "android.widget.Button",
+        "controlName": "Aceptar",
+        "clickable": true,
+        "bounds": [
+          100,
+          100,
+          180,
+          150
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "origin": "synthetic",
+  "root": {
+    "className": "android.widget.FrameLayout",
+    "children": [
+      {
+        "text": "¿Compartir con Instinct?"
+      },
+      {
+        "id": "android:id/button2",
+        "className": "android.widget.Button",
+        "controlName": "Cancelar",
+        "clickable": true,
+        "bounds": [
+          100,
+          100,
+          180,
+          150
+        ]
+      },
+      {
+        "id": "android:id/button1",
+        "className": "android.widget.Button",
+        "controlName": "OK",
+        "clickable": true,
+        "bounds": [
+          100,
+          100,
+          180,
+          150
+        ]
+      }
+    ]
+  }
+}
