@@ -41,7 +41,9 @@ class GeminiTransportTest {
       assertNull(c.getRequestProperty("x-goog-api-key"))
       assertFalse(c.output.toString().contains("private-key"))
       val request = JSONObject(c.output.toString())
-      assertEquals("llama-3.1-8b-instant", request.getString("model"))
+      assertEquals("openai/gpt-oss-20b", request.getString("model"))
+      assertEquals("low", request.getString("reasoning_effort"))
+      assertEquals(256, request.getInt("max_completion_tokens"))
       assertEquals("cortá Spotify", request.getJSONArray("messages").getJSONObject(1).getString("content"))
     }
     assertNull(GroqIntentVerifier({ null }, { error("No network without credentials") })
