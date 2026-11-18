@@ -278,7 +278,14 @@ class GeminiCoordinator(
             "volume_set" -> "volume"
             else -> route.context.removePrefix("intent:")
           }
-          step.type == expected && (request.sourceContext != null || step.complete(request.now) == null)
+          val known = ConversationSession.seedDraft(text, expected)?.steps?.single()?.json()
+          val proposedFields = step.json()
+          val fieldsPreserved = known?.keys()?.asSequence()?.all { key ->
+            val value = known.get(key).toString()
+            proposedFields.opt(key)?.toString() == value ||
+              !proposedFields.has(key) && (value.isEmpty() || value == "[]")
+          } ?: true
+          step.type == expected && fieldsPreserved && (request.sourceContext != null || step.complete(request.now) == null)
         }
         is PhoneRoute.Unsupported -> route.recoverable
         else -> true
@@ -300,8 +307,12 @@ class GeminiCoordinator(
   private suspend fun extract(
     request: InterpretationRequest, provider: StructuredCommandExtractor, fallback: Boolean, timeout: Long,
   ): InterpretationResult {
-    val result = withTimeoutOrNull(timeout) { provider.interpret(request) }
-      ?: throw DecisionException("Interpretation timeout", GeminiFailureKind.TIMEOUT)
+    val result = try {
+      withTimeoutOrNull(timeout) { provider.interpret(request) }
+    } catch (_: TimeoutCancellationException) {
+      currentCoroutineContext().ensureActive()
+      null
+    } ?: throw DecisionException("Interpretation timeout", GeminiFailureKind.TIMEOUT)
     currentCoroutineContext().ensureActive()
     return when (result) {
       is InterpretationResult.Query -> if (request.draft == null) InterpretationResult.Query()

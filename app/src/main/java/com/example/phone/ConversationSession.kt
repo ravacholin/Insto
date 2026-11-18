@@ -182,7 +182,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
   }
 
   companion object {
-    private fun seedDraft(text: String, context: String): DraftPlan? {
+    internal fun seedDraft(text: String, context: String): DraftPlan? {
       val type = if (context == "volume") "volume" else context
       if (type !in CapabilityCatalog.specs || type == "calendar") return null
       val fields = org.json.JSONObject().put("type", type)

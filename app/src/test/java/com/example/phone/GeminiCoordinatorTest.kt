@@ -62,6 +62,21 @@ class GeminiCoordinatorTest {
       PhoneCommand.OpenApp("spotify")), repaired.commands)
   }
 
+  @Test fun incompleteExtractionCannotReplaceTheKnownAlarmHour() = runTest {
+    val text = "Poné una alarma a las siete y abrí Spotify"
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Unexpected Decisions call") })
+    val extractor = object : StructuredCommandExtractor {
+      override suspend fun extract(text: String): List<PhoneCommand> = error("Typed proposal expected")
+      override suspend fun interpret(request: InterpretationRequest): InterpretationResult {
+        val wrongAlarm = CommandDraft("s1", org.json.JSONObject().put("type", "alarm").put("hour", 8).put("minute", 0))
+        val app = CommandDraft("s2", org.json.JSONObject().put("type", "open_app").put("name", "Spotify"))
+        return InterpretationResult.Incomplete(DraftPlan(listOf(wrongAlarm, app)))
+      }
+    }
+    assertTrue(GeminiCoordinator(router, extractor).interpret(InterpretationRequest(text),
+      PhoneCommandParser().parse(text)) is InterpretationResult.Rejected)
+  }
+
   @Test fun explicitSequenceUsesGroqOnceOnlyAfterPrimaryFails() = runTest {
     val text = "Encendé la linterna y abrí Spotify"
     val parser = PhoneCommandParser()
