@@ -37,7 +37,7 @@ class FloatingWorkflowTest {
    error("Calendar lookup must bypass Decisions")
   }))
   try {
-   vm.updateFloatingText("¿Qué tengo mañana?")
+   vm.updateFloatingText("qué tengo hoy en la agenda?")
    vm.sendFloatingText { fail("Calendar lookup must stay local") }
    runCurrent()
    assertTrue(vm.floatingAssistant.value.needsCalendarRead)

@@ -8,6 +8,11 @@ internal class CalendarSelectionParser(private val now: () -> Calendar = { Calen
   private val months = listOf("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre")
   val datePattern = "(?:pasado manana|manana|hoy|(?:el )?(?:${weekdays.joinToString("|")}|[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?|[0-9]{1,2} de (?:${months.joinToString("|")})(?: de [0-9]{4})?))"
 
+  private val agendaName = "(?:(?:mi|la|el) )?(?:agenda|calendario)"
+  private val agendaCommand = Regex("^(?:consulta|mostra|ver|lista|revisa|decime) $agendaName(?: (.+))?$")
+  private val agendaQuestion = Regex("^(?:que tengo|que hay|tengo algo|que eventos tengo|hay (?:algo|eventos))(?: (.+))?$")
+  private val agendaReference = Regex("(?:^| )en $agendaName(?= |$)")
+
   fun date(value: String, current: Calendar = now()): Calendar? = runCatching {
     val text = value.removePrefix("el ")
     val result = current.clone() as Calendar
@@ -38,9 +43,16 @@ internal class CalendarSelectionParser(private val now: () -> Calendar = { Calen
       Regex("\\b(?:todos? (?:los|las|el)|todas? (?:las|la)|serie|ocurrencias|cada (?:evento|reunion|clase|turno|cita))\\b").containsMatchIn(syntax)) {
       return PhoneRoute.Unsupported("Indicá un solo evento o una ocurrencia concreta para modificar o eliminar.")
     }
-    val agenda = Regex("^(?:que tengo|que hay en mi agenda|tengo algo|(?:consulta|mostra|ver|lista) (?:mi |la )?(?:agenda|calendario))(?: (?:de )?(.+))?$").matchEntire(text)
-    if (agenda != null) {
-      val whenText = agenda.groupValues[1]
+    val commandPeriod = agendaCommand.matchEntire(text)?.groupValues?.get(1)
+    val questionTail = agendaQuestion.matchEntire(text)?.groupValues?.get(1).orEmpty()
+    val calendarReference = agendaReference.find(questionTail)
+    val explicitAgenda = commandPeriod != null || calendarReference != null
+    val questionPeriod = if (calendarReference != null) questionTail.replaceRange(calendarReference.range, "").trim()
+      else questionTail
+    val implicitAgenda = text.startsWith("que tengo ") || text.startsWith("tengo algo ")
+    if (explicitAgenda || implicitAgenda) {
+      val whenText = (commandPeriod ?: questionPeriod).removePrefix("de ").removePrefix("para ")
+        .ifEmpty { if (explicitAgenda) "hoy" else "" }
       val afternoon = whenText.endsWith(" a la tarde") || whenText.endsWith(" por la tarde")
       val period = whenText.removeSuffix(" a la tarde").removeSuffix(" por la tarde")
       if (period == "esta semana") {
@@ -66,6 +78,9 @@ internal class CalendarSelectionParser(private val now: () -> Calendar = { Calen
         return PhoneRoute.Clarify("Indicá el día y la hora completa, con mañana o tarde.", "intent:calendar_query")
       }
       date(period, current)?.let { return result(PlatformAction.CALENDAR_QUERY, CalendarSelection(from = CalendarSelection.iso(it), afternoon = afternoon)) }
+      if (explicitAgenda) return PhoneRoute.Unsupported(
+        "No pude interpretar ese período de la agenda. Podés indicar hoy, mañana, esta semana o un intervalo entre dos fechas."
+      )
       if (period.isNotEmpty() && !Regex("^(?:hoy|manana|pasado|el |esta |la proxima|[0-9])").containsMatchIn(period)) return null
       if (period.isNotEmpty()) return PhoneRoute.Unsupported("Indicá qué día o intervalo de agenda querés consultar.", recoverable = true)
       return null
