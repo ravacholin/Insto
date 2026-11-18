@@ -48,6 +48,20 @@ class CapabilityCatalogTest {
     assertTrue(choices.getValue("media_pause_youtube").contains("Pausar la reproducción de YouTube"))
   }
 
+  @Test fun calendarAndTemporaryVolumeKeepTheirRequiredFields() {
+    val choices = GeminiDecisionsClient.choices
+    val calendarFields = CapabilityCatalog.specs.getValue("calendar").required
+    assertEquals(calendarFields, choices.getValue("calendar").substringAfter(" Obligatorios: ")
+      .removeSuffix(".").split(", ").toSet())
+    assertTrue(choices.getValue("temporary_mode").contains("Para volumen: percent."))
+  }
+
+  @Test fun groqConfirmationKeepsTheExistingCriterion() {
+    val criterion = CapabilityCatalog.verificationCriterion("media_stop_youtube")
+    assertTrue(criterion.contains("Equivalentes: parar YouTube"))
+    assertTrue(criterion.contains("Alcance: Se envía el control a la sesión de YouTube"))
+  }
+
   @Test fun volumeAndModeSchemasDoNotRequireInventedPercentages() {
     val schema = StructuredCommandClient.buildRequest("pedido", Calendar.getInstance())
       .getJSONObject("generationConfig").getJSONObject("responseJsonSchema").toString()

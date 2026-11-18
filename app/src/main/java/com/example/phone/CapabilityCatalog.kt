@@ -78,14 +78,23 @@ object CapabilityCatalog {
     "calendar_delete" to "Eliminar un evento seleccionado localmente, tras confirmación.",
     "youtube" to "Buscar en YouTube.", "music" to "Reproducir un título; conservar Spotify o YouTube si se indicó. Es distinto de buscar o de controlar la reproducción actual.",
     "volume_set" to "Ajustar volumen multimedia a porcentaje explícito.",
-    "open_app" to "Abrir una aplicación por su nombre, como app_open. Obligatorios: name.", "settings" to "Abrir ajustes de conectividad en general, sin activar ni desactivar redes. Obligatorios: kind.",
+    "open_app" to "Abrir aplicación por su nombre.", "settings" to "Abrir ajustes de conectividad; no cambiar conectividad automáticamente.",
     "temporary_mode" to "Aplicar volumen multimedia/silencio/No molestar por duración explícita y restaurar.",
     "workflow" to "Secuencia explícita de dos a diez acciones admitidas para hacer ahora; sin condiciones ni pasos omitidos.",
   )
   val choices: Map<String, String> = LinkedHashMap(LocalIntentRegistry.default.choices).apply {
-    putIfAbsent("end_mode", getValue("temporary_mode_end"))
+    put("end_mode", getValue("temporary_mode_end"))
+    put("open_app", "Abrir una aplicación por su nombre, como app_open. Obligatorios: name.")
+    put("settings", "Abrir ajustes de conectividad en general, sin activar ni desactivar redes. Obligatorios: kind.")
     parameterChoices.forEach { (key, description) -> putIfAbsent(key, description) }
   }
+
+  // Groq confirmation keeps the metadata it used before Decisions descriptions were compacted.
+  internal fun verificationCriterion(choice: String): String =
+    LocalIntentRegistry.default.verificationCriterion(choice)
+      ?: fixed[choice]?.let { PhoneCommandCodec.summary(it) + "; sin parámetros ni condiciones adicionales." }
+      ?: parameterChoices[choice]
+      ?: choices.getValue(choice)
 
   private fun fixedCommand(choice: String): PhoneCommand? =
     fixed[choice] ?: LocalIntentRegistry.default.definitions.firstOrNull { it.id == choice }?.fixed

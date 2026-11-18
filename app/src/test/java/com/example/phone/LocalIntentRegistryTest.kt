@@ -11,7 +11,7 @@ class LocalIntentRegistryTest {
     registry.definitions.forEach {
       assertTrue(it.id, it.description.isNotBlank() && it.examples.size >= 2)
       assertTrue(it.id, it.mechanism.isNotBlank() && it.expectedResult.isNotBlank())
-      val required = it.parameters.filter { parameter -> parameter.required }.joinToString { parameter -> parameter.name }
+      val required = it.decisionParameters.joinToString()
       assertEquals(it.id, required, registry.choices.getValue(it.id).substringAfter(" Obligatorios: ", "").removeSuffix("."))
       assertEquals(it.parameters.size, it.parameters.map { p -> p.name }.distinct().size)
     }
