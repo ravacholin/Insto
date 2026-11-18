@@ -1,0 +1,30 @@
+{
+  "origin": "synthetic",
+  "root": {
+    "className": "android.widget.FrameLayout",
+    "children": [
+      {
+        "id": "com.whatsapp:id/conversation_contact_name",
+        "text": "Instinct"
+      },
+      {
+        "id": "com.whatsapp:id/entry",
+        "text": "",
+        "editable": true,
+        "focused": true
+      },
+      {
+        "id": "com.whatsapp:id/voice_note_btn",
+        "className": "android.widget.Button",
+        "controlName": "Mensaje de voz",
+        "clickable": true,
+        "bounds": [
+          100,
+          100,
+          180,
+          150
+        ]
+      }
+    ]
+  }
+}

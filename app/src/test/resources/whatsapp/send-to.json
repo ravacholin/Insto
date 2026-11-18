@@ -1,0 +1,26 @@
+{
+  "origin": "synthetic",
+  "root": {
+    "className": "android.widget.FrameLayout",
+    "children": [
+      {
+        "text": "Enviar a"
+      },
+      {
+        "text": "Instinct"
+      },
+      {
+        "id": "com.whatsapp:id/send",
+        "className": "android.widget.Button",
+        "controlName": "Enviar",
+        "clickable": true,
+        "bounds": [
+          100,
+          100,
+          180,
+          150
+        ]
+      }
+    ]
+  }
+}

@@ -61,11 +61,14 @@ def main():
     sources += [str(ROOT / "app/src/main/java/com/example/context/SharedTextContext.kt")]
     sources += [str(ROOT / "app/src/main/java/com/example" / path) for path in (
         "assist/AutoSendGuard.kt", "assist/ShareConfirmationPolicy.kt", "assist/ShareSendAttempt.kt",
+        "assist/UiNode.kt", "assist/WhatsAppScreenReader.kt", "assist/WhatsAppSendEvent.kt",
+        "assist/TextSendMachine.kt", "assist/AudioShareMachine.kt", "assist/TextSendAttempt.kt",
         "whatsapp/PhoneNumberUtils.kt")]
     tests = [ROOT / "app/src/test/java/com/example/audio/VoiceSessionPolicyTest.kt"]
     tests += [ROOT / "app/src/test/java/com/example/context/SharedTextContextTest.kt"]
     tests += [ROOT / "app/src/test/java/com/example" / name for name in (
-        "AutoSendGuardTest.kt", "ShareConfirmationPolicyTest.kt")]
+        "AutoSendGuardTest.kt", "ShareConfirmationPolicyTest.kt", "TextSendAttemptTest.kt",
+        "WhatsAppSendMachineTest.kt")]
     for path in sorted((ROOT / "app/src/test/java/com/example/phone").glob("*Test.kt")):
         text = path.read_text()
         if any(token in text for token in ("import android.", "import androidx.", "org.robolectric", "com.example.testsupport")):
