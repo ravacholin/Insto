@@ -1016,8 +1016,7 @@ internal class FloatingSessionController(
   fun openFloatingInstinct(onDispatched: () -> Unit) {
     val state = screen
     if (state.mode == FloatingMode.SENDING) return
-    val app = application
-    val prefs = runBlockingPrefs(app)
+    val prefs = kotlinx.coroutines.runBlocking { repository.getCurrentPreferences() }
     val contact = prefs.pinnedContact
     if (contact == null) {
       screen = state.copy(error = "Configurá el contacto de Instinct para abrir WhatsApp.")
