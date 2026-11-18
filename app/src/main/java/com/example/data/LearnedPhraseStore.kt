@@ -41,7 +41,7 @@ class LearnedPhraseStore internal constructor(
     context.applicationContext.learnedPhraseDataStore,
     { name ->
       val pm = context.applicationContext.packageManager
-      runCatching {
+      kotlin.runCatching {
         val intent = pm.getLaunchIntentForPackage(name) ?: return@runCatching false
         val activity = pm.resolveActivity(intent, 0)?.activityInfo ?: return@runCatching false
         activity.packageName == name && activity.enabled && activity.exported && activity.applicationInfo.enabled &&
