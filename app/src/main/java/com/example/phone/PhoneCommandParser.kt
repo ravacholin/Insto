@@ -5,6 +5,15 @@ import java.util.Locale
 
 /** Deliberately anchored grammar: mentioning a capability is not an instruction to use it. */
 class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { java.util.Calendar.getInstance() }) {
+  /** General searches require a leading command verb and a nonempty query. */
+  fun chatGptSearchQuery(text: String, local: PhoneRoute = parse(text)): String? {
+    val match = chatGptSearchPrefix.find(text.trimStart()) ?: return null
+    val verb = normalize(match.groupValues[1])
+    if (verb !in setOf("busca", "buscar", "search")) return null
+    if (local is PhoneRoute.Local || local is PhoneRoute.Clarify) return null
+    return text.trimStart().substring(match.range.last + 1).trim().takeIf { it.isNotEmpty() }
+  }
+
   fun parseReply(context: String, text: String): PhoneRoute {
     val direct = parse(text)
     if (direct != PhoneRoute.Instinct) return direct
@@ -155,6 +164,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
   }
 
   companion object {
+    private val chatGptSearchPrefix = Regex("^(\\p{L}[\\p{L}\\p{M}]*)(?:\\s*:\\s*|\\s+)")
     private const val COURTESY = "(?:por (?:favor|fa)|porfa)"
     private val politeness = Regex("^$COURTESY[,\\s]+[¿¡]*\\s*")
     internal val courtesySuffix = Regex("[,\\s]+$COURTESY[.!?]*$", RegexOption.IGNORE_CASE)

@@ -2,11 +2,14 @@ package com.example.ui
 
 import android.Manifest
 import android.app.Application
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
@@ -444,7 +447,8 @@ class MainViewModel @JvmOverloads constructor(
       confirmFloatingAction(normalized != "no"); return true
     }
     val local = phoneParser.parse(text)
-    val fresh = local is PhoneRoute.Local || RequestSafetyPolicy.isQuestion(text) || text.trimStart().startsWith("¿") ||
+    val searchQuery = phoneParser.chatGptSearchQuery(text, local)
+    val fresh = searchQuery != null || local is PhoneRoute.Local || RequestSafetyPolicy.isQuestion(text) || text.trimStart().startsWith("¿") ||
       Regex("^(?:que|como|por que|donde|cual|instinct|explica|conta|ayuda|necesito|quiero|abri|busca|pone|agenda|llama)\\b").containsMatchIn(normalized)
     val contacts = floatingState.value.contactOptions
     if (contacts.isNotEmpty()) {
@@ -467,9 +471,9 @@ class MainViewModel @JvmOverloads constructor(
     val retry = retryLocalCommand
     if (retry != null && retryLocalText == text) { runPhoneCommand(retry.first,retry.second); return true }
     retryLocalCommand = null; retryLocalText = null
-    RequestSafetyPolicy.rejection(text)?.let { retainDecisionRequest(it); return true }
+    if (searchQuery == null) RequestSafetyPolicy.rejection(text)?.let { retainDecisionRequest(it); return true }
     val correction = Regex("^(?:mejor|cambia|cambiale|que dure|durante|a las?|de la|el segundo|la segunda|el primero|la primera)\\b").containsMatchIn(normalized)
-    if (semanticDraft != null && (local !is PhoneRoute.Local || correction)) {
+    if (searchQuery == null && semanticDraft != null && (local !is PhoneRoute.Local || correction)) {
       workflow.invalidatePreview(); syncWorkflow()
       val result = try { semanticDraft!!.reply(text, java.util.Calendar.getInstance()) } catch (_: Exception) {
         retainDecisionRequest("Ese dato no es válido. Conservé el pedido; corregilo antes de confirmar."); return true
@@ -504,8 +508,34 @@ class MainViewModel @JvmOverloads constructor(
     confirmation=null; cameraCommand=null; contactsCommand=null; notificationsCommand=null; appChoiceCommand=null
     workflow.invalidatePreview(); syncWorkflow()
     floatingState.value = floatingState.value.copy(needsConfirmation=false,appOptions=emptyList(),contactOptions=emptyList(),needsCamera=false,needsContacts=false,needsNotifications=false)
+    if (searchQuery != null) {
+      openChatGptSearch(searchQuery, onDispatched)
+      return true
+    }
     routedRequestText = text
     return interpretWithGemini(text,local,null)
+  }
+
+  private fun openChatGptSearch(query: String, onDispatched: () -> Unit) {
+    val url = Uri.parse("https://chatgpt.com/").buildUpon()
+      .appendQueryParameter("q", query)
+      .appendQueryParameter("hints", "search")
+      .build()
+    val intent = Intent(Intent.ACTION_VIEW, url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+      getApplication<Application>().startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+      retainDecisionRequest("No se encontró una app para abrir ChatGPT. El pedido se conserva.")
+      return
+    } catch (_: SecurityException) {
+      retainDecisionRequest("No se pudo abrir ChatGPT. El pedido se conserva.")
+      return
+    }
+    pendingFloatingAudio?.file?.delete()
+    pendingFloatingAudio = null
+    pendingTranscript = null
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null, status = null)
+    onDispatched()
   }
 
   private fun applyResolvedRoute(route: PhoneRoute, text: String): Boolean = when (route) {
