@@ -226,7 +226,7 @@ class FloatingHybridRoutingTest {
       runCurrent()
       assertEquals(FloatingMode.TYPING, vm.floatingAssistant.value.mode)
       assertEquals("iluminá acá", vm.floatingAssistant.value.text)
-      assertTrue(vm.floatingAssistant.value.error!!.contains("contacto"))
+      assertEquals("No pude interpretar el pedido", vm.floatingAssistant.value.error)
       vm.sendFloatingText { fail("No dispatch") }
       runCurrent()
       assertEquals(FloatingMode.SENDING, vm.floatingAssistant.value.mode)
@@ -267,6 +267,7 @@ class FloatingHybridRoutingTest {
     val file = File.createTempFile("hybrid-original", ".m4a", app.cacheDir).apply { writeText("original audio") }
     var transcripts = 0
     var calls = 0
+    var groqCalls = 0
     val capture = object : FloatingAudioCapture {
       override val snapshot get() = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1500, .5f)
       override fun start() = Result.success(Unit)
@@ -275,7 +276,8 @@ class FloatingHybridRoutingTest {
     }
     val vm = MainViewModel(app, capture, UnconfinedTestDispatcher(testScheduler),
       AudioTranscriber { transcripts++; "pedido desconocido" },
-      HybridPhoneRouter({ true }, DecisionClassifier { calls++; throw DecisionException("Error de conexión") }))
+      HybridPhoneRouter({ true }, DecisionClassifier { calls++; throw DecisionException("Error de conexión") }),
+      groqFallback = StructuredCommandExtractor { groqCalls++; throw DecisionException("Groq sin conexión") })
     try {
       vm.startFloatingListening { fail("No dispatch") }
       runCurrent()
@@ -286,6 +288,8 @@ class FloatingHybridRoutingTest {
       runCurrent()
       assertEquals(1, transcripts)
       assertEquals(2, calls)
+      assertEquals(2, groqCalls)
+      assertEquals("pedido desconocido", vm.floatingAssistant.value.transcript)
       assertEquals("original audio", file.readText())
       assertNotNull(vm.floatingAssistant.value.error)
     } finally { vm.dismissFloatingAssistant(); file.delete(); Dispatchers.resetMain() }

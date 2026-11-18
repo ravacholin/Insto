@@ -66,7 +66,7 @@ class FloatingGeminiCoordinatorTest {
       override suspend fun extract(text: String): List<PhoneCommand> = error("Typed boundary expected")
       override suspend fun interpret(request: InterpretationRequest): InterpretationResult = InterpretationResult.Query()
     }
-    val vm = MainViewModel(app, hybridRouter = router, structuredExtractor = extractor)
+    val vm = MainViewModel(app, hybridRouter = router, groqFallback = extractor)
     try {
       vm.updateFloatingText("ayudame a estudiar"); vm.sendFloatingText { fail("No contact configured") }; advanceUntilIdle()
       assertFalse(vm.floatingAssistant.value.needsConfirmation)

@@ -17,11 +17,12 @@ data class SemanticDecision(
 )
 
 
-/** Every NEW request is classified before local parameter parsing. No generative second pass. */
+/** Registry access and compatibility routing for callers outside the coordinator. */
 class HybridPhoneRouter(
   private val enabled: () -> Boolean,
   private val classifier: DecisionClassifier,
   private val registry: LocalIntentRegistry = LocalIntentRegistry.default,
+  internal val policy: DecisionsPolicy = DecisionsPolicy(),
 ) {
   fun isEnabled(): Boolean = enabled()
   fun needsDecision(text: String, local: PhoneRoute): Boolean = enabled() && local != PhoneRoute.Cancel
@@ -37,23 +38,17 @@ class HybridPhoneRouter(
     if (!enabled()) throw DecisionException("Configurá y activá Gemini Decisions en IA. El pedido se conserva.")
     val result = classifier.classify(text)
     currentCoroutineContext().ensureActive()
-    val scores = listOf(result.probability, result.confidence, result.unconditional, result.safetyConfidence)
-    if (scores.any { !it.isFinite() || it !in 0.0..1.0 } || result.choice !in registry.choices) {
-      throw DecisionException("Respuesta inválida de Gemini Decisions. El pedido se conserva para reintentar.")
+    try {
+      policy.validate(result)
+      require(result.choice in registry.choices)
+    } catch (_: IllegalArgumentException) {
+      throw DecisionException("Respuesta inválida de Gemini Decisions. El pedido se conserva para reintentar.",
+        GeminiFailureKind.INVALID_RESPONSE)
     }
-    if (result.choice in LocalIntentRegistry.fallbackIds || scores.any { it < .95 }) {
-      // A literal platform search must not turn into sending the original audio to Instinct.
-      // Decisions still runs first; recovery is restricted to these validated, explicit searches.
-      val candidate = (PhoneCommandParser().parse(text) as? PhoneRoute.Local)?.command
-      val id = when (candidate) {
-        is PhoneCommand.YouTubeSearch -> "youtube"
-        is PhoneCommand.SpotifySearch -> "spotify"
-        else -> null
-      }
-      if (id != null && candidate != null && registry.definitions.any { it.id == id } && NativeIntentSpec.forCommand(candidate) != null) {
-        return registry.resolve(id, text)
-      }
-      return PhoneRoute.Instinct
+    val simpleTurn = ConversationSession.splitSteps(text).size == 1 &&
+      !RequestSafetyPolicy.fixedActionHasExtraParameters(text) && RequestSafetyPolicy.rejection(text) == null
+    if (result.choice in LocalIntentRegistry.fallbackIds || policy.action(result, simpleTurn, text) != DecisionAction.ACCEPT) {
+      return recoverSearch(text) ?: PhoneRoute.Instinct
     }
     return registry.resolve(result.choice, text)
   }

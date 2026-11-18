@@ -49,10 +49,12 @@ internal object GeminiTransport {
               val status = c.responseCode
               if (status !in 200..299) throw when (status) {
                 401, 403 -> DecisionException("$service rechazó la clave o el acceso. Revisá la configuración; el pedido se conserva.", GeminiFailureKind.AUTH)
+                408 -> DecisionException("$service tardó demasiado. El pedido se conserva.", GeminiFailureKind.TIMEOUT)
                 429 -> DecisionException("$service alcanzó su cuota. Esperá antes de reintentar; el pedido se conserva.", GeminiFailureKind.QUOTA)
                 404, 405, 501 -> DecisionException("El servicio de $service no está disponible para esta cuenta. El pedido se conserva.", GeminiFailureKind.UNAVAILABLE)
                 in 500..599 -> DecisionException("$service tiene un problema temporal. El pedido se conserva para reintentar.", GeminiFailureKind.SERVER)
-                else -> DecisionException("$service rechazó la solicitud. El pedido se conserva.", GeminiFailureKind.INVALID_RESPONSE)
+                in 400..499 -> DecisionException("$service rechazó la solicitud. El pedido se conserva.", GeminiFailureKind.INVALID_REQUEST)
+                else -> DecisionException("Respuesta inválida de $service. El pedido se conserva.", GeminiFailureKind.INVALID_RESPONSE)
               }
               c.inputStream.use { input ->
                 val out = ByteArrayOutputStream()
@@ -70,7 +72,8 @@ internal object GeminiTransport {
           }
           if (continuation.isActive) result.fold(
             { continuation.resume(it) },
-            { continuation.resumeWithException(it as? DecisionException ?: DecisionException("No se pudo conectar con $service. El pedido se conserva.", GeminiFailureKind.NETWORK)) })
+            { continuation.resumeWithException(it as? DecisionException ?: DecisionException("No se pudo conectar con $service. El pedido se conserva.",
+              if (it is java.net.SocketTimeoutException) GeminiFailureKind.TIMEOUT else GeminiFailureKind.NETWORK)) })
         }
         continuation.invokeOnCancellation { runCatching { active.get()?.disconnect() }; worker.interrupt() }
         worker.start()

@@ -118,7 +118,7 @@ class FloatingAvailabilityRegressionTest {
     transcriber = AudioTranscriber { error("Transcription unavailable") })
 
   private fun assertAudioQueryDispatchesOnce(transcript: String, classifier: DecisionClassifier,
-    extractor: StructuredCommandExtractor = StructuredCommandExtractor { error("No extraction") },
+    fallback: StructuredCommandExtractor? = null,
     transcriber: AudioTranscriber = AudioTranscriber { transcript }) = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     configureInstinct()
@@ -133,7 +133,7 @@ class FloatingAvailabilityRegressionTest {
     }
     var sent = 0
     val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), transcriber,
-      HybridPhoneRouter({ true }, classifier), structuredExtractor = extractor)
+      HybridPhoneRouter({ true }, classifier), groqFallback = fallback)
     try {
       vm.startFloatingListening { sent++ }; runCurrent(); vm.sendFloatingAudio { sent++ }; advanceUntilIdle()
       assertEquals(1, sent)

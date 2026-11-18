@@ -100,7 +100,7 @@ class RoutingAvailabilityTest {
   @Test fun pendingDraftAndExplicitRestrictionsRemainLocalOnFailure() = runTest {
     val c = coordinator(DecisionClassifier { throw DecisionException("offline") })
     val draft = DraftPlan.fromCommands(listOf(PhoneCommand.Timer(600)))
-    assertTrue(c.interpret(InterpretationRequest("cambiá ese dato", draft), PhoneRoute.Instinct) is InterpretationResult.Failure)
+    assertEquals(draft, (c.interpret(InterpretationRequest("cambiá ese dato", draft), PhoneRoute.Instinct) as InterpretationResult.Incomplete).draft)
     for (text in listOf("no prender linterna", "prender linterna cuando llegue", "llevame a Retiro sin peajes"))
       assertTrue(text, c.interpret(InterpretationRequest(text), parser.parse(text)) is InterpretationResult.Rejected)
   }
