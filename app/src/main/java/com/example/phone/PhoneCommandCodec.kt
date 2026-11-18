@@ -17,7 +17,7 @@ object PhoneCommandCodec {
    is PhoneCommand.Navigate -> obj("navigate", "destination" to c.destination, "mode" to c.mode.name)
    is PhoneCommand.MapSearch -> obj("maps", "query" to c.query)
    is PhoneCommand.Dial -> obj("dial", "target" to c.target)
-   is PhoneCommand.CalendarEvent -> obj("calendar", "title" to c.title, "beginMillis" to c.beginMillis, "endMillis" to c.endMillis)
+   is PhoneCommand.CalendarEvent -> obj("calendar", "title" to c.title, "beginMillis" to c.beginMillis, "endMillis" to c.endMillis, "description" to c.description)
    is PhoneCommand.Camera -> obj("camera", "video" to c.video)
    is PhoneCommand.YouTubeSearch -> obj("youtube", "query" to c.query)
    is PhoneCommand.SpotifySearch -> obj("spotify", "query" to c.query)
@@ -57,19 +57,13 @@ object PhoneCommandCodec {
     val optionalTargets=setOf(PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE)
     require(if(action in optionalTargets) true else (argument != null) == (action in targetActions))
     val requiredContent=setOf(PlatformAction.MESSAGE_SEND,PlatformAction.MESSAGE_DRAFT,PlatformAction.TEXT_SHARE,PlatformAction.FILE_RENAME)
-    val optionalContent=setOf(PlatformAction.CALENDAR_UPDATE)
+    val optionalContent=CalendarSelection.actions
     require(if(action in requiredContent) content != null else action in optionalContent || content == null)
     if(action==PlatformAction.FILE_RENAME) require(content !in setOf(".","..") && content!!.none {it=='/' || it=='\\' || it.code<32})
-    if(action==PlatformAction.CALENDAR_QUERY) require(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}").matches(argument!!) && java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.ROOT).apply {isLenient=false}.parse(argument)!=null)
-    if(action==PlatformAction.CALENDAR_UPDATE && content!=null) {
-      val changes=JSONObject(content)
-      require(changes.keys().asSequence().toSet().all {it in setOf("beginMillis","durationSeconds")})
-      fun exact(name:String):Long {val n=changes.get(name);require(n is Number && n.toDouble().isFinite() && n.toDouble()==n.toLong().toDouble());return n.toLong()}
-      require(exact("beginMillis")>0)
-      if(changes.has("durationSeconds")) require(exact("durationSeconds") in 1..Int.MAX_VALUE.toLong())
-    }
     if(action in setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_SEND,PlatformAction.MESSAGE_OPEN,PlatformAction.MESSAGE_DRAFT)) require(PhoneNumbers.canonical(argument!!) == argument)
-    PhoneCommand.Platform(action,argument,percent,content)
+    PhoneCommand.Platform(action,argument,percent,content).also { command ->
+      if (action in CalendarSelection.actions) CalendarSelection.decode(command)
+    }
    }
    "timer" -> { fields("seconds","label"); PhoneCommand.Timer(integer("seconds",1..Int.MAX_VALUE), str("label", "")) }
    "alarm" -> { fields("hour","minute","days","label","date");
@@ -85,7 +79,7 @@ object PhoneCommandCodec {
    "navigate" -> { fields("destination","mode"); PhoneCommand.Navigate(str("destination"),TravelMode.valueOf(str("mode","DRIVING"))) }
    "maps" -> { fields("query"); PhoneCommand.MapSearch(str("query")) }
    "dial" -> { fields("target"); PhoneCommand.Dial(str("target")) }
-   "calendar" -> { fields("title","beginMillis","endMillis"); val begin=num("beginMillis"); val end=num("endMillis"); require(begin > 0 && end > begin && end-begin <= Int.MAX_VALUE.toLong()*1000); PhoneCommand.CalendarEvent(str("title"),begin,end) }
+   "calendar" -> { fields("title","beginMillis","endMillis","description"); val begin=num("beginMillis"); val end=num("endMillis"); require(begin > 0 && end > begin && end-begin <= Int.MAX_VALUE.toLong()*1000); PhoneCommand.CalendarEvent(str("title"),begin,end,if(o.has("description")) str("description") else null) }
    "camera" -> { fields("video"); PhoneCommand.Camera(bool("video",false)) }
    "youtube" -> { fields("query"); PhoneCommand.YouTubeSearch(str("query")) }
    "spotify" -> { fields("query"); PhoneCommand.SpotifySearch(str("query")) }
@@ -102,17 +96,22 @@ object PhoneCommandCodec {
  }
  fun summary(command: PhoneCommand): String = when(command) {
   is PhoneCommand.Platform -> {
-    val content=command.content?.let {raw ->
-      if(command.action==PlatformAction.CALENDAR_UPDATE) {
-        val changes=JSONObject(raw)
-        java.text.DateFormat.getDateTimeInstance().format(java.util.Date(changes.getLong("beginMillis"))) +
-          if(changes.has("durationSeconds")) " · ${changes.getLong("durationSeconds")/60} min" else " · conservar duración"
-      } else raw
-    }
+    val calendar = if (command.action in CalendarSelection.actions) CalendarSelection.decode(command) else null
+    val content = if (calendar == null) command.content else listOfNotNull(
+      calendar.from,
+      calendar.until?.let { "hasta $it (excluido)" },
+      calendar.at,
+      "por la tarde".takeIf { calendar.afternoon },
+      "próximos eventos".takeIf { calendar.next },
+      calendar.newDate?.let { "nueva fecha $it" },
+      calendar.newTime?.let { "nueva hora $it" },
+      calendar.legacyBegin?.let { java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it)) },
+      calendar.durationSeconds?.let { "duración $it s" },
+    ).joinToString(" · ").takeIf(String::isNotEmpty)
     (LocalIntentRegistry.default.definitions.firstOrNull { it.accepts(command) }?.description ?: "Acción del dispositivo") +
-      (listOfNotNull(command.argument,command.percent?.let {"$it%"},content).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: "")
+      (listOfNotNull(if (calendar == null) command.argument else calendar.title,command.percent?.let {"$it%"},content).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: "")
   }
-  is PhoneCommand.CalendarEvent -> "Calendario: ${command.title} · ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(java.util.Date(command.beginMillis))} · ${(command.endMillis-command.beginMillis)/60000} min"
+  is PhoneCommand.CalendarEvent -> "Calendario: ${command.title} · ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(java.util.Date(command.beginMillis))} · ${(command.endMillis-command.beginMillis)/60000} min" + (command.description?.let { " · $it" } ?: "")
   is PhoneCommand.Timer -> "Temporizador: ${command.seconds / 60} min ${command.seconds % 60} s ${command.label}"
   is PhoneCommand.Media -> {
     val operation = when (command.operation) {

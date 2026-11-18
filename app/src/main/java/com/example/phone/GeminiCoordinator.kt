@@ -263,7 +263,13 @@ class GeminiCoordinator(
     if (proposed?.size != steps.size) return false
     return steps.zip(proposed).all { (text, step) ->
       RequestSafetyPolicy.rejection(text) == null && when (val route = PhoneCommandParser { request.now }.parse(text)) {
-        is PhoneRoute.Local -> step.complete(request.now) == route.command
+        is PhoneRoute.Local -> {
+          val completed = step.complete(request.now)
+          if (completed is PhoneCommand.Platform && route.command is PhoneCommand.Platform &&
+            completed.action == route.command.action && completed.action in CalendarSelection.actions)
+            CalendarSelection.decode(completed) == CalendarSelection.decode(route.command)
+          else completed == route.command
+        }
         is PhoneRoute.Clarify -> {
           val expected = when (route.context.removePrefix("intent:")) {
             "app", "app_open" -> "open_app"

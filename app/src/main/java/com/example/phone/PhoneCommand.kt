@@ -28,7 +28,7 @@ sealed interface PhoneCommand {
   data class MapSearch(val query: String) : PhoneCommand
   data class SavePlace(val alias: String, val address: String) : PhoneCommand
   data class Dial(val target: String) : PhoneCommand
-  data class CalendarEvent(val title: String, val beginMillis: Long, val endMillis: Long) : PhoneCommand
+  data class CalendarEvent(val title: String, val beginMillis: Long, val endMillis: Long, val description: String? = null) : PhoneCommand
   data class Camera(val video: Boolean = false) : PhoneCommand
   data class YouTubeSearch(val query: String) : PhoneCommand
   data class SpotifySearch(val query: String) : PhoneCommand

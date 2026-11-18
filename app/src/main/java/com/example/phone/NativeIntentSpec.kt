@@ -43,7 +43,7 @@ data class NativeIntentSpec(
         is PhoneCommand.Camera -> NativeIntentSpec(if (command.video) "android.media.action.VIDEO_CAMERA" else "android.media.action.STILL_IMAGE_CAMERA")
         is PhoneCommand.Dial -> PhoneNumbers.canonical(command.target)?.let { NativeIntentSpec("android.intent.action.DIAL", "tel:$it") }
         is PhoneCommand.CalendarEvent -> NativeIntentSpec("android.intent.action.INSERT", "content://com.android.calendar/events",
-          mimeType = "vnd.android.cursor.dir/event", stringExtras = mapOf("title" to command.title), longExtras = mapOf("beginTime" to command.beginMillis, "endTime" to command.endMillis))
+          mimeType = "vnd.android.cursor.dir/event", stringExtras = mapOf("title" to command.title) + command.description?.let { mapOf("description" to it) }.orEmpty(), longExtras = mapOf("beginTime" to command.beginMillis, "endTime" to command.endMillis))
         else -> null
       }
       return spec?.takeIf { (it.dataUri?.length ?: 0) <= 2048 }

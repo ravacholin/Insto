@@ -15,6 +15,11 @@ object CapabilityRequirements {
   return buildList {
    if(command is PhoneCommand.Torch && denied(Manifest.permission.CAMERA))add("permiso de cámara pendiente")
    if(command is PhoneCommand.Dial && PhoneNumbers.canonical(command.target)==null && denied(Manifest.permission.READ_CONTACTS))add("permiso de contactos pendiente")
+   if (command is PhoneCommand.Platform && command.action in CalendarSelection.actions) {
+    if (denied(Manifest.permission.READ_CALENDAR)) add("permiso de lectura del calendario pendiente")
+    if (command.action != PlatformAction.CALENDAR_QUERY && denied(Manifest.permission.WRITE_CALENDAR))
+      add("permiso de escritura del calendario pendiente")
+   }
    if(command is PhoneCommand.Media) {
     val component=ComponentName(context,MediaAccessService::class.java)
     val access=if(Build.VERSION.SDK_INT>=27) context.getSystemService(NotificationManager::class.java).isNotificationListenerAccessGranted(component)

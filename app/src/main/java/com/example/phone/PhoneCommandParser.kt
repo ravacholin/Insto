@@ -60,6 +60,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     val command = request.withCommandHead()
     if (Regex("^(?:borra|limpia|pone en cero) (?:el )?(?:tiempo del )?cronometro(?: para empezar de cero)?$").matches(s)) return PhoneRoute.Local(PhoneCommand.Stopwatch(StopwatchOp.RESET))
     ExtendedCommandParser.parse(s)?.let { return it }
+    if (RequestSafetyPolicy.rejection(text) == null) CalendarSelectionParser(calendarNow).parse(command)?.let { return it }
     val everyday = EverydayCommandParser(calendarNow).parse(command)
     // An explicit platform search must not be read as a contact or document search for its title.
     if (everyday is PhoneRoute.Local && (everyday.command is PhoneCommand.SpotifySearch || everyday.command is PhoneCommand.YouTubeSearch))

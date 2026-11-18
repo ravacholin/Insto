@@ -42,18 +42,30 @@ class CommandDraft(val id: String, fields: JSONObject) {
     val required = CapabilityCatalog.specs.getValue(type).required.toMutableSet()
     if (type == "volume" && o.optString("operation") == "SET" || type == "temporary_mode" && o.optString("kind") == "MEDIA_VOLUME") required += "percent"
     if (type == "alarm" && o.has("hour") && o.getInt("hour") in 1..12) required += "period"
+    if (type in CalendarSelection.types) {
+      if (type != "calendar_query" && !o.has("title") && (!o.has("from") || !o.has("at") || o.has("until"))) required += "title"
+      if (type == "calendar_query" && listOf("title", "from", "next").none(o::has)) required += "from"
+      if (type == "calendar_update" && listOf("newDate", "newTime", "durationSeconds").none(o::has)) required += "newTime"
+    }
     return required.filterNot(o::has).toSet()
   }
   fun complete(now: Calendar): PhoneCommand? {
     if (missing().isNotEmpty()) return null
     val o = json()
+    if (type in CalendarSelection.types) {
+      val action = PlatformAction.valueOf(type.uppercase(java.util.Locale.ROOT))
+      o.remove("type")
+      val title = o.remove("title") as String?
+      val selection = CalendarSelection.fromFields(o, title)
+      return PhoneCommandCodec.decode(PhoneCommandCodec.encode(selection.command(action)))
+    }
     if (type == "calendar" && o.has("date")) {
       val title = o.getString("title")
       require(title.none { it in "\"“”" }) { "Título con comillas no representable" }
       val route = PhoneCommandParser { now.clone() as Calendar }.parse(
         "agendá \"$title\" ${o.getString("date")} a las ${o.getString("time")} durante ${o.optInt("durationSeconds", 3600)} segundos")
       return when (route) {
-        is PhoneRoute.Local -> (route.command as PhoneCommand.CalendarEvent).copy(title = title)
+        is PhoneRoute.Local -> (route.command as PhoneCommand.CalendarEvent).copy(title = title, description = o.optString("description").takeIf(String::isNotEmpty))
         is PhoneRoute.Clarify -> null
         else -> throw IllegalArgumentException("Fecha u hora inválida")
       }
@@ -93,7 +105,8 @@ data class DraftPlan(
       "hour", "time" -> "¿A qué hora? Indicá mañana/tarde o una hora de 24 horas."
       "period" -> "¿De la mañana o de la tarde?"
       "minute" -> "¿A qué minuto?"
-      "date" -> "¿Qué día?"
+      "date", "from" -> "¿Qué día o intervalo?"
+      "newTime" -> "¿Cuál debe ser la nueva fecha, hora o duración?"
       "title" -> "¿Qué título le pongo?"
       "percent" -> "¿Qué porcentaje, entre cero y cien?"
       "destination" -> "¿A dónde querés ir?"
@@ -191,6 +204,16 @@ data class DraftPlan(
   }
   companion object {
     fun fromCommands(commands: List<PhoneCommand>, now: Calendar = Calendar.getInstance()): DraftPlan = DraftPlan(commands.mapIndexed { index, command ->
+      if (command is PhoneCommand.Platform && command.action in CalendarSelection.actions) {
+        val selection = CalendarSelection.decode(command)
+        require(selection.legacyBegin == null)
+        val fields = JSONObject(selection.command(command.action).content!!).apply {
+          remove("version")
+          put("type", command.action.name.lowercase(java.util.Locale.ROOT))
+          selection.title?.let { put("title", it) }
+        }
+        return@mapIndexed CommandDraft("s${index + 1}", fields)
+      }
       val fields = PhoneCommandCodec.encode(command)
       if (command is PhoneCommand.Alarm) fields.put("period", "24H")
       if (command is PhoneCommand.TemporaryMode) {

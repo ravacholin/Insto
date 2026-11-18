@@ -4,8 +4,11 @@ import java.util.Calendar
 
 internal class CalendarRequestParser(private val now: () -> Calendar) {
   fun parse(request: FoldedRequest): PhoneRoute? {
-    val m = Regex("^(?:agenda|programa|crea)\\s+(.+?)\\s+(hoy|pasado manana|manana|(?:el\\s+)?[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?)\\s+a\\s+las?\\s+(.+)$").matchEntire(request.text)
-    if (m == null) return if (Regex("^(?:agenda|crea (?:un )?evento)\\b").containsMatchIn(request.text))
+    val dates = CalendarSelectionParser(now)
+    val description = Regex(" (?:con descripcion|descripcion)[: ]+(.+)$").find(request.text)
+    val syntax = description?.let { request.text.substring(0, it.range.first).trimEnd(',', ' ') } ?: request.text
+    val m = Regex("^(?:agenda|programa|crea|agrega)\\s+(.+?)\\s+(${dates.datePattern})\\s+a\\s+las?\\s+(.+)$").matchEntire(syntax)
+    if (m == null) return if (Regex("^(?:agenda|(?:crea|agrega) (?:un |una )?(?:evento|reunion|clase|turno|cita))\\b").containsMatchIn(request.text))
       PhoneRoute.Clarify("Indicá título, fecha y hora: agendá reunión mañana a las 17:00.", "calendar") else null
     val title = request.capture(m, 1)
     val timeAndDuration = m.groupValues[3].split(" durante ", limit = 2)
@@ -31,19 +34,9 @@ internal class CalendarRequestParser(private val now: () -> Calendar) {
     if (period == "de la noche") hour = if (hour == 12) 0 else hour % 12 + 12
     if (period in listOf("am", "de la manana")) hour %= 12
     val current = now()
-    val date = (current.clone() as Calendar).apply { isLenient = false }
+    val date = dates.date(m.groupValues[2], current)
+      ?: return PhoneRoute.Unsupported("Esa fecha no existe en la zona horaria del teléfono.")
     try {
-      when (val day = m.groupValues[2]) {
-        "hoy" -> Unit
-        "manana" -> date.add(Calendar.DAY_OF_MONTH, 1)
-        "pasado manana" -> date.add(Calendar.DAY_OF_MONTH, 2)
-        else -> {
-          val parts = day.removePrefix("el ").trim().split('/').map { it.toInt() }
-          // Clear first: invalid dates must not normalize using fields from the current day.
-          date.clear()
-          date.set(parts.getOrNull(2) ?: current.get(Calendar.YEAR), parts[1] - 1, parts[0])
-        }
-      }
       date.set(Calendar.HOUR_OF_DAY, hour); date.set(Calendar.MINUTE, minute)
       date.set(Calendar.SECOND, 0); date.set(Calendar.MILLISECOND, 0)
       val begin = date.timeInMillis
@@ -57,7 +50,7 @@ internal class CalendarRequestParser(private val now: () -> Calendar) {
         }
       }
       if (begin <= current.timeInMillis) return PhoneRoute.Unsupported("Ese horario ya pasó. Indicá una fecha y hora futuras para el evento.")
-      return PhoneRoute.Local(PhoneCommand.CalendarEvent(title, begin, Math.addExact(begin, durationSeconds.toLong() * 1000)))
+      return PhoneRoute.Local(PhoneCommand.CalendarEvent(title, begin, Math.addExact(begin, durationSeconds.toLong() * 1000), description?.let { request.capture(it, 1) }))
     } catch (_: IllegalArgumentException) {
       return PhoneRoute.Unsupported("Esa fecha u hora no existe en la zona horaria del teléfono. Revisá el evento.")
     }
