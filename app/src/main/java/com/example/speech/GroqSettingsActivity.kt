@@ -96,7 +96,7 @@ class GroqSettingsActivity : ComponentActivity() {
             TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/docs/pricing#gemini-decision"))) } }) { Text("Cuotas, precios y uso de datos de Gemini") }
             HorizontalDivider()
             Text("Interpretar voz con Groq", style = MaterialTheme.typography.headlineSmall)
-            Text("Se envía una copia de cada grabación a Groq para transcribirla en español y decidir si es un pedido del teléfono o para Instinct. Si es para Instinct, se manda el audio original por WhatsApp.")
+            Text("Se envía una copia de cada grabación a Groq para transcribirla en español y decidir si es un pedido del teléfono o para Instinct. Si es para Instinct, se manda el audio original por WhatsApp. En casos excepcionales, un modelo rápido de Groq recibe solo el texto del pedido para verificar un intent de Gemini Decisions.")
             Text("Requiere internet. El plan gratuito tiene cuotas; consultá los límites de tu cuenta. Tu clave se guarda cifrada solo en este teléfono.")
             Text(if (configured) "Hay una clave guardada. Podés reemplazarla o borrarla." else "Cargá tu clave personal una sola vez.")
             OutlinedTextField(value, { value = it }, label = { Text("Clave de Groq") }, singleLine = true,

@@ -4,6 +4,8 @@ El catálogo reúne `LocalIntentRegistry`, `LocalIntentPhrases`, `NativeActionPa
 
 Podés decir «Modo silenciar», «Cuenta atrás de cinco minutos», «Más volumen», «Siguiente canción» o «Guíame hasta Córdoba en bici». Con «Modo silencio por veinte minutos», Insto programa la restauración del ajuste anterior.
 
+Con Gemini Decisions activado, Groq solo puede verificar un intent registrado en un pedido nuevo de un paso, sin borrador ni contexto externo. Las dos puntuaciones de clasificación deben ser de al menos 0,94, con alguna por debajo de 0,95, y ambas puntuaciones de seguridad deben alcanzar 0,98. La verificación recibe solo el texto del turno. Usa la clave de **IA → Groq**, el modelo `llama-3.1-8b-instant` y un plazo de 1,5 segundos. Si Groq confirma la categoría, Insto valida los datos y pide revisión antes de ejecutar. Si discrepa o falla, el pedido queda disponible para editarlo.
+
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 
 Total de entradas: 94.

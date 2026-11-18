@@ -48,6 +48,7 @@ object CapabilityCatalog {
     spec("media", "operation", "operation" to text(*MediaOp.entries.map { it.name }.toTypedArray()),
       "packageName" to text(*MediaApp.entries.map { it.packageName }.toTypedArray())),
     spec("temporary_mode", "kind seconds", "kind" to text("MEDIA_VOLUME", "SILENT", "DND"), "seconds" to integer(1, 86400), "percent" to integer(0, 100)),
+    spec("platform", "action", "action" to text("SILENT_ON", "SILENT_OFF", "VIBRATE_ON", "DND_ON", "DND_OFF")),
     spec("end_mode", ""),
   ).associateBy { it.type }
 
@@ -76,9 +77,26 @@ object CapabilityCatalog {
     "workflow" to "Secuencia explícita de dos a diez acciones admitidas para hacer ahora; sin condiciones ni pasos omitidos.",
   )
   val choices: Map<String, String> = LinkedHashMap(LocalIntentRegistry.default.choices).apply {
-    fixed.forEach { (key, command) -> put(key, PhoneCommandCodec.summary(command) + "; sin parámetros ni condiciones adicionales.") }
-    putAll(parameterChoices)
+    fixed.forEach { (key, command) -> putIfAbsent(key, PhoneCommandCodec.summary(command) + "; sin parámetros ni condiciones adicionales.") }
+    parameterChoices.forEach { (key, description) -> putIfAbsent(key, description) }
     put("unsupported", "Fuera del catálogo, negación, condición o detalles no representables. Un dato faltante conserva la categoría de acción para pedir aclaración.")
+  }
+
+  private fun fixedCommand(choice: String): PhoneCommand? =
+    fixed[choice] ?: LocalIntentRegistry.default.definitions.firstOrNull { it.id == choice }?.fixed
+
+  fun extractionType(choice: String): String = when (choice) {
+    "volume_set" -> "volume"
+    "app_open" -> "open_app"
+    else -> fixedCommand(choice)?.let { PhoneCommandCodec.encode(it).getString("type") } ?: choice
+  }
+
+  fun acceptsDraft(choice: String, draft: CommandDraft): Boolean {
+    if (draft.type != extractionType(choice)) return false
+    val expected = fixedCommand(choice)?.let(PhoneCommandCodec::encode) ?: return true
+    val actual = draft.json()
+    return expected.keys().asSequence().all { actual.opt(it) == expected.get(it) } &&
+      actual.keys().asSequence().all(expected::has)
   }
 
   fun accepts(choice: String, command: PhoneCommand): Boolean = when {

@@ -171,7 +171,8 @@ class MainViewModel @JvmOverloads constructor(
   private val phoneParser = PhoneCommandParser()
   private val phoneExecutor = PhoneActionExecutor(application)
   private val conversation = ConversationSession()
-  private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor)
+  private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor,
+    com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).read() }))
   private var semanticDraft: DraftPlan? = null
   private data class QueryPreview(val text: String, val generation: Long)
   private var pendingQuery: QueryPreview? = null
@@ -565,7 +566,7 @@ class MainViewModel @JvmOverloads constructor(
       }
       is InterpretationResult.Plan -> {
         clarification = null; conversation.clear()
-        semanticDraft = result.draft ?: DraftPlan.fromCommands(result.commands)
+        semanticDraft = result.draft ?: runCatching { DraftPlan.fromCommands(result.commands) }.getOrNull()
         previewWorkflow(result.commands)
         if (result.fallback) floatingState.value = floatingState.value.copy(status = "Gemini de respaldo: revisá los pasos y confirmá para ejecutarlos.")
       }
