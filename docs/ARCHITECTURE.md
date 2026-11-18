@@ -63,3 +63,48 @@ El marcador se consume en una captura. El JSON privado conserva la estructura,
 los IDs, las clases, los bounds, los flags y los nombres de controles incluidos
 en una lista fija. Los nombres de destinatarios, archivos y textos de mensajes
 deben representarse con valores de prueba al preparar el fixture.
+
+## Sesión del asistente flotante
+
+`MainViewModel` conserva la interfaz que usa Compose y delega el flujo flotante
+a `FloatingSessionController`. El controlador administra el trabajo asíncrono,
+envía sus resultados al reductor y proyecta el estado a la UI.
+`PhoneCommandRunner` adapta el ejecutor local e `InstinctDispatcher` adapta
+los envíos de texto, audio y adjuntos.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Listening: abrir micrófono
+    Listening --> Finalizing: listo, silencio o pausa
+    Finalizing --> Transcribing: audio listo
+    Finalizing --> Retained: audio conservado al pausar
+    Transcribing --> Interpreting: transcripción disponible
+    Idle --> Interpreting: enviar texto
+    Interpreting --> AwaitingClarification: faltan datos
+    Interpreting --> AwaitingConfirmation: revisar propuesta
+    Interpreting --> AwaitingPermission: permiso solicitado
+    Interpreting --> AwaitingChoice: hay varias opciones
+    Interpreting --> Dispatching: consulta para Instinct
+    Interpreting --> Done: acción local completada
+    AwaitingClarification --> Interpreting: responder
+    AwaitingConfirmation --> RunningWorkflow: confirmar secuencia
+    AwaitingPermission --> Dispatching: permiso concedido
+    AwaitingPermission --> Retained: permiso denegado
+    AwaitingChoice --> Dispatching: opción elegida
+    RunningWorkflow --> Done: secuencia finalizada
+    Dispatching --> Done: entrega aceptada
+    Dispatching --> Retained: error
+    Transcribing --> Retained: pausa o error
+    Interpreting --> Retained: pausa o error
+    Retained --> Interpreting: reintentar con transcripción conservada
+    Retained --> Transcribing: reintentar sin transcripción
+    Interpreting --> Idle: edición o cierre
+    Retained --> Idle: cierre
+```
+
+El identificador de sesión acompaña los efectos. El reductor descarta los
+resultados de sesiones invalidadas y libera una captura tardía que ninguna
+sesión conserva. El reintento consulta primero la transcripción conservada.
+El estado persistido de una secuencia sigue bajo responsabilidad de
+`WorkflowRunner`. La grabación de la pantalla principal queda en el ViewModel.
