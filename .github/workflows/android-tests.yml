@@ -2,13 +2,11 @@ name: Android tests
 
 on:
   pull_request:
-    paths-ignore:
-      - 'docs/**'
   push:
     branches:
+      - main
       - 'feat/**'
-    paths-ignore:
-      - 'docs/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -71,3 +69,26 @@ jobs:
             app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/
           if-no-files-found: ignore
+      - name: Run Android lint
+        if: ${{ !cancelled() }}
+        continue-on-error: ${{ hashFiles('app/lint-baseline.xml') == '' }}
+        run: ./gradlew --no-daemon lintDebug
+      - name: Upload Android lint report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: android-lint-report
+          path: app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+      - name: Generate JaCoCo unit test coverage
+        id: coverage
+        continue-on-error: true
+        run: ./gradlew --no-daemon -PinstoCoverage :app:createDebugUnitTestCoverageReport
+      - name: Upload JaCoCo coverage
+        if: steps.coverage.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v5
+        with:
+          name: android-unit-test-coverage
+          path: app/build/reports/coverage/test/debug/
+          if-no-files-found: error
