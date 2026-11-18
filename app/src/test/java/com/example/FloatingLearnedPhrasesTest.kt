@@ -22,7 +22,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class FloatingLearnedPhrasesTest {
-  private val phrase = "Un poquito menos de sonido"
+  private val phrase = "Un poco menos de sonido"
   private val command = PhoneCommand.Volume(VolumeOp.DOWN)
 
   @Test fun aprendeDespuesDeConfirmarYRepiteSinModelo() = runTest {

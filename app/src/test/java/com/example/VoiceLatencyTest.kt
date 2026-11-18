@@ -32,7 +32,7 @@ class VoiceLatencyTest {
       override fun finish(): RecordedAudio { codecTime += 50; return RecordedAudio(file, "audio/mp4") }
       override fun cancel() {}
     }
-    val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { delay(200); "bajá un poquito el sonido" },
+    val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { delay(200); "un poco menos de sonido" },
       HybridPhoneRouter({ true }, DecisionClassifier { delay(300); SemanticDecision("volume_down", .99, .99, .99, .99) }),
       monotonicClock = { 1000 + codecTime + testScheduler.currentTime }, learnedPhrases = emptyLearnedPhrasesForTest())
     try {

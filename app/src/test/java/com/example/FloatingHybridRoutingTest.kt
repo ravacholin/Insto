@@ -80,7 +80,7 @@ class FloatingHybridRoutingTest {
       calls++; SemanticDecision("volume_down", .99, .99, .99, .99)
     }))
     try {
-      vm.updateFloatingText("bajá un poquito el sonido")
+      vm.updateFloatingText("un poco menos de sonido")
       vm.sendFloatingText { fail("Native action") }
       runCurrent()
       assertEquals(1, calls)
