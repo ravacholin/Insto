@@ -37,7 +37,7 @@ sealed interface PhoneCommand {
   data class Alarm(val hour: Int, val minute: Int, val days: List<Int> = emptyList(), val label: String = "", val date: String? = null) : PhoneCommand
   data class ClockList(val alarms: Boolean) : PhoneCommand
   data class Stopwatch(val operation: StopwatchOp) : PhoneCommand
-  data class OpenApp(val name: String) : PhoneCommand
+  data class OpenApp(val name: String, internal val packageName: String? = null) : PhoneCommand
   data class Volume(val operation: VolumeOp, val percent: Int = 0) : PhoneCommand
   data class Torch(val enabled: Boolean) : PhoneCommand
   data class Settings(val kind: String) : PhoneCommand

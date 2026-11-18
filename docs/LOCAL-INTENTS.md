@@ -987,3 +987,16 @@ Importar plantillas de rutinas revisadas desde JSON.
 - Ejecución: ConfiguredRoutineStore con selección SAF e importación confirmada
 - Resultado: Listar no ejecuta; importar reemplaza solo después de revisar las plantillas
 - Disponibilidad: adaptador implementado; depende de app, versión y permisos
+
+## Frases aprendidas
+
+Si Insto tuvo que interpretar un pedido de un solo paso con el modelo y
+confirmaste una ejecución exitosa, puede guardar la variante para la próxima
+vez. Se admiten linterna, volumen, modo silencio o vibración, apertura de
+cámara o app, controles multimedia y cronómetro. Una coincidencia usa la ruta
+local con todos sus controles. Las preguntas, las negaciones y las condiciones
+no coinciden. Los pedidos con borrador o texto compartido quedan fuera del
+aprendizaje.
+
+Administrá la lista en **IA → Frases aprendidas**. Decí o escribí
+«olvidá esta frase» para borrar la última entrada que usaste.

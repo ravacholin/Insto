@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.data.emptyLearnedPhrasesForTest
+
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import com.example.audio.*
@@ -32,7 +34,7 @@ class VoiceLatencyTest {
     }
     val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { delay(200); "bajá un poquito el sonido" },
       HybridPhoneRouter({ true }, DecisionClassifier { delay(300); SemanticDecision("volume_down", .99, .99, .99, .99) }),
-      monotonicClock = { 1000 + codecTime + testScheduler.currentTime })
+      monotonicClock = { 1000 + codecTime + testScheduler.currentTime }, learnedPhrases = emptyLearnedPhrasesForTest())
     try {
       vm.startFloatingListening { fail("Native request") }; runCurrent()
       vm.sendFloatingAudio { fail("Native request") }; advanceUntilIdle()

@@ -14,6 +14,7 @@ data class PhoneActionResult(
   val stopwatchAutomation: StopwatchOp? = null,
   val contactOptions: List<ContactOption> = emptyList(),
   val outcome: PhoneActionOutcome = PhoneActionOutcome.COMPLETED,
+  val launchedAppPackage: String? = null,
 ) {
   val retainRequest: Boolean get() = outcome == PhoneActionOutcome.NEEDS_INPUT || outcome == PhoneActionOutcome.REJECTED || outcome == PhoneActionOutcome.UNCERTAIN || stopwatchAutomation != null || needsCamera || needsContacts || needsNotifications || contactOptions.isNotEmpty()
 }

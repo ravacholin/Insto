@@ -30,7 +30,7 @@ data class InterpretationRequest(
 
 sealed interface InterpretationResult {
   data class Query(val needsConfirmation: Boolean = false) : InterpretationResult
-  data class Direct(val command: PhoneCommand) : InterpretationResult
+  data class Direct(val command: PhoneCommand, val learned: Boolean = false) : InterpretationResult
   data class Clarification(val prompt: String, val context: String) : InterpretationResult
   data class Plan(val commands: List<PhoneCommand>, val fallback: Boolean = false, val draft: DraftPlan? = null) : InterpretationResult
   data class Incomplete(val draft: DraftPlan, val prompt: String = draft.prompt(), val fallback: Boolean = false) : InterpretationResult

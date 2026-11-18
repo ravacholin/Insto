@@ -55,7 +55,7 @@ class PhoneActionExecutor(
           else { launch(intent); PhoneActionResult(if (command is PhoneCommand.ClockList) "Abriendo el Reloj." else "Solicitud enviada al Reloj. Revisá allí la alarma o el temporizador.", outcome = PhoneActionOutcome.HANDOFF) }
         }
         is PhoneCommand.Stopwatch -> NativeStopwatchController(context).execute(command.operation, confirmed)
-        is PhoneCommand.OpenApp -> openApp(command.name)
+        is PhoneCommand.OpenApp -> openApp(command)
         is PhoneCommand.Volume -> {
           val audio = context.getSystemService(AudioManager::class.java)
           if (audio.isVolumeFixed) PhoneActionResult("Este dispositivo no permite cambiar el volumen.", outcome = PhoneActionOutcome.REJECTED)
@@ -99,14 +99,16 @@ class PhoneActionExecutor(
     return exact.ifEmpty { apps.filter { PhoneCommandParser.normalize(it.label).contains(normalized) } }
   }
 
-  private fun openApp(name: String): PhoneActionResult {
-    val matches = matchingApps(name)
+  private fun openApp(command: PhoneCommand.OpenApp): PhoneActionResult {
+    val name = command.name
+    val matches = if (command.packageName == null) matchingApps(name)
+      else matchingApps(command.packageName).filter { it.packageName == command.packageName }
     if (matches.isEmpty()) return PhoneActionResult("No encontré una aplicación llamada $name.", outcome = PhoneActionOutcome.REJECTED)
     if (matches.size > 1) return PhoneActionResult("Encontré varias aplicaciones. Elegí una.", appOptions = matches.take(20), outcome = PhoneActionOutcome.NEEDS_INPUT)
     val target = matches.single()
     val intent = context.packageManager.getLaunchIntentForPackage(target.packageName) ?: return PhoneActionResult("Esa aplicación no se puede abrir.", outcome = PhoneActionOutcome.REJECTED)
     launch(intent)
-    return PhoneActionResult("Abriendo ${target.label}.", outcome = PhoneActionOutcome.HANDOFF)
+    return PhoneActionResult("Abriendo ${target.label}.", outcome = PhoneActionOutcome.HANDOFF, launchedAppPackage = target.packageName)
   }
 
   private fun launch(intent: Intent) { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
