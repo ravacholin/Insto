@@ -205,6 +205,13 @@ class MainViewModel @JvmOverloads constructor(
 
   private fun previewWorkflow(commands: List<PhoneCommand>) {
     try {
+      if (commands.size > 1) {
+        val missing = commands.filterIsInstance<PhoneCommand.OpenApp>().firstOrNull { phoneExecutor.matchingApps(it.name).isEmpty() }
+        if (missing != null) {
+          retainDecisionRequest("No encontré la aplicación «${missing.name}». Revisá ese paso antes de confirmar el plan.")
+          return
+        }
+      }
       workflow.prepare(commands)
       if (semanticDraft == null && commands.size > 1) semanticDraft = runCatching { DraftPlan.fromCommands(commands) }.getOrNull()
       previewInvalidatedByEdit = false

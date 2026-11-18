@@ -24,7 +24,8 @@ class GeminiCoordinator(
     val canDeferToInstinct = canDeferToInstinct(request, local)
     val indirectPhoneRequest = RequestSafetyPolicy.isIndirectPhoneRequest(request.text)
     val steps = ConversationSession.splitSteps(request.text)
-    if (request.draft == null && steps.size > 1) {
+    val explicitQuestion = '?' in request.text || '¿' in request.text || RequestSafetyPolicy.isGeneralRequest(request.text)
+    if (request.draft == null && steps.size > 1 && !explicitQuestion) {
       steps.firstNotNullOfOrNull(RequestSafetyPolicy::rejection)?.let { return InterpretationResult.Rejected(it) }
       // Plan locally only when the existing conversation parser understands every step.
       // Local and model plans enter the same confirmation flow.
@@ -37,6 +38,17 @@ class GeminiCoordinator(
         else -> Unit
       }
     }
+    val directSequence = request.draft == null && steps.size in 2..10 &&
+      !explicitQuestion &&
+      steps.all { step ->
+        val head = PhoneCommandParser.leadingWord.find(PhoneCommandParser.normalize(step))?.groupValues?.get(1)
+        val explicit = head?.let(PhoneCommandParser::canonicalVerb) != null
+        explicit && when (val route = PhoneCommandParser { request.now }.parse(step)) {
+          is PhoneRoute.Local -> true
+          is PhoneRoute.Clarify -> route.context in setOf("alarm", "timer", "volume", "app")
+          else -> false
+        }
+      }
     val isSingleNewTurn = request.draft == null && steps.size == 1
     if (isSingleNewTurn) {
       when (local) {
@@ -55,7 +67,8 @@ class GeminiCoordinator(
       }
     }
     if (!router.needsDecision(request.text, local)) return when (local) {
-      is PhoneRoute.Local -> InterpretationResult.Direct(local.command)
+      is PhoneRoute.Local -> if (isSingleNewTurn) InterpretationResult.Direct(local.command)
+        else InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
       PhoneRoute.Instinct -> when {
         request.draft != null -> InterpretationResult.Incomplete(request.draft)
         indirectPhoneRequest -> InterpretationResult.Rejected("No pude interpretar el pedido")
@@ -74,6 +87,22 @@ class GeminiCoordinator(
     var failure: GeminiFailureKind? = null
     try {
       return withTimeout(12_000) {
+        if (directSequence) {
+          GeminiDiagnostics.extraction()
+          val result = try {
+            extract(request, extractor, fallback = false, timeout = 8_000)
+          } catch (error: DecisionException) {
+            if (error.kind in setOf(GeminiFailureKind.INVALID_REQUEST, GeminiFailureKind.INVALID_RESPONSE)) throw error
+            InterpretationResult.Failure(error.kind, error.message.orEmpty())
+          }
+          if (result is InterpretationResult.Failure) {
+            failure = result.kind
+            return@withTimeout interpretWithFallback(request, local, steps, stage, result.kind)
+          }
+          return@withTimeout if (result is InterpretationResult.Query || !preservesSteps(request, steps, result))
+            InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
+          else result
+        }
         val decision = try {
           classify(request)
         } catch (error: DecisionException) {
@@ -235,7 +264,14 @@ class GeminiCoordinator(
     return steps.zip(proposed).all { (text, step) ->
       RequestSafetyPolicy.rejection(text) == null && when (val route = PhoneCommandParser { request.now }.parse(text)) {
         is PhoneRoute.Local -> step.complete(request.now) == route.command
-        is PhoneRoute.Clarify -> request.sourceContext != null || step.complete(request.now) == null
+        is PhoneRoute.Clarify -> {
+          val expected = when (route.context.removePrefix("intent:")) {
+            "app", "app_open" -> "open_app"
+            "volume_set" -> "volume"
+            else -> route.context.removePrefix("intent:")
+          }
+          step.type == expected && (request.sourceContext != null || step.complete(request.now) == null)
+        }
         is PhoneRoute.Unsupported -> route.recoverable
         else -> true
       }

@@ -89,14 +89,18 @@ class PhoneActionExecutor(
   }
 
   @Suppress("DEPRECATION")
-  private fun openApp(name: String): PhoneActionResult {
+  internal fun matchingApps(name: String): List<AppOption> {
     val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
     val apps = context.packageManager.queryIntentActivities(query, 0).map {
       AppOption(it.loadLabel(context.packageManager).toString(), it.activityInfo.packageName)
     }.distinctBy { it.packageName }
     val normalized = PhoneCommandParser.normalize(name)
     val exact = apps.filter { PhoneCommandParser.normalize(it.label) == normalized || it.packageName == name }
-    val matches = exact.ifEmpty { apps.filter { PhoneCommandParser.normalize(it.label).contains(normalized) } }
+    return exact.ifEmpty { apps.filter { PhoneCommandParser.normalize(it.label).contains(normalized) } }
+  }
+
+  private fun openApp(name: String): PhoneActionResult {
+    val matches = matchingApps(name)
     if (matches.isEmpty()) return PhoneActionResult("No encontré una aplicación llamada $name.", outcome = PhoneActionOutcome.REJECTED)
     if (matches.size > 1) return PhoneActionResult("Encontré varias aplicaciones. Elegí una.", appOptions = matches.take(20), outcome = PhoneActionOutcome.NEEDS_INPUT)
     val target = matches.single()
