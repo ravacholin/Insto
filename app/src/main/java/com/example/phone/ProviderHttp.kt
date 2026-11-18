@@ -6,7 +6,10 @@ import java.net.HttpURLConnection
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -44,6 +47,8 @@ internal object ProviderHttp {
       connectionLogger?.invoke("${provider.label}_connection_ms=$millis")
     }
   }
+
+  private val networkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
   private data class Timeouts(val connectMillis: Int, val readMillis: Int)
 
@@ -131,9 +136,11 @@ internal object ProviderHttp {
     }
   }
 
-  private suspend fun <T> cancellable(cancel: () -> Unit, block: () -> T): T = coroutineScope {
+  private suspend fun <T> cancellable(cancel: () -> Unit, block: () -> T): T =
     suspendCancellableCoroutine { continuation ->
-      val worker = launch(Dispatchers.IO) {
+      // DNS del sistema puede seguir bloqueado aunque se cancele la Call.
+      // El turno deja de esperarlo al vencer su plazo o al invalidar la sesión.
+      val worker = networkScope.launch(start = CoroutineStart.LAZY) {
         try {
           continuation.resume(block())
         } catch (error: Exception) {
@@ -144,8 +151,8 @@ internal object ProviderHttp {
         runCatching(cancel)
         worker.cancel()
       }
+      worker.start()
     }
-  }
 }
 
 internal fun InputStream.readBounded(limit: Int, tooLarge: () -> Exception): ByteArray {
