@@ -68,7 +68,7 @@ class StructuredCommandClient(
           if (it is PhoneCommand.Platform) {
             require(it.action.name in CapabilityCatalog.specs.getValue("platform").fields.getValue("action").values)
           }
-          require(it !is PhoneCommand.SavePlace && !(it is PhoneCommand.TemporaryMode && it.approximate))
+          require(it !is PhoneCommand.SavePlace && !(it is PhoneCommand.TemporaryMode && (it.approximate || it.deadlineMillis != null)))
           require(it !is PhoneCommand.CalendarEvent || it.beginMillis > now.timeInMillis)
         }
         return InterpretationResult.Plan(decoded)

@@ -14,7 +14,7 @@ class DecisionsPolicy(
     // The declared confidences describe the same evaluations as their probabilities.
     // In particular, confident rejection can have a very low affirmative probability.
     val category = minOf(decision.probability, decision.confidence)
-    if (decision.unconditional < HIGH || decision.safetyConfidence < HIGH) return DecisionAction.RETAIN
+    if (!hasAffirmativeSafety(decision)) return DecisionAction.RETAIN
     return when {
       category >= HIGH -> DecisionAction.ACCEPT
       category >= simpleThreshold && simpleTurn && lowRisk[decision.choice]?.matches(PhoneCommandParser.normalize(text)) == true ->
@@ -24,6 +24,9 @@ class DecisionsPolicy(
       else -> DecisionAction.RETAIN
     }
   }
+
+  internal fun hasAffirmativeSafety(decision: SemanticDecision): Boolean =
+    decision.unconditional >= HIGH && decision.safetyConfidence >= HIGH
 
   internal fun validate(decision: SemanticDecision) {
     require(decision.choice in CapabilityCatalog.choices &&

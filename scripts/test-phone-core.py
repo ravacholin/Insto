@@ -47,7 +47,7 @@ def main():
     # Explicit boundary: pure command/registry policies and file-based routines,
     # without Android executors, preferences/storage or permission adapters.
     names = ["PhoneCommand", "PhoneActionResult", "PhoneCommandCodec", "PhoneCommandParser",
-             "EverydayCommandParser", "ExtendedCommandParser", "CalendarRequestParser",
+             "EverydayCommandParser", "ExtendedCommandParser", "CalendarRequestParser", "CalendarSelection", "CalendarSelectionParser",
              "CommandDuration", "HybridPhoneRouter", "GeminiDecisionsClient", "GroqIntentVerifier", "StructuredCommandClient",
              "ConversationSession", "WorkflowRunner", "TemporaryModePolicy", "MediaSessionPolicy",
              "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "GeminiTransport", "CapabilityCatalog",

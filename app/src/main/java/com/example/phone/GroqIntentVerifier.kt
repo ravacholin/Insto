@@ -71,7 +71,7 @@ class GroqIntentVerifier(
     } catch (error: DecisionException) {
       throw error
     } catch (_: Exception) {
-      throw DecisionException("No pude interpretar el pedido", GeminiFailureKind.INVALID_RESPONSE)
+      throw DecisionException("Groq devolvió una interpretación inválida. Revisá el pedido y reintentá.", GeminiFailureKind.INVALID_RESPONSE)
     }
   }
 
