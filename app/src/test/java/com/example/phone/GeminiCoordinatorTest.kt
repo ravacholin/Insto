@@ -196,6 +196,13 @@ class GeminiCoordinatorTest {
       c.interpret(InterpretationRequest(text), PhoneCommandParser().parse(text)))
   }
 
+  @Test fun localWorkflowDoesNotTreatAnUnresolvedAppNameAsACompleteStep() = runTest {
+    val c = coordinator("instinct")
+    val text = "bajá el volumen y abrí AplicacionInexistente"
+    assertTrue(c.interpret(InterpretationRequest(text), PhoneCommandParser().parse(text))
+      is InterpretationResult.Rejected)
+  }
+
   @Test fun fallbackCannotOmitOrReorderRecognizedWorkflowSteps() = runTest {
     val router = HybridPhoneRouter({ true }, DecisionClassifier { throw DecisionException("offline", GeminiFailureKind.SERVER) })
     val text = "iluminá acá y bajá el volumen"

@@ -29,7 +29,10 @@ class GeminiCoordinator(
       // Plan locally only when the existing conversation parser understands every step.
       // Local and model plans enter the same confirmation flow.
       when (val plan = ConversationSession { request.now }.accept(request.text, allowSemantic = router.isEnabled())) {
-        is ConversationResult.Plan -> return InterpretationResult.Plan(plan.commands)
+        is ConversationResult.Plan -> {
+          // Parsing an app's name does not resolve it to an installed handler.
+          if (plan.commands.none { it is PhoneCommand.OpenApp }) return InterpretationResult.Plan(plan.commands)
+        }
         is ConversationResult.Prompt -> return InterpretationResult.Rejected(plan.message)
         else -> Unit
       }
