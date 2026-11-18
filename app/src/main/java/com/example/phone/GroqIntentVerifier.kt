@@ -27,9 +27,10 @@ class GroqIntentVerifier(
       Categoría: $criterion
     """.trimIndent()
     val body = JSONObject()
-      .put("model", "llama-3.1-8b-instant")
+      .put("model", "openai/gpt-oss-20b")
       .put("temperature", 0)
-      .put("max_completion_tokens", 8)
+      .put("reasoning_effort", "low")
+      .put("max_completion_tokens", 256)
       .put("messages", JSONArray()
         .put(JSONObject().put("role", "system").put("content", instruction))
         .put(JSONObject().put("role", "user").put("content", request.text)))
