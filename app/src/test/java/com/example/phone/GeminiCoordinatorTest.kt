@@ -11,6 +11,71 @@ class GeminiCoordinatorTest {
   private fun coordinator(choice: String, extractor: StructuredCommandExtractor = StructuredCommandExtractor { error("No extraction expected") }) =
     GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { decision(choice) }), extractor)
 
+  @Test fun elRespaldoSeSuperponeConDecisionsYConservaLaRevision() = runTest {
+    val command = PhoneCommand.Timer(600)
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {
+      delay(3_000)
+      throw DecisionException("Sin acceso", GeminiFailureKind.AUTH)
+    }), StructuredCommandExtractor { error("Extracción primaria inesperada") },
+      fallback = StructuredCommandExtractor { delay(5_000); listOf(command) })
+    val result = c.interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
+    assertEquals(5_000L, currentTime)
+    assertEquals(listOf(command), (result as InterpretationResult.Plan).commands)
+    assertTrue(result.fallback)
+  }
+
+  @Test fun decisionsConservaPrecedenciaYCancelaElRespaldo() = runTest {
+    var started = false
+    var cancelled = false
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {
+      delay(500)
+      decision("torch_on")
+    }), StructuredCommandExtractor { error("Extracción primaria inesperada") },
+      fallback = StructuredCommandExtractor {
+        started = true
+        try { awaitCancellation() } finally { cancelled = true }
+      })
+    assertEquals(InterpretationResult.Direct(PhoneCommand.Torch(true)),
+      c.interpret(InterpretationRequest("iluminá acá"), PhoneRoute.Instinct))
+    assertTrue(started && cancelled)
+    assertEquals(500L, currentTime)
+  }
+
+  @Test fun unRespaldoYaListoNoSalteaLaVerificacionNiLaSeguridad() = runTest {
+    for (safety in listOf(.99, .3)) {
+      var extracted = false
+      var verified = false
+      val coordinator = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {
+        delay(500)
+        SemanticDecision("torch_on", .89, .89, safety, .99)
+      }), StructuredCommandExtractor { error("Extracción primaria inesperada") },
+        verifier = IntentVerifier { _, _ -> verified = true; false },
+        fallback = StructuredCommandExtractor { extracted = true; listOf(PhoneCommand.Torch(true)) })
+      val result = coordinator.interpret(InterpretationRequest("iluminá acá"), PhoneRoute.Instinct)
+      assertTrue(extracted)
+      assertEquals(safety == .99, verified)
+      assertTrue(result is InterpretationResult.Failure)
+    }
+  }
+
+  @Test fun cancelarElTurnoDescartaInclusoUnaPropuestaQueLlegaTarde() = runTest {
+    var delivered = false
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { awaitCancellation() }),
+      StructuredCommandExtractor { error("Extracción primaria inesperada") },
+      fallback = StructuredCommandExtractor {
+        withContext(NonCancellable) { delay(1000) }
+        listOf(PhoneCommand.Torch(true))
+      })
+    val turn = launch {
+      c.interpret(InterpretationRequest("iluminá acá"), PhoneRoute.Instinct)
+      delivered = true
+    }
+    runCurrent()
+    turn.cancel()
+    advanceUntilIdle()
+    assertFalse(delivered)
+  }
+
   @Test fun recognizedButUnparsedRequestsUseStructuredResolutionAcrossCapabilities() = runTest {
     val parser = PhoneCommandParser()
     val requests = listOf(
@@ -268,7 +333,7 @@ class GeminiCoordinatorTest {
     assertTrue(result is InterpretationResult.Rejected)
   }
 
-  @Test fun highConfidenceSkipsGroqAndEvenAStrongQueryPredictionCannotSendAPhoneRequest() = runTest {
+  @Test fun highConfidenceIgnoresBackupAndEvenAStrongQueryPredictionCannotSendAPhoneRequest() = runTest {
     val noGroq = StructuredCommandExtractor { error("Fallback called for healthy Decisions") }
     val noExtraction = StructuredCommandExtractor { error("No extraction expected") }
     val high = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {

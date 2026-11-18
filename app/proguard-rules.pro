@@ -19,3 +19,29 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# JNI del AAR WebRTC VAD y puntos de entrada que instancia Android.
+-keep class com.konovalov.vad.webrtc.** { *; }
+-keep class com.example.assist.PingAutoSendAccessibilityService { *; }
+-keep class com.example.assist.PingVoiceInteractionService { *; }
+-keep class com.example.assist.PingVoiceInteractionSessionService { *; }
+-keep class com.example.assist.PingAssistWidgetProvider { *; }
+-keep class com.example.phone.NotificationAccessService { *; }
+-keep class com.example.phone.MediaAccessService { *; }
+
+# ViewModelProvider resuelve este constructor por reflexión.
+-keepclassmembers class com.example.ui.MainViewModel {
+    public <init>(android.app.Application);
+}
+-keep class org.json.** { *; }
+
+# Adaptadores TLS opcionales de OkHttp. En Android se usa la plataforma del sistema.
+-dontwarn org.bouncycastle.jsse.BCSSLParameters
+-dontwarn org.bouncycastle.jsse.BCSSLSocket
+-dontwarn org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
+-dontwarn org.conscrypt.Conscrypt$Version
+-dontwarn org.conscrypt.Conscrypt
+-dontwarn org.conscrypt.ConscryptHostnameVerifier
+-dontwarn org.openjsse.javax.net.ssl.SSLParameters
+-dontwarn org.openjsse.javax.net.ssl.SSLSocket
+-dontwarn org.openjsse.net.ssl.OpenJSSE

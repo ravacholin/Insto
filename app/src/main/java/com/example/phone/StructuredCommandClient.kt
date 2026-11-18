@@ -1,7 +1,6 @@
 package com.example.phone
 
 import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Calendar
 import org.json.JSONArray
 import org.json.JSONObject
@@ -14,9 +13,7 @@ fun interface StructuredCommandExtractor {
 /** generateContent proposes data; every result is validated and reviewed before effects. */
 class StructuredCommandClient(
   private val key: () -> String?,
-  private val connectionFactory: () -> HttpURLConnection = {
-    URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent").openConnection() as HttpURLConnection
-  },
+  private val connectionFactory: (() -> HttpURLConnection)? = null,
 ) : StructuredCommandExtractor {
   override suspend fun extract(text: String): List<PhoneCommand> = when (val result = interpret(InterpretationRequest(text))) {
     is InterpretationResult.Plan -> result.commands
@@ -26,7 +23,7 @@ class StructuredCommandClient(
   override suspend fun interpret(request: InterpretationRequest): InterpretationResult {
     val input = request.modelInput()
     if (input.isBlank() || input.length > 16000) throw DecisionException("El pedido o su contexto es demasiado largo. Se conserva para editarlo.", GeminiFailureKind.INVALID_REQUEST)
-    val body = GeminiTransport.post(key, buildRequest(input, request.now).toString(), connectionFactory, 8000)
+    val body = GeminiTransport.post(key, buildRequest(input, request.now).toString(), "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent", connectionFactory, 8000)
     return try { parseInterpretation(body, request.now) } catch (_: Exception) {
       throw DecisionException("Respuesta inválida de la extracción de Gemini. El pedido se conserva.", GeminiFailureKind.INVALID_RESPONSE)
     }

@@ -33,12 +33,15 @@ import com.example.ui.MainViewModel
 import com.example.ui.FloatingMode
 import com.example.ui.screens.AssistOverlayScreen
 import com.example.ui.theme.PingAssistTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 
 class AssistActivity : ComponentActivity() {
   private val viewModel: MainViewModel by viewModels()
+  private var warmup: Job? = null
   private var autoSendEnabled by mutableStateOf(false)
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,6 +60,12 @@ class AssistActivity : ComponentActivity() {
       return
     }
     viewModel.prepareFloatingAssistant()
+    if (com.example.BuildConfig.DEBUG) {
+      com.example.phone.ProviderHttp.connectionLogger = { android.util.Log.d("InstoVoiceLatency", it) }
+    }
+    if (savedInstanceState == null) warmup = lifecycleScope.launch(Dispatchers.IO) {
+      com.example.phone.ProviderHttp.warm(com.example.phone.GeminiSettings(this@AssistActivity).isEnabled())
+    }
     if (savedInstanceState == null) receiveSharedText(intent)
     // A native handoff can stop this window before Compose gets another frame.
     // Observe until destruction so completion still closes the stopped overlay.
@@ -226,6 +235,8 @@ class AssistActivity : ComponentActivity() {
   }
 
   override fun onStop() {
+    warmup?.cancel()
+    warmup = null
     viewModel.pauseFloatingAssistant()
     super.onStop()
   }

@@ -70,3 +70,16 @@ Las regresiones Android revelaron tres problemas de aislamiento de las pruebas:
 La prueba de ciclo de vida exige identidad entre la Application del test y la del ViewModel, un único lanzamiento al componente exacto del Reloj y la finalización pendiente; detiene el flotante antes del siguiente frame y verifica cierre y consumo único, sin otro lanzamiento. Se restauran las aserciones de intents; no se usan recorders alternativos ni un ejecutor simulado. La actividad también tolera defensivamente un intent de inicio ausente.
 
 CI imprime las trazas completas de XML si falla un caso. No se deshabilitaron pruebas ni comprobaciones del workflow. La verificación final se muestra en los checks del PR.
+
+### Conexiones de Groq y Gemini
+
+En debug, `InstoVoiceLatency` emite una muestra por conexión adquirida con la suma
+de DNS y TLS, en milisegundos. Si el pool reutiliza una conexión, el tiempo suele
+ser cero. El script de latencia exporta las muestras por proveedor y el total de
+las etapas. Corré una tanda por versión con el mismo teléfono y red, y evitá
+usar la pantalla de IA mientras medís para que sus pruebas de conexión no se
+mezclen con el registro del flotante.
+
+El precalentamiento usa HEAD sin claves ni contenido del usuario. Las respuestas
+de interpretación siguen sujetas a la sesión activa, al plazo total y a las
+mismas validaciones locales aunque las solicitudes se superpongan.

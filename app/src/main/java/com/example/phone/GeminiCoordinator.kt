@@ -1,5 +1,7 @@
 package com.example.phone
 
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -101,82 +103,96 @@ class GeminiCoordinator(
           )) {
           return@withTimeout resolveStructured(request, local, steps, stage)
         }
-        val decision = try {
-          classify(request)
-        } catch (error: DecisionException) {
-          failure = error.kind
-          if (error.kind == GeminiFailureKind.INVALID_REQUEST) throw error
-          null
-        }
-        if (decision == null) {
-          return@withTimeout interpretWithFallback(request, local, steps, stage, failure)
-        }
-        val simpleTurn = isSingleNewTurn && request.sourceContext == null &&
-          !RequestSafetyPolicy.fixedActionHasExtraParameters(request.text)
-        var verifiedByGroq = false
-        when (router.policy.action(decision, simpleTurn, request.text)) {
-          DecisionAction.RETAIN -> {
-            if (router.policy.hasAffirmativeSafety(decision) && fallback != null && !canDeferToInstinct) {
-              return@withTimeout interpretWithFallback(request, local, steps, stage, GeminiFailureKind.INVALID_RESPONSE)
-            }
-            return@withTimeout unavailableRoute(request, local, GeminiFailureKind.INVALID_RESPONSE,
-              "Gemini no pudo validar la intención o sus condiciones. Revisá el pedido e indicá la acción y sus datos.")
+        val attempt = breaker.acquire()
+        val speculative: Deferred<Result<InterpretationResult>>? = if (attempt != null && fallback != null) async {
+          try {
+            Result.success(extract(request, fallback, fallback = true, timeout = 6_000))
+          } catch (error: CancellationException) {
+            throw error
+          } catch (error: Exception) {
+            Result.failure(error)
           }
-          DecisionAction.VERIFY -> {
-            val confirmed = try {
-              verifier?.let {
-                GeminiDiagnostics.verification()
-                withTimeoutOrNull(1500) { it.confirm(request, decision.choice) }
+        } else null
+        try {
+          val decision = try {
+            attempt?.let { classify(request, it) }
+          } catch (error: DecisionException) {
+            failure = error.kind
+            if (error.kind == GeminiFailureKind.INVALID_REQUEST) throw error
+            null
+          }
+          if (decision == null) {
+            return@withTimeout interpretWithFallback(request, local, steps, stage, failure, speculative)
+          }
+          val simpleTurn = isSingleNewTurn && request.sourceContext == null &&
+            !RequestSafetyPolicy.fixedActionHasExtraParameters(request.text)
+          var verifiedByGroq = false
+          when (router.policy.action(decision, simpleTurn, request.text)) {
+            DecisionAction.RETAIN -> {
+              if (router.policy.hasAffirmativeSafety(decision) && fallback != null && !canDeferToInstinct) {
+                return@withTimeout interpretWithFallback(request, local, steps, stage, GeminiFailureKind.INVALID_RESPONSE, speculative)
               }
-            } catch (error: CancellationException) {
-              throw error
-            } catch (_: Exception) {
-              false
+              return@withTimeout unavailableRoute(request, local, GeminiFailureKind.INVALID_RESPONSE,
+                "Gemini no pudo validar la intención o sus condiciones. Revisá el pedido e indicá la acción y sus datos.")
             }
-            if (confirmed != true) return@withTimeout unavailableRoute(
-              request, local, GeminiFailureKind.INVALID_RESPONSE,
-              "Groq no confirmó la interpretación. Revisá la acción y sus datos o comprobá la clave de Groq en IA.")
-            verifiedByGroq = true
-          }
-          DecisionAction.ACCEPT -> Unit
-        }
-        currentCoroutineContext().ensureActive()
-        if (request.draft == null && decision.choice in setOf("instinct", "unsupported"))
-          router.recoverSearch(request.text)?.let { return@withTimeout InterpretationResult.Direct(it.command) }
-        if (request.draft == null && steps.size > 1 && decision.choice != "workflow")
-          return@withTimeout InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
-        if (request.draft == null && router.hasIntent(decision.choice)) {
-          when (val registered = router.resolve(decision.choice, request.text)) {
-            is PhoneRoute.Local -> return@withTimeout if (verifiedByGroq)
-              InterpretationResult.Plan(listOf(registered.command)) else InterpretationResult.Direct(registered.command)
-            is PhoneRoute.Unsupported -> return@withTimeout InterpretationResult.Rejected(registered.message)
-            is PhoneRoute.Clarify -> {
-              val type = CapabilityCatalog.extractionType(decision.choice)
-              if (type !in CapabilityCatalog.specs || local is PhoneRoute.Clarify && request.sourceContext == null)
-                return@withTimeout InterpretationResult.Clarification(registered.prompt, registered.context)
+            DecisionAction.VERIFY -> {
+              val confirmed = try {
+                verifier?.let {
+                  GeminiDiagnostics.verification()
+                  withTimeoutOrNull(1500) { it.confirm(request, decision.choice) }
+                }
+              } catch (error: CancellationException) {
+                throw error
+              } catch (_: Exception) {
+                false
+              }
+              if (confirmed != true) return@withTimeout unavailableRoute(
+                request, local, GeminiFailureKind.INVALID_RESPONSE,
+                "Groq no confirmó la interpretación. Revisá la acción y sus datos o comprobá la clave de Groq en IA.")
+              verifiedByGroq = true
             }
-            else -> Unit
+            DecisionAction.ACCEPT -> Unit
           }
-        }
-        when {
-          decision.choice == "unsupported" && canDeferToInstinct -> InterpretationResult.Query()
-          decision.choice == "unsupported" && fallback != null ->
-            interpretWithFallback(request, local, steps, stage, GeminiFailureKind.INVALID_RESPONSE)
-          decision.choice == "instinct" -> if (request.draft != null || local != PhoneRoute.Instinct || indirectPhoneRequest)
-            InterpretationResult.Rejected("Hay un pedido del teléfono pendiente. Completalo o cancelalo; no se envió a Instinct.")
-            else InterpretationResult.Query()
-          decision.choice in CapabilityCatalog.fixed && request.draft == null -> {
-            if (RequestSafetyPolicy.fixedActionHasExtraParameters(request.text) || RequestSafetyPolicy.isQuestion(request.text)) InterpretationResult.Rejected("La acción simple no representa todos los datos del pedido. No se ejecutó ni se envió.")
-            else {
-              val command = CapabilityCatalog.fixed.getValue(decision.choice)
-              if (verifiedByGroq) InterpretationResult.Plan(listOf(command)) else InterpretationResult.Direct(command)
+          currentCoroutineContext().ensureActive()
+          if (request.draft == null && decision.choice in setOf("instinct", "unsupported"))
+            router.recoverSearch(request.text)?.let { return@withTimeout InterpretationResult.Direct(it.command) }
+          if (request.draft == null && steps.size > 1 && decision.choice != "workflow")
+            return@withTimeout InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
+          if (request.draft == null && router.hasIntent(decision.choice)) {
+            when (val registered = router.resolve(decision.choice, request.text)) {
+              is PhoneRoute.Local -> return@withTimeout if (verifiedByGroq)
+                InterpretationResult.Plan(listOf(registered.command)) else InterpretationResult.Direct(registered.command)
+              is PhoneRoute.Unsupported -> return@withTimeout InterpretationResult.Rejected(registered.message)
+              is PhoneRoute.Clarify -> {
+                val type = CapabilityCatalog.extractionType(decision.choice)
+                if (type !in CapabilityCatalog.specs || local is PhoneRoute.Clarify && request.sourceContext == null)
+                  return@withTimeout InterpretationResult.Clarification(registered.prompt, registered.context)
+              }
+              else -> Unit
             }
           }
-          decision.choice in CapabilityCatalog.parameterChoices || decision.choice in setOf("app_open", "spotify") -> {
-            resolveStructured(request, local, steps, stage, decision.choice)
+          when {
+            decision.choice == "unsupported" && canDeferToInstinct -> InterpretationResult.Query()
+            decision.choice == "unsupported" && fallback != null ->
+              interpretWithFallback(request, local, steps, stage, GeminiFailureKind.INVALID_RESPONSE, speculative)
+            decision.choice == "instinct" -> if (request.draft != null || local != PhoneRoute.Instinct || indirectPhoneRequest)
+              InterpretationResult.Rejected("Hay un pedido del teléfono pendiente. Completalo o cancelalo; no se envió a Instinct.")
+              else InterpretationResult.Query()
+            decision.choice in CapabilityCatalog.fixed && request.draft == null -> {
+              if (RequestSafetyPolicy.fixedActionHasExtraParameters(request.text) || RequestSafetyPolicy.isQuestion(request.text)) InterpretationResult.Rejected("La acción simple no representa todos los datos del pedido. No se ejecutó ni se envió.")
+              else {
+                val command = CapabilityCatalog.fixed.getValue(decision.choice)
+                if (verifiedByGroq) InterpretationResult.Plan(listOf(command)) else InterpretationResult.Direct(command)
+              }
+            }
+            decision.choice in CapabilityCatalog.parameterChoices || decision.choice in setOf("app_open", "spotify") -> {
+              resolveStructured(request, local, steps, stage, decision.choice, speculative)
+            }
+            else -> if (canDeferToInstinct && !verifiedByGroq) InterpretationResult.Query()
+              else InterpretationResult.Rejected("Ese pedido no está disponible o tiene restricciones no admitidas. No se ejecutó ni se envió.")
           }
-          else -> if (canDeferToInstinct && !verifiedByGroq) InterpretationResult.Query()
-            else InterpretationResult.Rejected("Ese pedido no está disponible o tiene restricciones no admitidas. No se ejecutó ni se envió.")
+        } finally {
+          speculative?.cancel()
         }
       }
     } catch (error: TimeoutCancellationException) {
@@ -193,8 +209,7 @@ class GeminiCoordinator(
     } finally { GeminiDiagnostics.finish((System.nanoTime() - start) / 1000000, failure) }
   }
 
-  private suspend fun classify(request: InterpretationRequest): SemanticDecision? {
-    val attempt = breaker.acquire() ?: return null
+  private suspend fun classify(request: InterpretationRequest, attempt: DecisionsCircuitBreaker.Attempt): SemanticDecision {
     GeminiDiagnostics.decision()
     try {
       val result = withTimeoutOrNull(4_000) { router.classify(request) }
@@ -218,6 +233,7 @@ class GeminiCoordinator(
   private suspend fun resolveStructured(
     request: InterpretationRequest, local: PhoneRoute, steps: List<String>,
     stage: (String) -> Unit, choice: String? = null,
+    speculative: Deferred<Result<InterpretationResult>>? = null,
   ): InterpretationResult {
     GeminiDiagnostics.extraction()
     val proposal = try {
@@ -230,17 +246,18 @@ class GeminiCoordinator(
     val result = validateProposal(request, local, steps, proposal, choice)
     if (result is InterpretationResult.Failure) {
       if (fallback != null && result.kind != GeminiFailureKind.INVALID_REQUEST)
-        return interpretWithFallback(request, local, steps, stage, result.kind, choice)
+        return interpretWithFallback(request, local, steps, stage, result.kind, speculative, choice)
       return unavailableRoute(request, local, result.kind, result.message)
     }
     if (result is InterpretationResult.Rejected && proposal !is InterpretationResult.Rejected && fallback != null)
-      return interpretWithFallback(request, local, steps, stage, GeminiFailureKind.INVALID_RESPONSE, choice)
+      return interpretWithFallback(request, local, steps, stage, GeminiFailureKind.INVALID_RESPONSE, speculative, choice)
     return result
   }
 
   private suspend fun interpretWithFallback(
     request: InterpretationRequest, local: PhoneRoute, steps: List<String>,
-    stage: (String) -> Unit, failure: GeminiFailureKind?, choice: String? = null,
+    stage: (String) -> Unit, failure: GeminiFailureKind?,
+    speculative: Deferred<Result<InterpretationResult>>? = null, choice: String? = null,
   ): InterpretationResult {
     val provider = fallback ?: return unavailableRoute(request, local,
       failure ?: GeminiFailureKind.UNAVAILABLE,
@@ -248,7 +265,7 @@ class GeminiCoordinator(
     stage("Gemini no completó la interpretación. Probando con Groq")
     GeminiDiagnostics.fallback()
     val result = try {
-      extract(request, provider, fallback = true, timeout = 6_000)
+      speculative?.await()?.getOrThrow() ?: extract(request, provider, fallback = true, timeout = 6_000)
     } catch (error: DecisionException) {
       return unavailableRoute(request, local, error.kind,
         if (error.kind == GeminiFailureKind.TIMEOUT) "Groq tardó demasiado. Reintentá el pedido."
