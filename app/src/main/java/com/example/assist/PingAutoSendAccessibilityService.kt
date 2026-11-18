@@ -1,46 +1,26 @@
 package com.example.assist
 
-import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.Color
 import android.graphics.Path
-import android.graphics.PixelFormat
 import android.graphics.Rect
-import android.graphics.drawable.GradientDrawable
-import android.media.AudioDeviceCallback
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.text.TextUtils
 import android.util.TypedValue
-import android.view.Gravity
 import android.view.KeyEvent
-import android.view.MotionEvent
-import android.view.View
-import android.view.ViewConfiguration
-import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-import android.widget.ImageView
-import androidx.core.content.ContextCompat
-import com.example.R
 import com.example.audio.EyesFreeFeedbackManager
-import com.example.context.ContextRoutingEngine
 import com.example.data.AssistantPreferences
 import com.example.data.AssistantPreferencesRepository
-import com.example.data.FloatingPillMode
-import com.example.data.VolumeKeyTrigger
 import com.example.whatsapp.WhatsAppDispatcher
-import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -70,44 +50,21 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
 
   @Volatile private var cachedPrefs = AssistantPreferences()
 
-  // Volume key hold state
-  private var volumeHoldRunnable: Runnable? = null
-  private var volumeHoldTriggered = false
-
-  // Floating pill overlay state
-  private var windowManager: WindowManager? = null
-  private var pillView: ImageView? = null
-  private var pillParams: WindowManager.LayoutParams? = null
-  private var pillHoldRunnable: Runnable? = null
-  private var isPillRecording = false
-
-  private var audioDeviceCallback: AudioDeviceCallback? = null
+  private val volumeKeys = FloatingVolumeKeys(mainHandler, ::openFloatingAssistant)
+  private val pill = FloatingPill(this, mainHandler, { cachedPrefs }, ::openFloatingAssistant)
 
   override fun onServiceConnected() {
     super.onServiceConnected()
     repository = AssistantPreferencesRepository(this)
-    windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+    pill.connect()
 
     serviceScope.launch {
       repository.preferencesFlow.collect { prefs ->
         cachedPrefs = prefs
-        syncFloatingPillVisibility()
+        pill.syncVisibility()
       }
     }
 
-    val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    val callback =
-      object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-          syncFloatingPillVisibility()
-        }
-
-        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-          syncFloatingPillVisibility()
-        }
-      }
-    audioDeviceCallback = callback
-    audioManager?.registerAudioDeviceCallback(callback, mainHandler)
     connectedInstance = this
   }
 
@@ -308,53 +265,14 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
 
   override fun onKeyEvent(event: KeyEvent?): Boolean {
     if (event == null) return super.onKeyEvent(event)
-    // Observe only (never consume): lets the assist hotkey tell a tap from a hold.
-    HotkeyHoldTracker.onKeyEvent(event)
-    val trigger = cachedPrefs.volumeKeyTrigger
-    if (trigger == VolumeKeyTrigger.DISABLED) return super.onKeyEvent(event)
-
-    val targetKeyCode =
-      when (trigger) {
-        VolumeKeyTrigger.VOLUME_DOWN_HOLD -> KeyEvent.KEYCODE_VOLUME_DOWN
-        VolumeKeyTrigger.VOLUME_UP_HOLD -> KeyEvent.KEYCODE_VOLUME_UP
-        VolumeKeyTrigger.DISABLED -> return super.onKeyEvent(event)
-      }
-
-    if (event.keyCode != targetKeyCode) return super.onKeyEvent(event)
-
-    when (event.action) {
-      KeyEvent.ACTION_DOWN -> {
-        if (event.repeatCount == 0) {
-          volumeHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-          volumeHoldTriggered = false
-          val holdTask = Runnable {
-            volumeHoldTriggered = openFloatingAssistant()
-          }
-          volumeHoldRunnable = holdTask
-          mainHandler.postDelayed(holdTask, 420L)
-          return false // Let normal short taps adjust volume seamlessly
-        }
-        return volumeHoldTriggered
-      }
-      KeyEvent.ACTION_UP -> {
-        volumeHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-        volumeHoldRunnable = null
-        if (volumeHoldTriggered) {
-          volumeHoldTriggered = false
-          return true
-        }
-      }
-    }
-    return super.onKeyEvent(event)
+    return volumeKeys.handle(event, cachedPrefs.volumeKeyTrigger) ?: super.onKeyEvent(event)
   }
 
   override fun onInterrupt() {
     clockAutomation?.interrupt()
     clockAutomation = null
     autoSendPoll?.let { mainHandler.removeCallbacks(it) }
-    volumeHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-    volumeHoldRunnable = null
-    HotkeyHoldTracker.reset()
+    volumeKeys.reset()
     AutoSendCoordinator.disarm()
   }
 
@@ -363,10 +281,8 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     clockAutomation = null
     autoSendPoll?.let { mainHandler.removeCallbacks(it) }
     if (connectedInstance === this) connectedInstance = null
-    val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    audioDeviceCallback?.let { audioManager?.unregisterAudioDeviceCallback(it) }
-    removeFloatingPill()
-    HotkeyHoldTracker.reset()
+    pill.disconnect()
+    volumeKeys.reset()
     serviceScope.cancel()
     super.onDestroy()
   }
@@ -709,147 +625,6 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
       },
       750L,
     )
-  }
-
-  private fun syncFloatingPillVisibility() {
-    val prefs = cachedPrefs
-    val route = ContextRoutingEngine.resolveRoute(this, prefs)
-    val shouldShow =
-      when (prefs.floatingPillMode) {
-        FloatingPillMode.OFF -> false
-        FloatingPillMode.ALWAYS_ON -> true
-        FloatingPillMode.CAR_OR_BLUETOOTH_ONLY ->
-          route.isCarOrBluetoothActive
-      }
-
-    if (shouldShow) {
-      showFloatingPill()
-    } else {
-      removeFloatingPill()
-    }
-  }
-
-  private fun showFloatingPill() {
-    if (pillView != null) return
-    val wm = windowManager ?: return
-
-    val sizePx =
-      TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 52f, resources.displayMetrics).toInt()
-    val view =
-      ImageView(this).apply {
-        setImageResource(R.drawable.ic_mic_pulse)
-        scaleType = ImageView.ScaleType.CENTER_INSIDE
-        val pad = (sizePx * 0.24f).toInt()
-        setPadding(pad, pad, pad, pad)
-        background = buildPillDrawable(isRecording = false)
-        contentDescription = "PingAssist Floating Trigger"
-      }
-
-    val params =
-      WindowManager.LayoutParams(
-          sizePx,
-          sizePx,
-          WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-          PixelFormat.TRANSLUCENT,
-        )
-        .apply {
-          gravity = Gravity.TOP or Gravity.END
-          x = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 12f, resources.displayMetrics).toInt()
-          y = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 220f, resources.displayMetrics).toInt()
-        }
-
-    attachPillTouchListener(view, params, wm)
-
-    runCatching {
-      wm.addView(view, params)
-      pillView = view
-      pillParams = params
-    }
-  }
-
-  private fun attachPillTouchListener(
-    view: ImageView,
-    params: WindowManager.LayoutParams,
-    wm: WindowManager,
-  ) {
-    val touchSlopPx = ViewConfiguration.get(this).scaledTouchSlop.toFloat().coerceAtLeast(36f)
-    var downRawX = 0f
-    var downRawY = 0f
-    var startX = 0
-    var startY = 0
-    var moved = false
-
-    view.setOnTouchListener { _, event ->
-      when (event.actionMasked) {
-        MotionEvent.ACTION_DOWN -> {
-          downRawX = event.rawX
-          downRawY = event.rawY
-          startX = params.x
-          startY = params.y
-          moved = false
-          isPillRecording = false
-
-          val holdTask = Runnable {
-            if (!moved) {
-              isPillRecording = openFloatingAssistant()
-              if (isPillRecording) {
-                view.background = buildPillDrawable(isRecording = true)
-              }
-            }
-          }
-          pillHoldRunnable = holdTask
-          mainHandler.postDelayed(holdTask, 320L)
-          true
-        }
-        MotionEvent.ACTION_MOVE -> {
-          val dx = event.rawX - downRawX
-          val dy = event.rawY - downRawY
-          if (!isPillRecording && (abs(dx) > touchSlopPx || abs(dy) > touchSlopPx)) {
-            moved = true
-            pillHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-            params.x = (startX - dx.toInt()).coerceAtLeast(0)
-            params.y = (startY + dy.toInt()).coerceAtLeast(60)
-            runCatching { wm.updateViewLayout(view, params) }
-          }
-          true
-        }
-        MotionEvent.ACTION_UP,
-        MotionEvent.ACTION_CANCEL -> {
-          pillHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-          pillHoldRunnable = null
-
-          if (isPillRecording) {
-            isPillRecording = false
-            view.background = buildPillDrawable(isRecording = false)
-          } else if (!moved && event.actionMasked == MotionEvent.ACTION_UP) {
-            openFloatingAssistant()
-          }
-          true
-        }
-        else -> false
-      }
-    }
-  }
-
-  private fun removeFloatingPill() {
-    pillHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-    pillHoldRunnable = null
-    val view = pillView ?: return
-    runCatching { windowManager?.removeView(view) }
-    pillView = null
-    pillParams = null
-  }
-
-  private fun buildPillDrawable(isRecording: Boolean): GradientDrawable {
-    val strokePx =
-      TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 2f, resources.displayMetrics).toInt()
-    return GradientDrawable().apply {
-      shape = GradientDrawable.OVAL
-      setColor(if (isRecording) Color.parseColor("#FF5468") else Color.parseColor("#E6101B18"))
-      setStroke(strokePx, if (isRecording) Color.WHITE else Color.parseColor("#10D98B"))
-    }
   }
 
   private fun findSendButtonNode(
