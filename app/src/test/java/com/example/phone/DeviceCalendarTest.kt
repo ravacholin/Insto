@@ -99,10 +99,17 @@ class DeviceCalendarTest {
     assertTrue(store.delete(event))
     assertFalse(store.delete(event))
     assertEquals(1, provider.writes)
+  }
+
+  @Test fun deletionWithUnavailableVerificationDoesNotRepeatTheWrite() {
+    provider.instances += instance(5, "Turno médico", "2026-11-19", 14)
+    val event = store.find(selection("Borrá el turno médico de mañana")).single()
     provider.beforeWrite = event
     provider.unverified = true
     assertFalse(store.delete(event))
-    assertEquals(2, provider.writes)
+    assertEquals(1, provider.writes)
+    assertFalse(store.delete(event))
+    assertEquals(1, provider.writes)
   }
 
   @Test fun readOnlyOrPermissionFailureDoesNotChangeAnything() {
@@ -163,7 +170,7 @@ class DeviceCalendarTest {
 
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? {
       if (denied) throw SecurityException("simulated permission")
-      if (unavailable || unverified && deleted) return null
+      if (unavailable || unverified && deleted && uri.pathSegments[0] == "events") return null
       val columns = checkNotNull(projection)
       return MatrixCursor(columns).apply {
         when (uri.pathSegments[0]) {
@@ -197,7 +204,7 @@ class DeviceCalendarTest {
 
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {
       check(uri == Events.CONTENT_URI && selectionArgs?.first() == beforeWrite?.id.toString())
-      if (deleted && !unverified) return 0
+      if (deleted) return 0
       writes++
       deleted = true
       return 1

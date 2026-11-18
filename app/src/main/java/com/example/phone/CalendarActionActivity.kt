@@ -32,11 +32,17 @@ class CalendarActionActivity : LocalActionActivity() {
       when (matches.size) {
         0 -> report("No encontré eventos que coincidan con el pedido.")
         1 -> review(calendar, matches.single(), selection)
-        in 2..100 -> AlertDialog.Builder(this@CalendarActionActivity).setTitle("Elegí el evento")
-          .setItems(matches.map { calendar.label(it) }.toTypedArray()) { _, index ->
-            review(calendar, matches[index], selection)
-          }.setNegativeButton("Cancelar") { _, _ -> finish() }
-          .setOnCancelListener { finish() }.show()
+        in 2..100 -> {
+          val labels = matches.map { calendar.label(it) }
+          if (labels.distinct().size != labels.size) {
+            report("Hay eventos indistinguibles por título, fecha y calendario. Identificá el evento en tu app de calendario antes de pedir el cambio.")
+          } else {
+            AlertDialog.Builder(this@CalendarActionActivity).setTitle("Elegí el evento")
+              .setItems(labels.toTypedArray()) { _, index -> review(calendar, matches[index], selection) }
+              .setNegativeButton("Cancelar") { _, _ -> finish() }
+              .setOnCancelListener { finish() }.show()
+          }
+        }
         else -> report("Hay demasiadas coincidencias. Indicá el título, día y horario del evento.")
       }
     }
