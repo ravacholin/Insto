@@ -65,7 +65,8 @@ class GeminiCoordinator(
             return InterpretationResult.Clarification(local.prompt, if (datedAlarm) "intent:alarm" else local.context)
           }
         }
-        PhoneRoute.Instinct -> if (canDeferToInstinct && RequestSafetyPolicy.isExplicitQuery(request.text)) return InterpretationResult.Query()
+        PhoneRoute.Instinct -> if (PhoneCommandParser.isExplicitGeneralRequest(request.text) ||
+          canDeferToInstinct && RequestSafetyPolicy.isExplicitQuery(request.text)) return InterpretationResult.Query()
         else -> Unit
       }
     }

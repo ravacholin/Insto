@@ -8,11 +8,12 @@ internal object NativeActionParameters {
       parameters: List<IntentParameter> = emptyList(), permissions: List<String> = emptyList(), mechanism: String,
       expected: String, pattern: String? = null, prompt: String = "Completá los datos del pedido.",
       localSyntax: Regex? = null,
+      decisionDescription: String = desc,
       builder: ((FoldedRequest,MatchResult) -> PhoneCommand.Platform?)? = null) {
       val fixed = if(parameters.isEmpty()) PhoneCommand.Platform(op) else null
       val grammar = pattern?.let { Regex("^$it[.!?]*$") }
       add(LocalIntentDefinition(id,category,desc,examples,parameters,permissions,mechanism,expected,
-        prompt=prompt,fixed=fixed,accepts={it is PhoneCommand.Platform && it.action==op},localSyntax=localSyntax,
+        prompt=prompt,fixed=fixed,decisionDescription=decisionDescription,accepts={it is PhoneCommand.Platform && it.action==op},localSyntax=localSyntax,
         replyPrefix=when(op) {
           PlatformAction.ALARM_DISMISS -> "cancelá la alarma llamada"
           PlatformAction.BRIGHTNESS -> "poné el brillo al"
@@ -33,49 +34,59 @@ internal object NativeActionParameters {
     }
     action("alarm_dismiss",IntentCategory.CLOCK,"Descartar alarma por etiqueta explícita sin elegir otra por defecto",listOf("cancelá la alarma llamada Trabajo","descartá la alarma con nombre Trabajo"),PlatformAction.ALARM_DISMISS,
       listOf(p("label")),listOf("com.android.alarm.permission.SET_ALARM"),"AlarmClock.ACTION_DISMISS_ALARM con búsqueda por etiqueta e interfaz visible",
-      "Solicitud para la etiqueta exacta entregada al Reloj; revisar allí la selección", "(?:cancela|descarta|elimina|borra) (?:la )?(?:alarma|despertador) (?:llamad[ao]|con nombre|etiquetad[ao] como) (.+?)", "¿Qué nombre tiene la alarma? Indicá: cancelá la alarma llamada Trabajo.") { r,m ->
+      "Solicitud para la etiqueta exacta entregada al Reloj; revisar allí la selección", "(?:cancela|descarta|elimina|borra) (?:la )?(?:alarma|despertador) (?:llamad[ao]|con nombre|etiquetad[ao] como) (.+?)", "¿Qué nombre tiene la alarma? Indicá: cancelá la alarma llamada Trabajo.",
+        decisionDescription = "Cancelar o descartar una alarma existente por su etiqueta, sin posponerla.") { r,m ->
       r.capture(m,1).removeSurrounding("\"").takeIf(::singleTarget)?.let {PhoneCommand.Platform(PlatformAction.ALARM_DISMISS,it)}
     }
     action("brightness_set",IntentCategory.ANDROID,"Fijar porcentaje del brillo de pantalla",listOf("poné el brillo al cuarenta por ciento","ajustá el brillo al 40%"),PlatformAction.BRIGHTNESS,
       listOf(p("percent","entero 0..100")),listOf("android.permission.WRITE_SETTINGS (acceso especial)"),"Settings.System.SCREEN_BRIGHTNESS",
-      "Brillo manual aplicado con acceso especial", "(?:(?:pone|ajusta|fija|baja|subi|reduce|aumenta) (?:el )?)?brillo(?: de (?:la )?pantalla)? (?:al? )?(.*?)(?: por ciento|%)?", "¿Qué porcentaje de brillo entre cero y cien?") { _,m ->
+      "Brillo manual aplicado con acceso especial", "(?:(?:pone|ajusta|fija|baja|subi|reduce|aumenta) (?:el )?)?brillo(?: de (?:la )?pantalla)? (?:al? )?(.*?)(?: por ciento|%)?", "¿Qué porcentaje de brillo entre cero y cien?",
+        decisionDescription = "Fijar el brillo de pantalla en el porcentaje indicado, sin encender la linterna.") { _,m ->
       PhoneCommandParser.number(m.groupValues[1])?.takeIf {it in 0..100}?.let {PhoneCommand.Platform(PlatformAction.BRIGHTNESS,percent=it)}
     }
     action("contact_search",IntentCategory.CONTACTS,"Buscar contacto por nombre",listOf("buscá el contacto José Pérez","encontrá el contacto José Pérez"),PlatformAction.CONTACT_SEARCH,
       listOf(p("name")),mechanism="ContactsContract / Intent.ACTION_SEARCH",expected="Búsqueda entregada a Contactos",
       pattern="(?:busca|encontra|mostra) (?:(?:el |un |mi )?contacto(?: de)?|a) (.+?)",
-      prompt="¿Qué contacto querés buscar?", localSyntax=Regex("^(?:busca|encontra|mostra) (?:el |un |mi )?contacto\\b")) { r,m ->
+      prompt="¿Qué contacto querés buscar?", localSyntax=Regex("^(?:busca|encontra|mostra) (?:el |un |mi )?contacto\\b"),
+        decisionDescription = "Buscar un contacto por nombre, sin pedir sus números ni iniciar una llamada.") { r,m ->
       r.capture(m,1).takeIf(::singleTarget)?.let {PhoneCommand.Platform(PlatformAction.CONTACT_SEARCH,it)}
     }
     action("contact_phones",IntentCategory.CONTACTS,"Consultar teléfonos de un contacto",listOf("qué teléfono tiene José Pérez","decime el teléfono de José Pérez"),PlatformAction.CONTACT_PHONES,
       listOf(p("name")),listOf("android.permission.READ_CONTACTS"),"ContactsContract.CommonDataKinds.Phone", "Solo números realmente encontrados; selección si hay homónimos",
-      "(?:que (?:telefono|numero) tiene|(?:decime|consulta|mostra) (?:el )?(?:telefono|numero) de|cual es el (?:telefono|numero) de) (.+?)", "¿De qué contacto querés consultar el teléfono?") { r,m ->
+      "(?:que (?:telefono|numero) tiene|(?:decime|consulta|mostra) (?:el )?(?:telefono|numero) de|cual es el (?:telefono|numero) de) (.+?)", "¿De qué contacto querés consultar el teléfono?",
+        decisionDescription = "Consultar los números guardados de un contacto, sin iniciar una llamada.") { r,m ->
       r.capture(m,1).takeIf(::singleTarget)?.let {PhoneCommand.Platform(PlatformAction.CONTACT_PHONES,it)}
     }
     action("app_settings",IntentCategory.APPLICATIONS,"Abrir configuración de una aplicación",listOf("abrí ajustes de Spotify","abrí configuración de Spotify"),PlatformAction.APP_SETTINGS,
       listOf(p("app")),mechanism="Settings.ACTION_APPLICATION_DETAILS_SETTINGS",expected="Ajustes de la aplicación elegida abiertos",
-      pattern="(?:(?:abri|mostra) (?:los |la )?)?(?:ajustes|configuracion) de (?:(?:la )?(?:app|aplicacion) )?(.+?)",prompt="¿De qué aplicación querés abrir los ajustes?") { r,m ->
+      pattern="(?:(?:abri|mostra) (?:los |la )?)?(?:ajustes|configuracion) de (?:(?:la )?(?:app|aplicacion) )?(.+?)",prompt="¿De qué aplicación querés abrir los ajustes?",
+        decisionDescription = "Abrir los ajustes de una aplicación concreta, en vez de abrir la aplicación.") { r,m ->
       r.capture(m,1).takeIf(::singleTarget)?.let {PhoneCommand.Platform(PlatformAction.APP_SETTINGS,it)}
     }
     action("message_open",IntentCategory.MESSAGING,"Abrir conversación SMS para un número explícito",listOf("abrí el chat SMS con +541112345678","abrí SMS con +541112345678"),PlatformAction.MESSAGE_OPEN,
       listOf(p("number","teléfono 3..15 dígitos")),mechanism="Intent.ACTION_SENDTO smsto:",expected="Conversación preparada en app SMS; sin envío automático",
-      pattern="abri (?:el chat |una conversacion por )?sms (?:con|para|de) ([+0-9 ()-]+)",prompt="Indicá el número completo para abrir SMS.") { r,m ->
+      pattern="abri (?:el chat |una conversacion por )?sms (?:con|para|de) ([+0-9 ()-]+)",prompt="Indicá el número completo para abrir SMS.",
+        decisionDescription = "Abrir la conversación SMS de un número, sin redactar un mensaje.") { r,m ->
       PhoneNumbers.canonical(r.capture(m,1))?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_OPEN,it)}
     }
     action("message_draft",IntentCategory.MESSAGING,"Redactar SMS para un número explícito sin enviarlo",listOf("redactá SMS a +541112345678 que diga Estoy llegando","prepará SMS para +541112345678 que diga Estoy llegando"),PlatformAction.MESSAGE_DRAFT,
       listOf(p("number","teléfono 3..15 dígitos"),p("body")),mechanism="Intent.ACTION_SENDTO con sms_body",expected="Borrador preparado; el usuario revisa y envía en SMS",
-      pattern="(?:redacta|prepara) (?:un )?sms (?:al?|para) ([+0-9 ()-]+) (?:que diga|con el texto|diciendo) (.+)",prompt="Indicá número y mensaje: redactá SMS a +541112345678 que diga Estoy llegando.") { r,m ->
+      pattern="(?:redacta|prepara) (?:un )?sms (?:al?|para) ([+0-9 ()-]+) (?:que diga|con el texto|diciendo) (.+)",prompt="Indicá número y mensaje: redactá SMS a +541112345678 que diga Estoy llegando.",
+        decisionDescription = "Redactar un borrador de SMS para el número indicado, sin enviarlo.") { r,m ->
       PhoneNumbers.canonical(r.capture(m,1))?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_DRAFT,it,content=r.capture(m,2))}
     }
     action("text_share",IntentCategory.APPLICATIONS,"Compartir texto explícito con una aplicación elegida por el usuario",listOf("compartí el texto Estoy llegando","compartir texto Estoy llegando"),PlatformAction.TEXT_SHARE,
       listOf(p("text")),mechanism="Intent.ACTION_SEND text/plain con chooser",expected="Selector de aplicación abierto; contenido entregado, no envío confirmado",
-      pattern="comparti (?:el |este )?texto[: ]\\s*(.+)",prompt="¿Qué texto querés compartir?") { r,m ->
+      pattern="comparti (?:el |este )?texto[: ]\\s*(.+)",prompt="¿Qué texto querés compartir?",
+        decisionDescription = "Compartir un texto con la aplicación que el usuario elija, sin fijar destinatario.") { r,m ->
       PhoneCommand.Platform(PlatformAction.TEXT_SHARE,content=r.capture(m,1))
     }
     action("files_browse",IntentCategory.FILES,"Abrir el administrador de archivos sin operar sobre un archivo por defecto",listOf("abrí mis archivos","abrí el administrador de archivos"),PlatformAction.FILES_BROWSE,
-      mechanism="DocumentsContract root con Intent.ACTION_VIEW",expected="Administrador de archivos abierto para intervención del usuario")
+      mechanism="DocumentsContract root con Intent.ACTION_VIEW",expected="Administrador de archivos abierto para intervención del usuario",
+        decisionDescription = "Abrir el administrador de archivos sin elegir ni operar sobre un archivo concreto.")
     action("notification_list",IntentCategory.NOTIFICATIONS,"Consultar notificaciones activas con acceso explícito",listOf("mostrá mis notificaciones","qué notificaciones tengo"),PlatformAction.NOTIFICATION_LIST,
-      permissions=listOf("acceso especial a notificaciones de Insto (separado del acceso multimedia)"),mechanism="NotificationListenerService.getActiveNotifications",expected="Lista real de notificaciones activas; sin enviar su contenido a Gemini")
+      permissions=listOf("acceso especial a notificaciones de Insto (separado del acceso multimedia)"),mechanism="NotificationListenerService.getActiveNotifications",expected="Lista real de notificaciones activas; sin enviar su contenido a Gemini",
+        decisionDescription = "Consultar las notificaciones activas, sin abrir ni descartar una notificación concreta.")
     for ((id,op,verb,result) in listOf(
       listOf("notification_open",PlatformAction.NOTIFICATION_OPEN,"abri","Se ejecuta el PendingIntent de una notificación inequívoca"),
       listOf("notification_dismiss",PlatformAction.NOTIFICATION_DISMISS,"descarta","Se descarta solamente la notificación elegida si es cancelable"))) {

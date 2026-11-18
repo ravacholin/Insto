@@ -83,10 +83,18 @@ object CapabilityCatalog {
     "workflow" to "Secuencia explícita de dos a diez acciones admitidas para hacer ahora; sin condiciones ni pasos omitidos.",
   )
   val choices: Map<String, String> = LinkedHashMap(LocalIntentRegistry.default.choices).apply {
-    fixed.forEach { (key, command) -> putIfAbsent(key, PhoneCommandCodec.summary(command) + "; sin parámetros ni condiciones adicionales.") }
+    put("end_mode", getValue("temporary_mode_end"))
+    put("open_app", "Abrir una aplicación por su nombre, como app_open. Obligatorios: name.")
+    put("settings", "Abrir ajustes de conectividad en general, sin activar ni desactivar redes. Obligatorios: kind.")
     parameterChoices.forEach { (key, description) -> putIfAbsent(key, description) }
-    put("unsupported", "Fuera del catálogo, negación, condición o detalles no representables. Un dato faltante conserva la categoría de acción para pedir aclaración.")
   }
+
+  // Groq confirmation keeps the metadata it used before Decisions descriptions were compacted.
+  internal fun verificationCriterion(choice: String): String =
+    LocalIntentRegistry.default.verificationCriterion(choice)
+      ?: fixed[choice]?.let { PhoneCommandCodec.summary(it) + "; sin parámetros ni condiciones adicionales." }
+      ?: parameterChoices[choice]
+      ?: choices.getValue(choice)
 
   private fun fixedCommand(choice: String): PhoneCommand? =
     fixed[choice] ?: LocalIntentRegistry.default.definitions.firstOrNull { it.id == choice }?.fixed
