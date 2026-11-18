@@ -63,6 +63,40 @@ class FloatingEverydayRoutingTest {
     }
   }
 
+  @Test fun searchVoiceOpensOneNewChatAndReleasesTheRecording() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    installNativeHandler(app, Intent.ACTION_VIEW, "https")
+    val audio = File.createTempFile("search", ".m4a").apply { writeText("original") }
+    val capture = Capture(audio)
+    val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler),
+      AudioTranscriber { "Buscá Córdoba & C++" },
+      hybridRouter = HybridPhoneRouter({ true }, { error("Search should bypass Decisions") }))
+    try {
+      var handoffs = 0
+      vm.startFloatingListening { handoffs++ }
+      capture.snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1000)
+      runCurrent()
+      vm.sendFloatingAudio { handoffs++ }
+      advanceUntilIdle()
+
+      assertEquals(1, handoffs)
+      val intent = shadowOf(app).nextStartedActivity
+      assertEquals(Intent.ACTION_VIEW, intent.action)
+      val url = requireNotNull(intent.data)
+      assertEquals("https", url.scheme)
+      assertEquals("chatgpt.com", url.host)
+      assertEquals("/", url.path)
+      assertEquals("Córdoba & C++", url.getQueryParameter("q"))
+      assertEquals("search", url.getQueryParameter("hints"))
+      assertFalse(audio.exists())
+      assertNull(shadowOf(app).nextStartedActivity)
+    } finally {
+      vm.dismissFloatingAssistant()
+      audio.delete()
+      Dispatchers.resetMain()
+    }
+  }
+
   @Test fun navigationVoiceHandsOffWithoutWhatsAppAndReleasesOnlyAfterSuccess() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     installNativeHandler(app, Intent.ACTION_VIEW, "https")
