@@ -11,4 +11,6 @@ Con el ajuste de vocabulario activo por defecto, Groq puede recibir hasta 600 ca
 ## Verificación
 
 - La suite de núcleo `python3 scripts/test-phone-core.py` pasó sus 283 pruebas. Incluye el orden y el recorte del vocabulario, el filtro de dígitos y controles, el opt-in de contactos y la presencia u omisión del campo `prompt` en el multipart.
+- Pasaron en local `compileDebugKotlin` y `compileDebugUnitTestKotlin`. La ejecución local que incluía `testDebugUnitTest` se frenó al descargar `org.robolectric:nativeruntime-dist-compat:1.0.18` porque el espejo de Maven respondió HTTP 403.
+- GitHub Actions aprobó `testDebugUnitTest`, `assembleDebug`, lint y la generación de cobertura. [Ejecución de CI](https://github.com/ravacholin/Insto/actions/runs/44376659652).
 - En el teléfono queda comparar los aciertos con el [protocolo de 20 frases](../VOICE-CONTEXT.md#comparar-el-reconocimiento-de-nombres-propios), medir la latencia y probar grabaciones con ambos interruptores en distintas combinaciones.
