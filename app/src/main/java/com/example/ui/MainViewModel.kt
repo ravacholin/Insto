@@ -124,6 +124,7 @@ data class FloatingAssistantState(
   val needsGroqKey: Boolean = false,
   val needsCamera: Boolean = false,
   val needsContacts: Boolean = false,
+  val needsCalendarRead: Boolean = false,
   val needsNotifications: Boolean = false,
   val needsClockAccessibility: Boolean = false,
   val geminiConfigured: Boolean = false,
@@ -205,6 +206,13 @@ class MainViewModel @JvmOverloads constructor(
 
   private fun previewWorkflow(commands: List<PhoneCommand>) {
     try {
+      if (commands.size > 1) {
+        val missing = commands.filterIsInstance<PhoneCommand.OpenApp>().firstOrNull { phoneExecutor.matchingApps(it.name).isEmpty() }
+        if (missing != null) {
+          retainDecisionRequest("No encontré la aplicación «${missing.name}». Revisá ese paso antes de confirmar el plan.")
+          return
+        }
+      }
       workflow.prepare(commands)
       if (semanticDraft == null && commands.size > 1) semanticDraft = runCatching { DraftPlan.fromCommands(commands) }.getOrNull()
       previewInvalidatedByEdit = false
@@ -234,9 +242,9 @@ class MainViewModel @JvmOverloads constructor(
     floatingGeneration++; floatingJob?.cancel()
     cancelClockAutomation?.invoke(); cancelClockAutomation = null
     workflow.cancel(); conversation.clear(); clarification=null; clarificationRequest=null; semanticDraft = null; pendingQuery = null; approvedQueryText = null
-    confirmation = null; cameraCommand = null; contactsCommand = null; notificationsCommand = null
+    confirmation = null; cameraCommand = null; contactsCommand = null; notificationsCommand = null; calendarQuery = null
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, needsConfirmation = false,
-      appOptions = emptyList(), contactOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false,
+      appOptions = emptyList(), contactOptions = emptyList(), needsCamera = false, needsContacts = false, needsNotifications = false, needsCalendarRead = false,
       status = if (hadWorkflow) "Se detuvieron los pasos pendientes. Los ya realizados no se revierten." else "Pedido cancelado.", error = null)
     syncWorkflow()
   }
@@ -261,6 +269,55 @@ class MainViewModel @JvmOverloads constructor(
   private var confirmation: PhoneCommand? = null
   private var cameraCommand: PhoneCommand? = null
   private var contactsCommand: PhoneCommand? = null
+  private var calendarQuery: Pair<PhoneCommand.Platform, Long>? = null
+
+  fun onFloatingCalendarPermission(granted: Boolean) {
+    val (command, generation) = calendarQuery ?: return
+    calendarQuery = null
+    if (generation != floatingGeneration) return
+    floatingState.value = floatingState.value.copy(needsCalendarRead = false)
+    if (granted) queryFloatingCalendar(command)
+    else retainDecisionRequest("Sin el permiso de lectura no pude consultar tu calendario.")
+  }
+
+  private fun queryFloatingCalendar(command: PhoneCommand.Platform) {
+    val app = getApplication<Application>()
+    val generation = floatingGeneration
+    if (app.checkSelfPermission(Manifest.permission.READ_CALENDAR) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+      calendarQuery = command to generation
+      retainLocalAudio = true
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, needsCalendarRead = true,
+        status = "Permití el acceso para consultar tu agenda.", error = null)
+      return
+    }
+    if (app.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true) {
+      retainDecisionRequest("Desbloqueá el teléfono para consultar tu calendario.")
+      return
+    }
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, status = "Consultando tu calendario…", error = null)
+    viewModelScope.launch {
+      val agenda = try {
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+          val selection = com.example.phone.CalendarSelection.decode(command)
+          com.example.phone.DeviceCalendar(app.contentResolver).agenda(selection)
+        }
+      } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+      } catch (_: Exception) {
+        null
+      }
+      if (generation != floatingGeneration) return@launch
+      if (agenda == null) {
+        retainDecisionRequest("No pude consultar el calendario. Revisá el permiso y volvé a intentarlo.")
+      } else {
+        retainLocalAudio = false
+        pendingFloatingAudio?.file?.delete()
+        pendingFloatingAudio = null
+        pendingTranscript = null
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = agenda, error = null)
+      }
+    }
+  }
   private var appChoiceCommand: PhoneCommand? = null
   private var notificationsCommand: PhoneCommand? = null
   private var retainLocalAudio = false
@@ -507,9 +564,9 @@ class MainViewModel @JvmOverloads constructor(
     }
     // A new request has one classification gateway. Continuations above retain their selected intent.
     semanticDraft = null; conversation.clear(); clarification = null; clarificationRequest = null
-    confirmation=null; cameraCommand=null; contactsCommand=null; notificationsCommand=null; appChoiceCommand=null
+    confirmation=null; cameraCommand=null; contactsCommand=null; notificationsCommand=null; appChoiceCommand=null; calendarQuery=null
     workflow.invalidatePreview(); syncWorkflow()
-    floatingState.value = floatingState.value.copy(needsConfirmation=false,appOptions=emptyList(),contactOptions=emptyList(),needsCamera=false,needsContacts=false,needsNotifications=false)
+    floatingState.value = floatingState.value.copy(needsConfirmation=false,appOptions=emptyList(),contactOptions=emptyList(),needsCamera=false,needsContacts=false,needsNotifications=false,needsCalendarRead=false)
     if (searchQuery != null) {
       openChatGptSearch(searchQuery, onDispatched)
       return true
@@ -587,6 +644,8 @@ class MainViewModel @JvmOverloads constructor(
           conversation.accept(text)
           clarification = "intent:calendar"; clarificationRequest = text to java.util.Calendar.getInstance()
           previewWorkflow(listOf(result.command))
+        } else if (result.command is PhoneCommand.Platform && result.command.action == PlatformAction.CALENDAR_QUERY) {
+          queryFloatingCalendar(result.command)
         } else runPhoneCommand(result.command)
       }
       is InterpretationResult.Clarification -> {
@@ -652,7 +711,7 @@ class MainViewModel @JvmOverloads constructor(
     floatingState.value = floatingState.value.copy(sourceContext = context, attachment = if (context != null || error != null) null else floatingState.value.attachment,
       text = if (context != null) "" else floatingState.value.text,
       error = error, status = null, needsConfirmation = false, contactOptions = emptyList(), appOptions = emptyList(),
-      needsCamera = false, needsContacts = false, needsNotifications = false)
+      needsCamera = false, needsContacts = false, needsNotifications = false, needsCalendarRead = false)
   }
 
   fun startFloatingListening(onDispatched: () -> Unit) {
@@ -835,6 +894,7 @@ class MainViewModel @JvmOverloads constructor(
     pendingFloatingAudio = null
     pendingTranscript = null
     notificationsCommand=null
+    calendarQuery = null
     semanticDraft = null; pendingQuery = null; approvedQueryText = null
     conversation.clear()
     // Explicit close cancels future steps; effects already handed off are never replayed.
@@ -843,7 +903,7 @@ class MainViewModel @JvmOverloads constructor(
     confirmation = null
     cameraCommand = null
     contactsCommand = null
-    floatingState.value = floatingState.value.copy(sourceContext = null, queryPreview = false, needsNotifications = false, workflowActive = false, workflowCanContinue = false, workflowCanRetry = false, deciding = false, needsConfirmation = false, needsCamera = false, appOptions = emptyList(), needsContacts = false, contactOptions = emptyList(), phoneActionCompletion = null)
+    floatingState.value = floatingState.value.copy(sourceContext = null, queryPreview = false, needsNotifications = false, workflowActive = false, workflowCanContinue = false, workflowCanRetry = false, deciding = false, needsConfirmation = false, needsCamera = false, appOptions = emptyList(), needsContacts = false, needsCalendarRead = false, contactOptions = emptyList(), phoneActionCompletion = null)
   }
 
   fun sendFloatingAudio(onDispatched: () -> Unit) {
@@ -894,7 +954,7 @@ class MainViewModel @JvmOverloads constructor(
         if (state.sourceContext == null && activeWorkflow() == null && workflowLoadError == null &&
           semanticDraft == null && clarification == null && confirmation == null && pendingQuery == null &&
           retryLocalCommand == null && state.appOptions.isEmpty() && state.contactOptions.isEmpty() &&
-          !state.needsCamera && !state.needsContacts && !state.needsNotifications) {
+          !state.needsCamera && !state.needsContacts && !state.needsNotifications && !state.needsCalendarRead) {
           dispatchFloatingAudio(audio, onDispatched)
         } else {
           retainDecisionRequest(transcriptionError?.message ?: "No se pudo interpretar. El audio se conserva.")

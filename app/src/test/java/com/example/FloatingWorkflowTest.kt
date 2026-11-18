@@ -29,6 +29,26 @@ class FloatingWorkflowTest {
    assertNull(vm.consumePhoneActionCompletion())
   } finally {vm.dismissFloatingAssistant();Dispatchers.resetMain()}
  }
+ @Test fun localCalendarPermissionDenialDoesNotCallAiOrSendTheRequest() = runTest {
+  Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+  val app = ApplicationProvider.getApplicationContext<Application>()
+  org.robolectric.Shadows.shadowOf(app).denyPermissions(android.Manifest.permission.READ_CALENDAR)
+  val vm = MainViewModel(app, hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier {
+   error("Calendar lookup must bypass Decisions")
+  }))
+  try {
+   vm.updateFloatingText("¿Qué tengo mañana?")
+   vm.sendFloatingText { fail("Calendar lookup must stay local") }
+   runCurrent()
+   assertTrue(vm.floatingAssistant.value.needsCalendarRead)
+   vm.onFloatingCalendarPermission(false)
+   assertFalse(vm.floatingAssistant.value.needsCalendarRead)
+   assertTrue(vm.floatingAssistant.value.error.orEmpty().contains("permiso de lectura"))
+  } finally {
+   vm.dismissFloatingAssistant()
+   Dispatchers.resetMain()
+  }
+ }
  @Test fun localCalendarCanBeCompletedWithoutRepeatingTitleOrWaitingForGoogle() = runTest {
   Dispatchers.setMain(StandardTestDispatcher(testScheduler))
   val app=ApplicationProvider.getApplicationContext<Application>()

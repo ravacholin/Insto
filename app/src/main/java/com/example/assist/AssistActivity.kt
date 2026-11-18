@@ -111,6 +111,12 @@ class AssistActivity : ComponentActivity() {
         LaunchedEffect(state.needsContacts) {
           if (state.needsContacts) contactsPermission.launch(Manifest.permission.READ_CONTACTS)
         }
+        val calendarPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+          viewModel.onFloatingCalendarPermission(it)
+        }
+        LaunchedEffect(state.needsCalendarRead) {
+          if (state.needsCalendarRead) calendarPermission.launch(Manifest.permission.READ_CALENDAR)
+        }
         val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
           if (uri != null) viewModel.selectFloatingAttachment(uri)
         }

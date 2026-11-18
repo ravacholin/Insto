@@ -11,6 +11,116 @@ class GeminiCoordinatorTest {
   private fun coordinator(choice: String, extractor: StructuredCommandExtractor = StructuredCommandExtractor { error("No extraction expected") }) =
     GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { decision(choice) }), extractor)
 
+  @Test fun explicitSequenceWithAnAppUsesOnlyStructuredExtractionAndKeepsOrder() = runTest {
+    val text = "Poné un temporizador de diez minutos y abrí Spotify"
+    val parser = PhoneCommandParser()
+    val commands = ConversationSession.splitSteps(text).map { (parser.parse(it) as PhoneRoute.Local).command }
+    var decisions = 0
+    var extractions = 0
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { decisions++; decision("workflow") })
+    val result = GeminiCoordinator(router, StructuredCommandExtractor { extractions++; commands })
+      .interpret(InterpretationRequest(text), parser.parse(text))
+    assertEquals(commands, (result as InterpretationResult.Plan).commands)
+    assertEquals(0, decisions)
+    assertEquals(1, extractions)
+  }
+
+  @Test fun appNameComparisonUsesLauncherNormalization() = runTest {
+    val text = "Encendé la linterna y abrí Spotify"
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Unexpected Decisions call") })
+    val commands = listOf(PhoneCommand.Torch(true), PhoneCommand.OpenApp("Spotify"))
+    val result = GeminiCoordinator(router, StructuredCommandExtractor { commands })
+      .interpret(InterpretationRequest(text), PhoneCommandParser().parse(text))
+    assertEquals(commands, (result as InterpretationResult.Plan).commands)
+  }
+
+  @Test fun quotedSeparatorsDoNotTurnTextIntoExtraSteps() {
+    val text = "Reproducí «Bajá el volumen, abrí Spotify»"
+    assertEquals(listOf(text), ConversationSession.splitSteps(text))
+  }
+
+  @Test fun explicitSequencePreservesMissingAlarmPeriodAndOtherSteps() = runTest {
+    val text = "Poné una alarma a las siete, silenciá el teléfono durante una hora y abrí Spotify"
+    val parser = PhoneCommandParser()
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Unexpected Decisions call") })
+    val extractor = object : StructuredCommandExtractor {
+      override suspend fun extract(text: String): List<PhoneCommand> = error("Typed proposal expected")
+      override suspend fun interpret(request: InterpretationRequest): InterpretationResult {
+        val draft = DraftPlan(listOf(
+          CommandDraft("s1", org.json.JSONObject().put("type", "alarm").put("hour", 7).put("minute", 0)),
+          CommandDraft("s2", org.json.JSONObject().put("type", "temporary_mode").put("kind", "SILENT").put("seconds", 3600)),
+          CommandDraft("s3", org.json.JSONObject().put("type", "open_app").put("name", "spotify")),
+        ))
+        return InterpretationResult.Incomplete(draft)
+      }
+    }
+    val result = GeminiCoordinator(router, extractor).interpret(InterpretationRequest(text), parser.parse(text))
+    assertTrue(result is InterpretationResult.Incomplete)
+    assertTrue((result as InterpretationResult.Incomplete).prompt.contains("mañana o de la tarde"))
+    val repaired = result.draft.reply("de la mañana", java.util.Calendar.getInstance()) as InterpretationResult.Plan
+    assertEquals(listOf(PhoneCommand.Alarm(7, 0), PhoneCommand.TemporaryMode(ModeKind.SILENT, 3600),
+      PhoneCommand.OpenApp("spotify")), repaired.commands)
+  }
+
+  @Test fun incompleteExtractionCannotReplaceTheKnownAlarmHour() = runTest {
+    val text = "Poné una alarma a las siete y abrí Spotify"
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Unexpected Decisions call") })
+    val extractor = object : StructuredCommandExtractor {
+      override suspend fun extract(text: String): List<PhoneCommand> = error("Typed proposal expected")
+      override suspend fun interpret(request: InterpretationRequest): InterpretationResult {
+        val wrongAlarm = CommandDraft("s1", org.json.JSONObject().put("type", "alarm").put("hour", 8).put("minute", 0))
+        val app = CommandDraft("s2", org.json.JSONObject().put("type", "open_app").put("name", "Spotify"))
+        return InterpretationResult.Incomplete(DraftPlan(listOf(wrongAlarm, app)))
+      }
+    }
+    assertTrue(GeminiCoordinator(router, extractor).interpret(InterpretationRequest(text),
+      PhoneCommandParser().parse(text)) is InterpretationResult.Rejected)
+  }
+
+  @Test fun explicitSequenceUsesGroqOnceOnlyAfterPrimaryFails() = runTest {
+    val text = "Encendé la linterna y abrí Spotify"
+    val parser = PhoneCommandParser()
+    var fallbackCalls = 0
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Unexpected Decisions call") })
+    val commands = listOf(PhoneCommand.Torch(true), PhoneCommand.OpenApp("spotify"))
+    val coordinator = GeminiCoordinator(router,
+      StructuredCommandExtractor { throw DecisionException("offline", GeminiFailureKind.UNAVAILABLE) },
+      fallback = StructuredCommandExtractor { fallbackCalls++; commands })
+    val result = coordinator.interpret(InterpretationRequest(text), parser.parse(text)) as InterpretationResult.Plan
+    assertTrue(result.fallback)
+    assertEquals(commands, result.commands)
+    assertEquals(1, fallbackCalls)
+  }
+
+  @Test fun cancellingDirectExtractionDiscardsLateResults() = runTest {
+    val text = "Encendé la linterna y abrí Spotify"
+    val parser = PhoneCommandParser()
+    val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Unexpected Decisions call") })
+    val coordinator = GeminiCoordinator(router, StructuredCommandExtractor {
+      withContext(NonCancellable) { delay(100); listOf(PhoneCommand.Torch(true), PhoneCommand.OpenApp("spotify")) }
+    }, fallback = StructuredCommandExtractor { error("Cancelled request must not fall back") })
+    var delivered = false
+    val job = launch {
+      coordinator.interpret(InterpretationRequest(text), parser.parse(text))
+      delivered = true
+    }
+    runCurrent()
+    job.cancelAndJoin()
+    assertFalse(delivered)
+  }
+
+  @Test fun explicitSequenceRejectsTruncatedAndReorderedExtractions() = runTest {
+    val text = "Poné un temporizador de diez minutos y abrí Spotify"
+    val parser = PhoneCommandParser()
+    val commands = ConversationSession.splitSteps(text).map { (parser.parse(it) as PhoneRoute.Local).command }
+    for (proposal in listOf(commands.take(1), commands.reversed())) {
+      val router = HybridPhoneRouter({ true }, DecisionClassifier { error("Unexpected Decisions call") })
+      val result = GeminiCoordinator(router, StructuredCommandExtractor { proposal })
+        .interpret(InterpretationRequest(text), parser.parse(text))
+      assertTrue(result is InterpretationResult.Rejected)
+    }
+  }
+
   @Test fun generalQueriesAndFixedActionsNeverExtract() = runTest {
     assertEquals(InterpretationResult.Query(false), coordinator("instinct").interpret(InterpretationRequest("ayudame a estudiar"), PhoneRoute.Instinct))
     assertEquals(InterpretationResult.Direct(PhoneCommand.Volume(VolumeOp.DOWN)), coordinator("volume_down").interpret(InterpretationRequest("un poquito menos de sonido"), PhoneRoute.Instinct))
@@ -197,7 +307,13 @@ class GeminiCoordinatorTest {
   }
 
   @Test fun localWorkflowDoesNotTreatAnUnresolvedAppNameAsACompleteStep() = runTest {
-    val c = coordinator("instinct")
+    val c = GeminiCoordinator(
+      HybridPhoneRouter({ true }, DecisionClassifier { error("Unexpected Decisions call") }),
+      object : StructuredCommandExtractor {
+        override suspend fun extract(text: String): List<PhoneCommand> = error("Typed proposal expected")
+        override suspend fun interpret(request: InterpretationRequest): InterpretationResult = InterpretationResult.Query()
+      },
+    )
     val text = "bajá el volumen y abrí AplicacionInexistente"
     assertTrue(c.interpret(InterpretationRequest(text), PhoneCommandParser().parse(text))
       is InterpretationResult.Rejected)

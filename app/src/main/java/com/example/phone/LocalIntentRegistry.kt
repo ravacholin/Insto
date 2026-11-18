@@ -128,6 +128,16 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
       val sourceWithDate=Regex("\\b(?:hoy|manana)\\b").containsMatchIn(PhoneCommandParser.normalize(source.first).replace("de la manana",""))
       if(sourceWithDate) return PhoneRoute.Clarify("Conservé que pediste una fecha. Indicá día y hora completos, por ejemplo mañana a las siete de la mañana.","intent:$id")
     }
+    if (id in CalendarSelection.types && source != null) {
+      val current = java.util.Calendar.getInstance()
+      if (CalendarSelection.iso(current) != CalendarSelection.iso(source.second) || current.timeZone != source.second.timeZone)
+        return PhoneRoute.Clarify("Cambió el día o la zona horaria. Repetí el pedido con la fecha y hora deseadas.", "intent:$id")
+      if (normalized in setOf("de la manana", "de la tarde", "de la noche", "am", "pm")) {
+        val combined = parser.parse("${source.first.trimEnd('.', '!', '?')} $text")
+        if (combined is PhoneRoute.Local && d.accepts(combined.command)) return combined
+      }
+      return PhoneRoute.Clarify(d.prompt, "intent:$id")
+    }
     val route = if (d.parseParameters != null && d.replyPrefix != null) {
       d.parseParameters.invoke(FoldedRequest.of("${d.replyPrefix} $text").withCommandHead())
         ?: PhoneRoute.Clarify(d.prompt, "intent:$id")
@@ -180,9 +190,6 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
       }
       parsed("calendar",IntentCategory.CALENDAR,"Crear evento con título, fecha, hora y duración","agendá reunión mañana a las 17:00","creá reunión mañana a las 17:00","calendar","Indicá título, fecha y hora del evento.",listOf(p("title"),p("beginMillis","fecha futura en zona del teléfono"),p("endMillis","fecha posterior al inicio",false,"duración predeterminada de una hora si no se indica otra")),"Intent.ACTION_INSERT CalendarContract.Events",result="Borrador entregado a Calendario para revisión y guardado") { it is PhoneCommand.CalendarEvent }
       fixed("calendar_agenda",IntentCategory.CALENDAR,"Abrir la agenda actual sin filtros de fecha adicionales","abrí mi agenda","mostrá el calendario",PhoneCommand.Platform(PlatformAction.CALENDAR_AGENDA),"Intent.ACTION_MAIN/CATEGORY_APP_CALENDAR",result="Calendario abierto; no se afirma haber leído eventos")
-      for ((id,desc) in listOf("calendar_query" to "Consultar eventos en un intervalo", "calendar_update" to "Modificar un evento guardado", "calendar_delete" to "Cancelar un evento guardado")) {
-        unavailable(id,IntentCategory.CALENDAR,desc,desc.lowercase(),"quiero ${desc.lowercase()}",listOf(p("eventOrRange"),p("changes",required=false)),"CalendarContract con resolución de evento y permiso",listOf("android.permission.READ_CALENDAR","android.permission.WRITE_CALENDAR para cambios"),"Reconocí el pedido de agenda, pero todavía no hay acceso integrado a tus eventos guardados. No modifiqué ningún evento. Podés pedir abrir Calendario.")
-      }
       parsed("dial",IntentCategory.CALLS,"Preparar llamada a contacto o número en el marcador","llamá a Ana","marcá el número de Ana","dial","¿A quién querés llamar?",listOf(p("target")),"Intent.ACTION_DIAL y ContactsContract",contacts,"Número preparado; el usuario inicia la llamada en Teléfono") { it is PhoneCommand.Dial }
       fixed("dialer_open",IntentCategory.CALLS,"Abrir marcador sin destinatario","abrí el marcador","abrí el teclado del teléfono",PhoneCommand.Platform(PlatformAction.DIALER_OPEN),"Intent.ACTION_DIAL")
       // Direct background calling is a separate integration, never inferred from preparing a dial intent.

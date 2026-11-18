@@ -1,9 +1,5 @@
 package com.example.phone
 
-import java.util.Calendar
-import java.util.Locale
-import org.json.JSONObject
-
 /** Public APIs that require Android selection/permission UI, rather than an open-ended model. */
 internal object ExtendedLocalIntents {
   fun definitions():List<LocalIntentDefinition> = buildList {
@@ -58,35 +54,25 @@ internal object ExtendedLocalIntents {
         PhoneCommand.Platform(PlatformAction.FILE_RENAME,r.capture(m,1),content=r.capture(m,2))
       }
     }
-    parsed("calendar_query",IntentCategory.CALENDAR,"Consultar eventos de un día exacto de la agenda",listOf("qué tengo mañana","consultá mi agenda hoy"),PlatformAction.CALENDAR_QUERY,
-      listOf(parameter("day")),listOf("android.permission.READ_CALENDAR"),"CalendarContract.Instances con intervalo de día local","Eventos reales del día solicitado, solo con permiso",
-      "¿Qué día? Podés decir: consultá mi agenda mañana o una fecha dd/mm/aaaa.") {r ->
-      Regex("^(?:que (?:tengo|hay en mi agenda)|(?:consulta|mostra|ver) (?:mi |la )?(?:agenda|calendario)) (hoy|manana|(?:el )?[0-9]{1,2}/[0-9]{1,2}/[0-9]{4})[.!?]*$").matchEntire(r.text)?.let {m ->
-        calendarDay(m.groupValues[1])?.let {PhoneCommand.Platform(PlatformAction.CALENDAR_QUERY,it)}
-      }
-    }
-    parsed("calendar_delete",IntentCategory.CALENDAR,"Cancelar un evento guardado con título exacto, selección y confirmación",listOf("cancelá el evento \"Reunión\"","eliminá el evento \"Reunión\""),PlatformAction.CALENDAR_DELETE,
-      listOf(parameter("title")),listOf("android.permission.READ_CALENDAR","android.permission.WRITE_CALENDAR"),"CalendarContract.Events y selección explícita; recurrencias se revisan en Calendario",
-      "Solo se elimina el evento elegido y confirmado; nunca una serie recurrente por deducción",
-      "Indicá el título exacto entre comillas: cancelá el evento \"Reunión\".") {r ->
-      Regex("^(?:cancela|elimina|borra|quita) (?:el )?evento (?:llamado )?\"(.+?)\"[.!?]*$").matchEntire(r.text)?.let {m ->PhoneCommand.Platform(PlatformAction.CALENDAR_DELETE,r.capture(m,1))}
-    }
-    parsed("calendar_update",IntentCategory.CALENDAR,"Modificar un evento elegido, o moverlo a fecha y hora completas",listOf("editá el evento \"Reunión\"","mové el evento \"Reunión\" a mañana a las 17:00"),PlatformAction.CALENDAR_UPDATE,
-      listOf(parameter("title"),parameter("newTime",false)),listOf("android.permission.READ_CALENDAR"),"CalendarContract.Events para selección e Intent.ACTION_EDIT con cambios tipados",
-      "Editor de Calendario con evento exacto; conserva duración si no se indicó otra, requiere guardado en Calendario",
-      "Indicá: editá el evento \"Reunión\", o mové el evento \"Reunión\" a mañana a las 17:00.") {r ->
-      val edit=Regex("^(?:edita|modifica|cambia) (?:el )?evento \"(.+?)\"[.!?]*$").matchEntire(r.text)
-      if(edit!=null) PhoneCommand.Platform(PlatformAction.CALENDAR_UPDATE,r.capture(edit,1)) else {
-        val move=Regex("^(?:move|reprograma) (?:el )?evento \"(.+?)\" (?:a|para) (hoy|manana|[0-9/]+) a las? (.+)$").matchEntire(r.text)
-        move?.let {m ->
-          val event=(PhoneCommandParser().parse("agendá evento ${m.groupValues[2]} a las ${m.groupValues[3]}") as? PhoneRoute.Local)?.command as? PhoneCommand.CalendarEvent
-          event?.let {
-            val changes=JSONObject().put("beginMillis",it.beginMillis)
-            if(m.groupValues[3].contains(" durante ")) changes.put("durationSeconds",(it.endMillis-it.beginMillis)/1000)
-            PhoneCommand.Platform(PlatformAction.CALENDAR_UPDATE,r.capture(m,1),content=changes.toString())
+    for ((action, description, examples) in listOf(
+      Triple(PlatformAction.CALENDAR_QUERY, "Consultar eventos de la agenda", listOf("qué tengo mañana", "mostrá mi agenda de esta semana")),
+      Triple(PlatformAction.CALENDAR_UPDATE, "Modificar un evento de la agenda", listOf("editá el evento \"Reunión\"", "pasá la reunión del viernes a las 18:00")),
+      Triple(PlatformAction.CALENDAR_DELETE, "Eliminar un evento de la agenda", listOf("cancelá la reunión del viernes", "borrá el turno médico de mañana")),
+    )) {
+      val id = action.name.lowercase(java.util.Locale.ROOT)
+      val readOnly = action == PlatformAction.CALENDAR_QUERY
+      add(LocalIntentDefinition(id, IntentCategory.CALENDAR, description, examples,
+        listOf(parameter("title", false), parameter("from", false), parameter("until", false), parameter("at", false)) +
+          if (action == PlatformAction.CALENDAR_UPDATE) listOf(parameter("newDate", false), parameter("newTime", false), parameter("durationSeconds", false)) else emptyList(),
+        listOf("android.permission.READ_CALENDAR") + if (readOnly) emptyList() else listOf("android.permission.WRITE_CALENDAR"),
+        "CalendarContract.Instances y CalendarContract.Events", "Consulta local o cambio de un evento elegido y confirmado",
+        prompt = "Indicá el título o el día y horario exactos del evento. Para modificarlo, indicá también el cambio.",
+        accepts = { it is PhoneCommand.Platform && it.action == action },
+        parseParameters = { request ->
+          CalendarSelectionParser().parse(request)?.takeIf {
+            it !is PhoneRoute.Local || (it.command as? PhoneCommand.Platform)?.action == action
           }
-        }
-      }
+        }))
     }
     parsed("routine_run",IntentCategory.AUTOMATION,"Ejecutar una rutina local ya configurada",listOf("ejecutá la rutina Estudio","activá mi rutina Estudio"),PlatformAction.ROUTINE_RUN,
       listOf(parameter("name")),emptyList(),"ConfiguredRoutineStore y WorkflowRunner","Se revisan los pasos guardados antes de ejecutar, sin crear pasos a partir del pedido",
@@ -110,12 +96,4 @@ internal object ExtendedLocalIntents {
     }
   }
   private fun literalTarget(text:String)=text.isNotBlank() && text.length<=2000 && !Regex("\\b(?:y (?:abri|llama|manda|elimina|borra)|si|cuando|despues|luego)\\b").containsMatchIn(PhoneCommandParser.normalize(text))
-  private fun calendarDay(text:String):String? = runCatching {
-    val day=Calendar.getInstance()
-    when(text) {"hoy"->Unit;"manana"->day.add(Calendar.DAY_OF_MONTH,1);else -> {
-      val parts=text.removePrefix("el ").split('/').map(String::toInt)
-      day.clear();day.isLenient=false;day.set(parts[2],parts[1]-1,parts[0]);day.timeInMillis
-    }}
-    "%04d-%02d-%02d".format(Locale.ROOT,day.get(Calendar.YEAR),day.get(Calendar.MONTH)+1,day.get(Calendar.DAY_OF_MONTH))
-  }.getOrNull()
 }

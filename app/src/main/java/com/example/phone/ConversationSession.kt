@@ -44,7 +44,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       lastPlan = plan
       return ConversationResult.Plan(plan)
     }
-    val isCalendar = Regex("^(?:agenda|agendar|agendame|programa|crea (?:un )?evento)\\b").containsMatchIn(normalized)
+    val isCalendar = Regex("^(?:agenda|agendar|agendame|programa|crea (?:un |una )?(?:evento|clase|reunion|turno|cita)|agrega (?:un |una )?(?:evento|clase|reunion|turno|cita))\\b").containsMatchIn(normalized)
     val correcting = Regex("^(?:mejor|cambia|cambialo|que dure|durante|a las?|de la|en vez|para |el |hoy|manana|pasado manana)").containsMatchIn(normalized)
     if (isCalendar || calendarDraft != null && correcting) return calendar(text, isCalendar)
     if (calendarDraft != null && allowSemantic && parser.parse(text) == PhoneRoute.Instinct) {
@@ -54,6 +54,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       if (known.date.isNotBlank()) fields.put("date", known.date)
       if (known.time.isNotBlank()) fields.put("time", known.time)
       CommandDuration.seconds(known.duration)?.let { fields.put("durationSeconds", it) }
+      known.description?.let { fields.put("description", it) }
       return ConversationResult.Semantic(DraftPlan(listOf(CommandDraft("s1", fields))))
     }
     if (normalized.startsWith("mejor ") && lastPlan?.size == 1) {
@@ -104,8 +105,8 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
         clear()
         val event=route.command as? PhoneCommand.CalendarEvent
         if(event!=null) {
-          val begin=Calendar.getInstance().apply {timeInMillis=event.beginMillis}
-          calendarDraft=CalendarDraft(event.title,"%02d/%02d/%04d".format(begin.get(Calendar.DAY_OF_MONTH),begin.get(Calendar.MONTH)+1,begin.get(Calendar.YEAR)),"%02d:%02d".format(begin.get(Calendar.HOUR_OF_DAY),begin.get(Calendar.MINUTE)),"${(event.endMillis-event.beginMillis)/1000} segundos")
+          val begin=(now().clone() as Calendar).apply {timeInMillis=event.beginMillis}
+          calendarDraft=CalendarDraft(event.title,"%02d/%02d/%04d".format(begin.get(Calendar.DAY_OF_MONTH),begin.get(Calendar.MONTH)+1,begin.get(Calendar.YEAR)),"%02d:%02d".format(begin.get(Calendar.HOUR_OF_DAY),begin.get(Calendar.MINUTE)),"${(event.endMillis-event.beginMillis)/1000} segundos", event.description)
           return ConversationResult.Plan(listOf(event)).also {lastPlan=it.commands}
         }
         return ConversationResult.Pass
@@ -115,23 +116,27 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
     return ConversationResult.Pass
   }
 
-  private data class CalendarDraft(var title: String = "", var date: String = "", var time: String = "", var duration: String = "una hora")
+  private data class CalendarDraft(var title: String = "", var date: String = "", var time: String = "", var duration: String = "una hora", var description: String? = null)
   private fun calendar(input: String, fresh: Boolean): ConversationResult {
     val raw = input.trim().trimStart('¿', '¡').trim().trimEnd('.', '!', '?')
     val folded = FoldedRequest.of(raw)
     if (fresh) { clear(); calendarDraft = CalendarDraft() }
     val draft = calendarDraft ?: return ConversationResult.Pass
-    val syntax = if(fresh) FoldedRequest.of(maskQuotes(raw)).text else folded.text
-    val date = Regex("\\b(pasado manana|manana|hoy|(?:el )?[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?)\\b").findAll(syntax).firstOrNull { !syntax.substring(0,it.range.first).endsWith("de la ") }
+    val fullSyntax = if (fresh) FoldedRequest.of(maskQuotes(raw)).text else folded.text
+    val description = Regex(" (?:con descripcion|descripcion)[: ]+(.+)$").find(fullSyntax)
+    if (description != null) draft.description = folded.capture(description, 1)
+    val syntax = description?.let { fullSyntax.substring(0, it.range.first).trimEnd(',', ' ') } ?: fullSyntax
+    val dates = CalendarSelectionParser(now)
+    val date = Regex("\\b${dates.datePattern}\\b").findAll(syntax)
+      .firstOrNull { !syntax.substring(0, it.range.first).endsWith("de la ") }
     if (date != null) {
-      draft.date = if(date.value in listOf("hoy","manana","pasado manana")) {
-        val anchored=now().clone() as Calendar
-        anchored.add(Calendar.DAY_OF_MONTH,when(date.value){"manana"->1;"pasado manana"->2;else->0})
-        "%02d/%02d/%04d".format(java.util.Locale.ROOT,anchored.get(Calendar.DAY_OF_MONTH),anchored.get(Calendar.MONTH)+1,anchored.get(Calendar.YEAR))
-      } else date.value
+      val resolved = dates.date(date.value)
+        ?: return ConversationResult.Prompt("Indicá una fecha válida para el evento.")
+      draft.date = "%02d/%02d/%04d".format(java.util.Locale.ROOT,
+        resolved.get(Calendar.DAY_OF_MONTH), resolved.get(Calendar.MONTH) + 1, resolved.get(Calendar.YEAR))
     }
     if (fresh) {
-      val head = Regex("^(?:agenda|agendar|agendame|programa|crea (?:un )?evento)\\s+").find(folded.text)
+      val head = Regex("^(?:agenda|agendar|agendame|programa|crea|agrega)\\s+").find(folded.text)
       if (head != null) {
         val timeStart=Regex("\\ba las?\\b").find(syntax)?.range?.first
         val end = listOfNotNull(date?.range?.first,timeStart).minOrNull() ?: folded.text.length
@@ -155,6 +160,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
     date?.let {consume(it.range)}
     time?.let {consume(it.range)}
     duration?.let {consume(it.range)}
+    description?.let { consume(it.range) }
     val residue=folded.text.filterIndexed {index,_ -> !consumed[index]}
       .replace(Regex("^(?:mejor|cambia|cambialo)\\s+"), "")
       .replace(Regex("^[,\\s]*(?:y\\s+)?(?:que dure|durante)\\s*$"), "")
@@ -168,7 +174,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
     // CalendarRequestParser validates the full date/time, DST and duration before a plan is offered.
     val route = parser.parse("agendá \"${draft.title}\" ${draft.date} a las ${draft.time} durante ${draft.duration}")
     return when (route) {
-      is PhoneRoute.Local -> ConversationResult.Plan(listOf((route.command as PhoneCommand.CalendarEvent).copy(title = draft.title))).also { lastPlan = it.commands }
+      is PhoneRoute.Local -> ConversationResult.Plan(listOf((route.command as PhoneCommand.CalendarEvent).copy(title = draft.title, description = draft.description))).also { lastPlan = it.commands }
       is PhoneRoute.Clarify -> ConversationResult.Prompt("¿De la mañana o de la tarde? Conservé los demás datos.")
       is PhoneRoute.Unsupported -> ConversationResult.Prompt(route.message)
       else -> ConversationResult.Prompt("Completá la fecha y hora del evento.")
@@ -176,7 +182,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
   }
 
   companion object {
-    private fun seedDraft(text: String, context: String): DraftPlan? {
+    internal fun seedDraft(text: String, context: String): DraftPlan? {
       val type = if (context == "volume") "volume" else context
       if (type !in CapabilityCatalog.specs || type == "calendar") return null
       val fields = org.json.JSONObject().put("type", type)
@@ -216,23 +222,25 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       }
       return runCatching { DraftPlan(listOf(CommandDraft("s1", fields))) }.getOrNull()
     }
-    private fun maskQuotes(input:String):String {
-      var quoted=false
-      return input.map {c ->
-        if(c in "\"“”") quoted=!quoted
-        if(quoted || c in "\"“”") '_' else c
+    private fun maskQuotes(input: String): String {
+      var closing: Char? = null
+      return input.map { character ->
+        val opening = when (character) {
+          '"' -> '"'
+          '“' -> '”'
+          '«' -> '»'
+          else -> null
+        }
+        val masked = closing != null || opening != null
+        if (closing == character) closing = null
+        else if (closing == null) closing = opening
+        if (masked) '_' else character
       }.joinToString("")
     }
     private fun looksLikeRequest(s: String) = Regex("\\b(?:prende|apaga|pone|baja|subi|abri|agenda|llama|lleva|inicia)").containsMatchIn(s)
     /** Split only structural separators outside quotes. An unknown second step remains visible and rejects the plan. */
     fun splitSteps(input: String): List<String> {
-      val masked = StringBuilder(input)
-      var quoted = false
-      input.forEachIndexed { i, c ->
-        if (c in "\"“”") quoted = !quoted
-        if (quoted || c in "\"“”") masked.setCharAt(i, '_')
-      }
-      val syntax = masked.toString()
+      val syntax = maskQuotes(input)
       val separators = Regex("\\s*[,;]\\s*|\\s+(?:y después|y despues|y luego|después|despues|luego|y)\\s+", RegexOption.IGNORE_CASE)
       // 'y' within quantities, titles and a time is not a separator unless followed by a command-like verb.
       val verbs = Regex("^(?:pone|poneme|pon|baja|subi|abri|prende|enciende|encende|apaga|inicia|pausa|continua|reinicia|lleva|llevame|llama|agenda|busca|reproduci|compra|envia|borra|activa|desactiva|silencia|mostra|cancela)\\b")

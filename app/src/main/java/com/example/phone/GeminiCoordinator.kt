@@ -24,7 +24,8 @@ class GeminiCoordinator(
     val canDeferToInstinct = canDeferToInstinct(request, local)
     val indirectPhoneRequest = RequestSafetyPolicy.isIndirectPhoneRequest(request.text)
     val steps = ConversationSession.splitSteps(request.text)
-    if (request.draft == null && steps.size > 1) {
+    val explicitQuestion = '?' in request.text || '¿' in request.text || RequestSafetyPolicy.isGeneralRequest(request.text)
+    if (request.draft == null && steps.size > 1 && !explicitQuestion) {
       steps.firstNotNullOfOrNull(RequestSafetyPolicy::rejection)?.let { return InterpretationResult.Rejected(it) }
       // Plan locally only when the existing conversation parser understands every step.
       // Local and model plans enter the same confirmation flow.
@@ -37,6 +38,17 @@ class GeminiCoordinator(
         else -> Unit
       }
     }
+    val directSequence = request.draft == null && steps.size in 2..10 &&
+      !explicitQuestion &&
+      steps.all { step ->
+        val head = PhoneCommandParser.leadingWord.find(PhoneCommandParser.normalize(step))?.groupValues?.get(1)
+        val explicit = head?.let(PhoneCommandParser::canonicalVerb) != null
+        explicit && when (val route = PhoneCommandParser { request.now }.parse(step)) {
+          is PhoneRoute.Local -> true
+          is PhoneRoute.Clarify -> route.context in setOf("alarm", "timer", "volume", "app")
+          else -> false
+        }
+      }
     val isSingleNewTurn = request.draft == null && steps.size == 1
     if (isSingleNewTurn) {
       when (local) {
@@ -55,7 +67,8 @@ class GeminiCoordinator(
       }
     }
     if (!router.needsDecision(request.text, local)) return when (local) {
-      is PhoneRoute.Local -> InterpretationResult.Direct(local.command)
+      is PhoneRoute.Local -> if (isSingleNewTurn) InterpretationResult.Direct(local.command)
+        else InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
       PhoneRoute.Instinct -> when {
         request.draft != null -> InterpretationResult.Incomplete(request.draft)
         indirectPhoneRequest -> InterpretationResult.Rejected("No pude interpretar el pedido")
@@ -74,6 +87,22 @@ class GeminiCoordinator(
     var failure: GeminiFailureKind? = null
     try {
       return withTimeout(12_000) {
+        if (directSequence) {
+          GeminiDiagnostics.extraction()
+          val result = try {
+            extract(request, extractor, fallback = false, timeout = 8_000)
+          } catch (error: DecisionException) {
+            if (error.kind in setOf(GeminiFailureKind.INVALID_REQUEST, GeminiFailureKind.INVALID_RESPONSE)) throw error
+            InterpretationResult.Failure(error.kind, error.message.orEmpty())
+          }
+          if (result is InterpretationResult.Failure) {
+            failure = result.kind
+            return@withTimeout interpretWithFallback(request, local, steps, stage, result.kind)
+          }
+          return@withTimeout if (result is InterpretationResult.Query || !preservesSteps(request, steps, result))
+            InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
+          else result
+        }
         val decision = try {
           classify(request)
         } catch (error: DecisionException) {
@@ -234,8 +263,30 @@ class GeminiCoordinator(
     if (proposed?.size != steps.size) return false
     return steps.zip(proposed).all { (text, step) ->
       RequestSafetyPolicy.rejection(text) == null && when (val route = PhoneCommandParser { request.now }.parse(text)) {
-        is PhoneRoute.Local -> step.complete(request.now) == route.command
-        is PhoneRoute.Clarify -> request.sourceContext != null || step.complete(request.now) == null
+        is PhoneRoute.Local -> {
+          val completed = step.complete(request.now)
+          if (completed is PhoneCommand.Platform && route.command is PhoneCommand.Platform &&
+            completed.action == route.command.action && completed.action in CalendarSelection.actions)
+            CalendarSelection.decode(completed) == CalendarSelection.decode(route.command)
+          else if (completed is PhoneCommand.OpenApp && route.command is PhoneCommand.OpenApp)
+            PhoneCommandParser.normalize(completed.name) == PhoneCommandParser.normalize(route.command.name)
+          else completed == route.command
+        }
+        is PhoneRoute.Clarify -> {
+          val expected = when (route.context.removePrefix("intent:")) {
+            "app", "app_open" -> "open_app"
+            "volume_set" -> "volume"
+            else -> route.context.removePrefix("intent:")
+          }
+          val known = ConversationSession.seedDraft(text, expected)?.steps?.single()?.json()
+          val proposedFields = step.json()
+          val fieldsPreserved = known?.keys()?.asSequence()?.all { key ->
+            val value = known.get(key).toString()
+            proposedFields.opt(key)?.toString() == value ||
+              !proposedFields.has(key) && (value.isEmpty() || value == "[]")
+          } ?: true
+          step.type == expected && fieldsPreserved && (request.sourceContext != null || step.complete(request.now) == null)
+        }
         is PhoneRoute.Unsupported -> route.recoverable
         else -> true
       }
@@ -256,8 +307,12 @@ class GeminiCoordinator(
   private suspend fun extract(
     request: InterpretationRequest, provider: StructuredCommandExtractor, fallback: Boolean, timeout: Long,
   ): InterpretationResult {
-    val result = withTimeoutOrNull(timeout) { provider.interpret(request) }
-      ?: throw DecisionException("Interpretation timeout", GeminiFailureKind.TIMEOUT)
+    val result = try {
+      withTimeoutOrNull(timeout) { provider.interpret(request) }
+    } catch (_: TimeoutCancellationException) {
+      currentCoroutineContext().ensureActive()
+      null
+    } ?: throw DecisionException("Interpretation timeout", GeminiFailureKind.TIMEOUT)
     currentCoroutineContext().ensureActive()
     return when (result) {
       is InterpretationResult.Query -> if (request.draft == null) InterpretationResult.Query()
