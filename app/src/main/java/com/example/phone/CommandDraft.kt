@@ -5,7 +5,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Immutable, validated partial command. Missing data never becomes an invented executable value. */
-class CommandDraft(val id: String, fields: JSONObject) {
+class CommandDraft internal constructor(
+  val id: String,
+  fields: JSONObject,
+  private val localDeadlineMillis: Long?,
+) {
+  constructor(id: String, fields: JSONObject) : this(id, fields, null)
+
   private val payload: String
   val type: String
   init {
@@ -75,6 +81,10 @@ class CommandDraft(val id: String, fields: JSONObject) {
       when (o.optString("period")) { "AM" -> o.put("hour", hour % 12); "PM" -> o.put("hour", hour % 12 + 12) }
       o.remove("period")
     }
+    localDeadlineMillis?.let {
+      require(it > now.timeInMillis)
+      o.put("deadlineMillis", it)
+    }
     return PhoneCommandCodec.decode(o).also {
       require(it !is PhoneCommand.CalendarEvent || it.beginMillis > now.timeInMillis)
     }
@@ -82,7 +92,8 @@ class CommandDraft(val id: String, fields: JSONObject) {
   fun patch(fields: JSONObject): CommandDraft {
     val o = json()
     fields.keys().forEach { name -> require(name != "type" || fields.getString(name) == type); o.put(name, fields.get(name)) }
-    return CommandDraft(id, o)
+    val deadline = localDeadlineMillis.takeUnless { fields.has("seconds") && fields.optInt("seconds") != json().optInt("seconds") }
+    return CommandDraft(id, o, deadline)
   }
 }
 
@@ -219,6 +230,7 @@ data class DraftPlan(
       if (command is PhoneCommand.TemporaryMode) {
         require(!command.approximate)
         fields.remove("approximate")
+        fields.remove("deadlineMillis")
       }
       if (command is PhoneCommand.CalendarEvent) {
         val date = java.util.Date(command.beginMillis)
@@ -227,7 +239,7 @@ data class DraftPlan(
         fields.put("time", java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT).apply { timeZone = now.timeZone }.format(date))
         fields.put("durationSeconds", (command.endMillis - command.beginMillis) / 1000)
       }
-      CommandDraft("s${index + 1}", fields)
+      CommandDraft("s${index + 1}", fields, (command as? PhoneCommand.TemporaryMode)?.deadlineMillis)
     })
   }
 }

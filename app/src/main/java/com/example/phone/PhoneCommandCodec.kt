@@ -27,7 +27,7 @@ object PhoneCommandCodec {
    is PhoneCommand.Settings -> obj("settings", "kind" to c.kind)
    is PhoneCommand.SavePlace -> obj("save_place", "alias" to c.alias, "address" to c.address)
    is PhoneCommand.Media -> obj("media", "operation" to c.operation.name, "packageName" to c.packageName)
-   is PhoneCommand.TemporaryMode -> obj("temporary_mode", "kind" to c.kind.name, "seconds" to c.seconds, "percent" to c.percent, "approximate" to c.approximate)
+   is PhoneCommand.TemporaryMode -> obj("temporary_mode", "kind" to c.kind.name, "seconds" to c.seconds, "percent" to c.percent, "approximate" to c.approximate, "deadlineMillis" to c.deadlineMillis)
    PhoneCommand.EndMode -> obj("end_mode")
   }
  }
@@ -89,7 +89,7 @@ object PhoneCommandCodec {
    "settings" -> { fields("kind"); val k=str("kind"); require(k in listOf("wifi","bluetooth","internet","conectividad","ajustes")); PhoneCommand.Settings(k) }
    "save_place" -> { fields("alias","address"); val a=str("alias"); require(a in listOf("casa","trabajo")); PhoneCommand.SavePlace(a,str("address")) }
    "media" -> { fields("operation","packageName"); val pkg=if(o.has("packageName")) str("packageName") else null; require(pkg == null || Regex("[a-zA-Z][a-zA-Z0-9_.]+").matches(pkg)); PhoneCommand.Media(MediaOp.valueOf(str("operation")),pkg) }
-   "temporary_mode" -> { fields("kind","seconds","percent","approximate"); val kind=ModeKind.valueOf(str("kind"));require(kind!=ModeKind.MEDIA_VOLUME || o.has("percent")); PhoneCommand.TemporaryMode(kind,integer("seconds",1..86400),integer("percent",0..100,0),bool("approximate",false)) }
+   "temporary_mode" -> { fields("kind","seconds","percent","approximate","deadlineMillis"); val kind=ModeKind.valueOf(str("kind"));require(kind!=ModeKind.MEDIA_VOLUME || o.has("percent")); PhoneCommand.TemporaryMode(kind,integer("seconds",1..86400),integer("percent",0..100,0),bool("approximate",false), if (o.has("deadlineMillis")) num("deadlineMillis").also { require(it > 0) } else null) }
    "end_mode" -> { fields(); PhoneCommand.EndMode }
    else -> throw IllegalArgumentException("Capacidad no admitida")
   }
@@ -125,7 +125,9 @@ object PhoneCommandCodec {
     val app = command.packageName?.let { pkg -> MediaApp.entries.firstOrNull { it.packageName == pkg }?.label ?: pkg }
     "Multimedia: $operation" + (app?.let { " en $it" } ?: "")
   }
-  is PhoneCommand.TemporaryMode -> "${when(command.kind) {ModeKind.MEDIA_VOLUME -> "Volumen multimedia al ${command.percent}%"; ModeKind.SILENT -> "Silenciar llamadas y notificaciones"; ModeKind.DND -> "No molestar"}} durante ${command.seconds / 60} min · restauración ${if(command.approximate) "aproximada" else "programada"}"
+  is PhoneCommand.TemporaryMode -> "${when(command.kind) {ModeKind.MEDIA_VOLUME -> "Volumen multimedia al ${command.percent}%"; ModeKind.SILENT -> "Silenciar llamadas y notificaciones"; ModeKind.DND -> "No molestar"}} ${command.deadlineMillis?.let {
+    "hasta " + java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(it))
+  } ?: "durante ${command.seconds / 60} min"} · restauración ${if(command.approximate) "aproximada" else "programada"}"
   is PhoneCommand.OpenApp -> "Abrir ${command.name}"
   is PhoneCommand.Navigate -> "Ruta a ${command.destination} · ${when(command.mode){TravelMode.DRIVING->"en auto";TravelMode.WALKING->"a pie";TravelMode.BICYCLING->"en bicicleta";TravelMode.TRANSIT->"en transporte público"}}"
   is PhoneCommand.Volume -> "Volumen multimedia: ${when(command.operation){VolumeOp.UP->"subir un paso";VolumeOp.DOWN->"bajar un paso";VolumeOp.SET->"${command.percent}%"}}"

@@ -22,7 +22,7 @@ enum class PlatformAction {
 sealed interface PhoneCommand {
   data class Platform(val action: PlatformAction, val argument: String? = null, val percent: Int? = null, val content: String? = null) : PhoneCommand
   data class Media(val operation: MediaOp, val packageName: String? = null) : PhoneCommand
-  data class TemporaryMode(val kind: ModeKind, val seconds: Int, val percent: Int = 0, val approximate: Boolean = false) : PhoneCommand
+  data class TemporaryMode(val kind: ModeKind, val seconds: Int, val percent: Int = 0, val approximate: Boolean = false, val deadlineMillis: Long? = null) : PhoneCommand
   data object EndMode : PhoneCommand
   data class Navigate(val destination: String, val mode: TravelMode = TravelMode.DRIVING) : PhoneCommand
   data class MapSearch(val query: String) : PhoneCommand

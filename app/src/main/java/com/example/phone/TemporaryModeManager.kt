@@ -34,15 +34,27 @@ class TemporaryModeManager(private val context: Context) {
  fun current(kind:ModeKind):Int=when(kind){ModeKind.MEDIA_VOLUME->audio.getStreamVolume(AudioManager.STREAM_MUSIC);ModeKind.SILENT->audio.ringerMode;ModeKind.DND->notifications.currentInterruptionFilter}
  private fun apply(kind:ModeKind,value:Int){when(kind){ModeKind.MEDIA_VOLUME->audio.setStreamVolume(AudioManager.STREAM_MUSIC,value,0);ModeKind.SILENT->audio.ringerMode=value;ModeKind.DND->notifications.setInterruptionFilter(value)}}
  fun execute(command:PhoneCommand.TemporaryMode,confirmed:Boolean):PhoneActionResult {
+  val now = System.currentTimeMillis()
+  val expiresAt = command.deadlineMillis ?: (now + command.seconds.toLong() * 1000)
+  if (expiresAt - now !in 1..86_400_000) return PhoneActionResult(
+   "La hora de restauración ya pasó o queda fuera de las próximas 24 horas. Indicá otra hora.",
+   outcome = PhoneActionOutcome.REJECTED
+  )
   if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED) return PhoneActionResult("Permití las notificaciones para mostrar el modo temporal y su botón de restauración.",needsNotifications=true,outcome=PhoneActionOutcome.NEEDS_INPUT)
   if(read()!=null) return PhoneActionResult("Ya hay un modo temporal activo. Podés terminarlo y restaurar antes de iniciar otro.",outcome=PhoneActionOutcome.REJECTED)
   if(command.kind!=ModeKind.MEDIA_VOLUME && !notifications.isNotificationPolicyAccessGranted) return PhoneActionResult("Para silenciar llamadas/notificaciones o usar No molestar, habilitá el acceso correspondiente.",accessSettingsAction=Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS,outcome=PhoneActionOutcome.REJECTED)
   if(command.kind==ModeKind.MEDIA_VOLUME && audio.isVolumeFixed) return PhoneActionResult("Este dispositivo tiene volumen fijo.",outcome=PhoneActionOutcome.REJECTED)
   val exact=Build.VERSION.SDK_INT<31 || alarms.canScheduleExactAlarms()
-  if(!exact && !command.approximate) return PhoneActionResult("Android no permite programar la restauración exacta. ¿Aceptás una restauración aproximada? Puede demorarse con el ahorro de batería.",confirmation=command.copy(approximate=true),outcome=PhoneActionOutcome.NEEDS_INPUT)
+  if(!exact && !command.approximate) {
+   val approximate = command.copy(approximate = true)
+   return PhoneActionResult(
+    "${PhoneCommandCodec.summary(approximate)}. Android puede demorar la restauración con el ahorro de batería. ¿Aceptás?",
+    confirmation = approximate, outcome = PhoneActionOutcome.NEEDS_INPUT
+   )
+  }
   if(!confirmed) return PhoneActionResult("${PhoneCommandCodec.summary(command)}. Las alarmas y la conectividad no se modifican. ¿Confirmás?",confirmation=command,outcome=PhoneActionOutcome.NEEDS_INPUT)
   val applied=when(command.kind){ModeKind.MEDIA_VOLUME->audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)*command.percent/100;ModeKind.SILENT->AudioManager.RINGER_MODE_SILENT;ModeKind.DND->NotificationManager.INTERRUPTION_FILTER_PRIORITY}
-  val lease=ModeLease(UUID.randomUUID().toString(),command.kind,current(command.kind),applied,System.currentTimeMillis()+command.seconds.toLong()*1000,true,exact && !command.approximate)
+  val lease=ModeLease(UUID.randomUUID().toString(),command.kind,current(command.kind),applied,expiresAt,true,exact && !command.approximate)
   write(lease)
   try {
    // Starting from a user action permits the visible foreground observer.

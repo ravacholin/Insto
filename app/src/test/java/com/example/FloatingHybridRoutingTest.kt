@@ -226,7 +226,7 @@ class FloatingHybridRoutingTest {
       runCurrent()
       assertEquals(FloatingMode.TYPING, vm.floatingAssistant.value.mode)
       assertEquals("iluminá acá", vm.floatingAssistant.value.text)
-      assertEquals("No pude interpretar el pedido", vm.floatingAssistant.value.error)
+      assertEquals("Configurá tu clave de Groq. El pedido se conserva.", vm.floatingAssistant.value.error)
       vm.sendFloatingText { fail("No dispatch") }
       runCurrent()
       assertEquals(FloatingMode.SENDING, vm.floatingAssistant.value.mode)

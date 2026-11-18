@@ -2,9 +2,9 @@
 
 El catálogo reúne `LocalIntentRegistry`, `LocalIntentPhrases`, `NativeActionParameters` y `ExtendedLocalIntents`. Las órdenes completas se reconocen localmente con verbos en infinitivo, tuteo o voseo y fórmulas como «¿podés…?» o «quiero que…». Los pedidos que requieren interpretación adicional pueden usar Gemini con revisión. El fallo de Gemini no bloquea las consultas a Instinct.
 
-Podés decir «Modo silenciar», «Cuenta atrás de cinco minutos», «Más volumen», «Siguiente canción» o «Guíame hasta Córdoba en bici». Con «Modo silencio por veinte minutos», Insto programa la restauración del ajuste anterior.
+Podés decir «Modo silenciar», «Cuenta atrás de cinco minutos», «Más volumen», «Siguiente canción» o «Guíame hasta Córdoba en bici». Con «Modo silencio por veinte minutos», Insto programa la restauración del ajuste anterior. También admite «Silenciar teléfono hasta las 11 am» y «Poné No molestar hasta las 23:30». Si omitís el día, se toma la próxima vez que ocurra esa hora. La hora de restauración se conserva durante la confirmación.
 
-Con Gemini Decisions activado, Groq solo puede verificar un intent registrado en un pedido nuevo de un paso, sin borrador ni contexto externo. Las dos puntuaciones de clasificación deben ser de al menos 0,94, con alguna por debajo de 0,95, y ambas puntuaciones de seguridad deben alcanzar 0,98. La verificación recibe solo el texto del turno. Usa la clave de **IA → Groq**, el modelo `openai/gpt-oss-20b` y un plazo de 1,5 segundos. Si Groq confirma la categoría, Insto valida los datos y pide revisión antes de ejecutar. Si discrepa o falla, el pedido queda disponible para editarlo.
+Con Gemini Decisions activado, Groq puede interpretar el pedido como respaldo si Gemini falla al clasificar o extraer datos, o si la clasificación es incierta pero la evaluación de seguridad es afirmativa. También puede verificar una categoría propuesta por Gemini. Usa la clave de **IA → Groq** y el modelo `openai/gpt-oss-20b`. Los planes interpretados con Groq pasan por validación y revisión antes de ejecutar.
 
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 

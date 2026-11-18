@@ -121,6 +121,64 @@ class GeminiCoordinatorTest {
     }
   }
 
+  @Test fun explicitClockDeadlineWorksLocallyAcrossMidnight() = runTest {
+    val now = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+      clear()
+      set(2026, java.util.Calendar.NOVEMBER, 18, 12, 0)
+    }
+    val text = "silenciar teléfono hasta las 11 am"
+    val parser = PhoneCommandParser { now }
+    assertTrue(parser.parse(text) is PhoneRoute.Local)
+    val command = (parser.parse(text) as PhoneRoute.Local).command as PhoneCommand.TemporaryMode
+    assertEquals(ModeKind.SILENT, command.kind)
+    assertEquals(23 * 3600, command.seconds)
+    assertEquals(now.timeInMillis + 23 * 3_600_000, command.deadlineMillis)
+    assertEquals(command, PhoneCommandCodec.decode(PhoneCommandCodec.encode(command)))
+    val delayed = (now.clone() as java.util.Calendar).apply { add(java.util.Calendar.MINUTE, 5) }
+    assertEquals(command, DraftPlan.fromCommands(listOf(command), now).steps.single().complete(delayed))
+    val dnd = parser.parse("poné no molestar hasta las 23:30") as PhoneRoute.Local
+    assertEquals(PhoneCommand.TemporaryMode(ModeKind.DND, 41_400, deadlineMillis = now.timeInMillis + 41_400_000), dnd.command)
+    assertTrue(parser.parse("silenciar teléfono hasta las 11") is PhoneRoute.Unsupported)
+    assertTrue(parser.parse("silenciar teléfono hasta hoy a las 11 am") is PhoneRoute.Unsupported)
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { error("Gemini called") }),
+      StructuredCommandExtractor { error("Gemini extraction") }, fallback = StructuredCommandExtractor { error("Groq called") })
+    assertEquals(InterpretationResult.Direct(command),
+      c.interpret(InterpretationRequest(text, now = now), parser.parse(text)))
+  }
+
+  @Test fun geminiExtractionFailureUsesGroqWithReview() = runTest {
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { decision("timer") }),
+      StructuredCommandExtractor { throw DecisionException("offline", GeminiFailureKind.NETWORK) },
+      fallback = StructuredCommandExtractor { listOf(PhoneCommand.Timer(600)) })
+    val result = c.interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
+    assertTrue(result is InterpretationResult.Plan)
+    assertTrue((result as InterpretationResult.Plan).fallback)
+    assertEquals(listOf(PhoneCommand.Timer(600)), result.commands)
+  }
+
+  @Test fun uncertainCategoryUsesGroqOnlyWithAffirmativeSafety() = runTest {
+    var calls = 0
+    val fallback = StructuredCommandExtractor { calls++; listOf(PhoneCommand.Timer(600)) }
+    for (safety in listOf(.99, .20)) {
+      val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {
+        SemanticDecision("timer", .70, .70, safety, .99)
+      }), StructuredCommandExtractor { error("Gemini extraction") }, fallback = fallback)
+      val result = c.interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
+      if (safety == .99) assertTrue((result as InterpretationResult.Plan).fallback)
+      else assertTrue(result is InterpretationResult.Failure)
+    }
+    assertEquals(1, calls)
+  }
+
+  @Test fun groqProposalCannotReplaceATimedActionWithAFixedAction() = runTest {
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {
+      throw DecisionException("offline", GeminiFailureKind.NETWORK)
+    }), StructuredCommandExtractor { error("Gemini extraction") },
+      fallback = StructuredCommandExtractor { listOf(PhoneCommand.Platform(PlatformAction.SILENT_ON)) })
+    val result = c.interpret(InterpretationRequest("dejá el teléfono enmudecido hasta las 11 am"), PhoneRoute.Instinct)
+    assertTrue(result is InterpretationResult.Rejected)
+  }
+
   @Test fun generalQueriesAndFixedActionsNeverExtract() = runTest {
     assertEquals(InterpretationResult.Query(false), coordinator("instinct").interpret(InterpretationRequest("ayudame a estudiar"), PhoneRoute.Instinct))
     assertEquals(InterpretationResult.Direct(PhoneCommand.Volume(VolumeOp.DOWN)), coordinator("volume_down").interpret(InterpretationRequest("un poquito menos de sonido"), PhoneRoute.Instinct))
