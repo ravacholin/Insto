@@ -5,36 +5,61 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.AssistantPreferencesRepository
+import com.example.data.LearnedPhraseStore
+import com.example.ui.components.SettingsDescription
+import com.example.ui.components.SettingsSection
+import com.example.ui.components.SettingsSwitch
 import com.example.ui.theme.PingAssistTheme
 import java.io.IOException
-import com.example.phone.*
+import com.example.phone.DecisionException
+import com.example.phone.GeminiDecisionsClient
+import com.example.phone.GeminiDiagnostics
+import com.example.phone.GeminiSettings
+import com.example.phone.PhoneCommandCodec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 class GroqSettingsActivity : ComponentActivity() {
+  companion object {
+    const val EXTRA_PROVIDER = "com.example.speech.SETUP_PROVIDER"
+    const val PROVIDER_GROQ = "groq"
+    const val PROVIDER_GEMINI = "gemini"
+    private const val SECTION_PHRASES = "phrases"
+  }
+
+  @OptIn(ExperimentalMaterial3Api::class)
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    val requestedProvider = intent.getStringExtra(EXTRA_PROVIDER)
+      ?.takeIf { it == PROVIDER_GROQ || it == PROVIDER_GEMINI }
     val store = GroqKeyStore(this)
     val preferences = AssistantPreferencesRepository(this)
-    val gemini = com.example.phone.GeminiSettings(this)
-    val learned = com.example.data.LearnedPhraseStore(this)
+    val gemini = GeminiSettings(this)
+    val learned = LearnedPhraseStore(this)
     setContent {
       PingAssistTheme {
+        var section by rememberSaveable { mutableStateOf(requestedProvider) }
+        val snackbars = remember { SnackbarHostState() }
         var value by remember { mutableStateOf("") }
         var configured by remember { mutableStateOf(store.read() != null) }
         var message by remember { mutableStateOf<String?>(null) }
@@ -53,147 +78,252 @@ class GroqSettingsActivity : ComponentActivity() {
           lifecycle.addObserver(observer)
           onDispose { probeJob?.cancel(); lifecycle.removeObserver(observer) }
         }
-        Surface(Modifier.fillMaxSize()) {
-          Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("Gemini Decisions · acciones locales", style = MaterialTheme.typography.headlineSmall)
-            Text("Los comandos reconocidos se resuelven en el teléfono sin esperar a Gemini. Decisions ayuda con pedidos que el modo local no entiende; las propuestas generativas se revisan antes de ejecutar. Las consultas a Instinct siguen disponibles si Gemini tarda, falla o no decide con confianza. Los pedidos con datos pendientes conservan su contexto. No se comparten contactos, archivos ni notificaciones con Gemini.")
-            Text("La interpretación con Gemini requiere una clave activa e internet. Sin Gemini se mantiene el modo local para pedidos reconocidos. El nivel gratuito tiene cuotas y puede usar el texto según los términos de Google. El respaldo generativo siempre requiere confirmación.")
-            Text(if (geminiConfigured) "Hay una clave de Gemini guardada y cifrada en este teléfono." else "Cargá tu clave personal de Google AI Studio para activar Decisions.")
-            OutlinedTextField(geminiValue, { geminiValue = it }, label = { Text("Clave de Gemini") }, singleLine = true,
-              visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
-            Button(onClick = {
-              runCatching { gemini.saveKey(geminiValue) }.onSuccess {
-                geminiValue = ""; geminiConfigured = true; hybridEnabled = true; message = "Decisions activado."; setResult(RESULT_OK); finish()
-              }.onFailure { message = "No se pudo guardar la clave de Gemini." }
-            }, enabled = geminiValue.isNotBlank()) { Text("Guardar Gemini y activar") }
-            if (geminiConfigured) {
-              Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Switch(checked = hybridEnabled, onCheckedChange = { desired ->
-                  probeJob?.cancel(); probing = false
-                  runCatching { gemini.setEnabled(desired) }.onSuccess { hybridEnabled = desired }
-                    .onFailure { message = "No se pudo cambiar la clasificación." }
-                })
-                Text("Clasificar pedidos con Gemini Decisions")
-              }
-              Button(enabled = hybridEnabled && !probing, onClick = {
-                probing = true
-                probeJob = scope.launch {
-                  try {
-                    // Probe the provider itself: an offline routing fallback is not a successful connection.
-                    GeminiDecisionsClient(gemini::readKey).classify("ayudame a estudiar geografía")
-                    message = "Decisions respondió correctamente. No se ejecutó ni envió ninguna acción."
-                  } catch (_: TimeoutCancellationException) {
-                    message = "Gemini tardó demasiado. Los comandos locales y el envío a Instinct siguen disponibles."
-                  } catch (failure: DecisionException) {
-                    message = failure.message ?: "No se pudo conectar con Gemini."
-                  } catch (cancelled: CancellationException) { throw cancelled
-                  } finally { probing = false; diagnostics = GeminiDiagnostics.snapshot() }
+        val back = {
+          if (requestedProvider != null || section == null) finish()
+          else {
+            probeJob?.cancel()
+            probing = false
+            value = ""
+            geminiValue = ""
+            message = null
+            section = null
+          }
+        }
+        BackHandler(enabled = section != null && requestedProvider == null, onBack = back)
+        LaunchedEffect(message) {
+          message?.let { snackbars.showSnackbar(it) }
+          message = null
+        }
+
+        val title = when (section) {
+          PROVIDER_GROQ -> "Transcripción"
+          PROVIDER_GEMINI -> "Interpretación"
+          SECTION_PHRASES -> "Frases aprendidas"
+          else -> "Voz e IA"
+        }
+        Scaffold(
+          modifier = Modifier.imePadding(),
+          containerColor = MaterialTheme.colorScheme.background,
+          snackbarHost = { SnackbarHost(snackbars) },
+          topBar = {
+            TopAppBar(
+              title = { Text(title) },
+              colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+              navigationIcon = {
+                IconButton(onClick = back) {
+                  Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
                 }
-              }) { Text(if (probing) "Probando Gemini…" else "Probar conexión de Gemini") }
-              Text("Decisions: ${diagnostics.decisions} · extracción: ${diagnostics.extractions} · respaldo: ${diagnostics.fallbacks}\nÚltima interpretación: ${diagnostics.lastDurationMillis} ms${diagnostics.lastFailure?.let { " · ${it.label}" } ?: ""}", style = MaterialTheme.typography.bodySmall)
-              diagnostics.lastExtractionModel?.let {
-                Text("Último modelo de extracción: $it", style = MaterialTheme.typography.bodySmall)
-              }
-              TextButton(onClick = {
-                probeJob?.cancel(); probing = false
-                runCatching { gemini.clear() }.onSuccess { geminiConfigured = false; hybridEnabled = false; geminiValue = ""; message = "Clave de Gemini borrada." }
-                  .onFailure { message = "No se pudo borrar la clave de Gemini." }
-              }) { Text("Borrar clave de Gemini") }
-            }
-            TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/api-keys"))) } }) { Text("Obtener clave de Gemini") }
-            TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/docs/pricing#gemini-decision"))) } }) { Text("Cuotas, precios y uso de datos de Gemini") }
-            HorizontalDivider()
-            Text("Interpretar voz con Groq", style = MaterialTheme.typography.headlineSmall)
-            Text("Para transcribir en español se envía una copia de la grabación a Groq, con vocabulario si lo habilitaste. Si el pedido es para Instinct, el audio original se manda por WhatsApp. En casos excepcionales, un modelo rápido de Groq recibe solo el texto del pedido para verificar un intent de Gemini Decisions.")
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-              Switch(
-                checked = assistantPrefs?.groqVocabularyEnabled ?: true,
-                enabled = assistantPrefs != null,
-                onCheckedChange = { enabled ->
-                  scope.launch {
-                    try { preferences.setGroqVocabularyEnabled(enabled) }
-                    catch (_: IOException) { message = "No se pudo guardar el ajuste de vocabulario." }
-                  }
-                },
-              )
-              Text("Mejorar el reconocimiento con nombres de apps, rutinas y lugares")
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-              Switch(
-                checked = assistantPrefs?.groqPinnedContactHintsEnabled ?: false,
-                enabled = assistantPrefs?.groqVocabularyEnabled == true,
-                onCheckedChange = { enabled ->
-                  scope.launch {
-                    try { preferences.setGroqPinnedContactHintsEnabled(enabled) }
-                    catch (_: IOException) { message = "No se pudo guardar el ajuste de contactos." }
-                  }
-                },
-              )
-              Text("Incluir los nombres de los contactos fijados")
-            }
-            Text("Con estas opciones, una lista corta de nombres, alias y frases aprendidas viaja a Groq junto con el audio. La opción de contactos agrega solo los nombres del contacto fijado y del contacto de manejo.")
-            Text("Requiere internet. El plan gratuito tiene cuotas; consultá los límites de tu cuenta. Tu clave se guarda cifrada solo en este teléfono.")
-            Text(if (configured) "Hay una clave guardada. Podés reemplazarla o borrarla." else "Cargá tu clave personal una sola vez.")
-            OutlinedTextField(value, { value = it }, label = { Text("Clave de Groq") }, singleLine = true,
-              visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
-            Button(onClick = {
-              runCatching { store.save(value) }.onSuccess { value = ""; setResult(RESULT_OK); finish() }
-                .onFailure { message = "No se pudo guardar la clave. Revisá el valor e intentá otra vez." }
-            }, enabled = value.isNotBlank()) { Text("Guardar y volver") }
-            if (configured) TextButton(onClick = {
-              runCatching { store.clear() }.onSuccess { configured = false; value = ""; message = "Clave borrada." }
-                .onFailure { message = "No se pudo borrar la clave." }
-            }) { Text("Borrar clave") }
-            TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))) } }) { Text("Abrir Groq para obtener una clave") }
-            HorizontalDivider()
-            val phrases by learned.uiSettings.collectAsState(initial = com.example.data.LearnedPhraseStore.Settings())
-            Text("Frases aprendidas", style = MaterialTheme.typography.headlineSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-              Switch(checked = phrases.enabled, onCheckedChange = { enabled ->
-                scope.launch {
-                  try { learned.setEnabled(enabled) }
-                  catch (_: java.io.IOException) { message = "No pude cambiar el aprendizaje." }
-                }
-              })
-              Text("Aprender y usar frases en este teléfono")
-            }
-            if (phrases.entries.isEmpty()) Text("Todavía no hay frases aprendidas.")
-            else {
-              var confirmDeleteAll by remember { mutableStateOf(false) }
-              TextButton(onClick = { confirmDeleteAll = true }) { Text("Borrar todas") }
-              if (confirmDeleteAll) AlertDialog(
-                onDismissRequest = { confirmDeleteAll = false },
-                title = { Text("¿Borrar todas las frases?") },
-                confirmButton = {
-                  TextButton(onClick = {
-                    confirmDeleteAll = false
-                    scope.launch {
-                      try { learned.clear() } catch (_: java.io.IOException) { message = "No pude borrar las frases." }
+              },
+            )
+          },
+        ) { padding ->
+          Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+            key(section) {
+              Column(
+                Modifier.widthIn(max = 620.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+              ) {
+                when (section) {
+                  null -> {
+                    SettingsSection("Transcripción con Groq") {
+                      ConnectionStatus(if (configured) "Clave guardada" else "Sin clave", configured)
+                      SettingsDescription("Convierte tus grabaciones en texto para interpretar pedidos de voz.")
+                      OutlinedButton(onClick = { section = PROVIDER_GROQ }) { Text("Configurar Groq") }
                     }
-                  }) { Text("Borrar todas") }
-                },
-                dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancelar") } },
-              )
-              for (entry in phrases.entries) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                  Column(Modifier.weight(1f)) {
-                    Text(entry.phrase)
-                    Text(PhoneCommandCodec.summary(entry.command), style = MaterialTheme.typography.bodySmall)
-                  }
-                  TextButton(onClick = {
-                    scope.launch {
-                      try { learned.delete(entry.phrase) }
-                      catch (_: java.io.IOException) { message = "No pude borrar la frase." }
+                    SettingsSection("Interpretación con Gemini") {
+                      ConnectionStatus(
+                        label = when {
+                          !geminiConfigured -> "Sin clave"
+                          hybridEnabled -> "Activo"
+                          else -> "En pausa"
+                        },
+                        active = geminiConfigured && hybridEnabled,
+                      )
+                      SettingsDescription("Ayuda a entender pedidos que los comandos locales no reconocen.")
+                      OutlinedButton(onClick = { section = PROVIDER_GEMINI }) { Text("Configurar Gemini") }
                     }
-                  }) { Text("Borrar") }
+                    SettingsSection("Frases aprendidas") {
+                      SettingsDescription("Administrá los comandos que PingAssist aprende en este teléfono.")
+                      OutlinedButton(onClick = { section = SECTION_PHRASES }) { Text("Gestionar frases") }
+                    }
+                  }
+                  PROVIDER_GEMINI -> SettingsSection("Gemini Decisions") {
+                    SettingsDescription("Los comandos reconocidos se resuelven en el teléfono. Gemini interpreta pedidos nuevos y te pide confirmación antes de ejecutar propuestas generativas.")
+                    SettingsDescription("Requiere internet. El texto se procesa según los términos de Google. PingAssist no comparte contactos, archivos ni notificaciones con Gemini.")
+                    SettingsDescription(if (geminiConfigured) "Clave cifrada guardada en este teléfono." else "Agregá tu clave de Google AI Studio para activar Gemini.")
+                    OutlinedTextField(geminiValue, { geminiValue = it }, label = { Text("Clave de Gemini") }, singleLine = true,
+                      visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
+                    Button(onClick = {
+                      runCatching { gemini.saveKey(geminiValue) }.onSuccess {
+                        geminiValue = ""
+                        geminiConfigured = true
+                        hybridEnabled = true
+                        if (requestedProvider == PROVIDER_GEMINI) {
+                          setResult(RESULT_OK)
+                          finish()
+                        } else {
+                          message = "Gemini activado."
+                        }
+                      }.onFailure { message = "No se pudo guardar la clave de Gemini." }
+                    }, enabled = geminiValue.isNotBlank()) { Text("Guardar Gemini y activar") }
+                    if (geminiConfigured) {
+                      SettingsSwitch("Interpretar pedidos con Gemini", hybridEnabled, onCheckedChange = { desired ->
+                        probeJob?.cancel()
+                        probing = false
+                        runCatching { gemini.setEnabled(desired) }.onSuccess { hybridEnabled = desired }
+                          .onFailure { message = "No se pudo cambiar la interpretación." }
+                      })
+                      OutlinedButton(enabled = hybridEnabled && !probing, onClick = {
+                        probing = true
+                        probeJob = scope.launch {
+                          try {
+                            // Probe the provider itself: an offline routing fallback is not a successful connection.
+                            GeminiDecisionsClient(gemini::readKey).classify("ayudame a estudiar geografía")
+                            message = "Decisions respondió correctamente. No se ejecutó ni envió ninguna acción."
+                          } catch (_: TimeoutCancellationException) {
+                            message = "Gemini tardó demasiado. Los comandos locales y el envío a Instinct siguen disponibles."
+                          } catch (failure: DecisionException) {
+                            message = failure.message ?: "No se pudo conectar con Gemini."
+                          } catch (cancelled: CancellationException) { throw cancelled
+                          } finally { probing = false; diagnostics = GeminiDiagnostics.snapshot() }
+                        }
+                      }) { Text(if (probing) "Probando Gemini…" else "Probar conexión de Gemini") }
+                      SettingsDescription("Decisiones: ${diagnostics.decisions} · extracción: ${diagnostics.extractions} · respaldo: ${diagnostics.fallbacks}\nÚltima interpretación: ${diagnostics.lastDurationMillis} ms${diagnostics.lastFailure?.let { " · ${it.label}" } ?: ""}")
+                      diagnostics.lastExtractionModel?.let {
+                        SettingsDescription("Último modelo de extracción: $it")
+                      }
+                      TextButton(onClick = {
+                        probeJob?.cancel(); probing = false
+                        runCatching { gemini.clear() }.onSuccess { geminiConfigured = false; hybridEnabled = false; geminiValue = ""; message = "Clave de Gemini borrada." }
+                          .onFailure { message = "No se pudo borrar la clave de Gemini." }
+                      }) { Text("Borrar clave de Gemini", color = MaterialTheme.colorScheme.error) }
+                    }
+                    TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/api-keys"))) } }) { Text("Obtener clave de Gemini") }
+                    TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/docs/pricing#gemini-decision"))) } }) { Text("Cuotas, precios y uso de datos de Gemini") }
+                  }
+                  PROVIDER_GROQ -> {
+                    SettingsSection("Clave de Groq") {
+                      SettingsDescription("Groq recibe una copia de tu grabación para transcribirla. Si el pedido es para Instinct, el audio original se envía por WhatsApp. En algunos casos, Groq recibe texto para verificar una interpretación de Gemini.")
+                      SettingsDescription("Requiere internet. El plan gratuito tiene cuotas. Tu clave se guarda cifrada en este teléfono.")
+                      SettingsDescription(if (configured) "Clave guardada. Podés reemplazarla o borrarla." else "Agregá tu clave personal de Groq.")
+                      OutlinedTextField(value, { value = it }, label = { Text("Clave de Groq") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
+                      Button(onClick = {
+                        runCatching { store.save(value) }.onSuccess {
+                          value = ""
+                          configured = true
+                          if (requestedProvider == PROVIDER_GROQ) {
+                            setResult(RESULT_OK)
+                            finish()
+                          } else {
+                            message = "Clave de Groq guardada."
+                          }
+                        }
+                          .onFailure { message = "No se pudo guardar la clave. Revisá el valor e intentá otra vez." }
+                      }, enabled = value.isNotBlank()) { Text(if (requestedProvider == PROVIDER_GROQ) "Guardar y volver" else "Guardar clave") }
+                      if (configured) TextButton(onClick = {
+                        runCatching { store.clear() }.onSuccess { configured = false; value = ""; message = "Clave borrada." }
+                          .onFailure { message = "No se pudo borrar la clave." }
+                      }) { Text("Borrar clave de Groq", color = MaterialTheme.colorScheme.error) }
+                      TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))) } }) { Text("Abrir Groq para obtener una clave") }
+                    }
+                    SettingsSection("Vocabulario de transcripción") {
+                      SettingsSwitch(
+                        "Enviar nombres y frases a Groq",
+                        checked = assistantPrefs?.groqVocabularyEnabled == true,
+                        enabled = assistantPrefs != null,
+                        description = "Envía nombres de apps, rutinas, lugares y frases aprendidas junto con el audio.",
+                        onCheckedChange = { enabled ->
+                          scope.launch {
+                            try { preferences.setGroqVocabularyEnabled(enabled) }
+                            catch (_: IOException) { message = "No se pudo guardar el ajuste de vocabulario." }
+                          }
+                        },
+                      )
+                      HorizontalDivider()
+                      SettingsSwitch(
+                        "Incluir contactos fijados",
+                        checked = assistantPrefs?.groqVocabularyEnabled == true &&
+                          assistantPrefs?.groqPinnedContactHintsEnabled == true,
+                        enabled = assistantPrefs?.groqVocabularyEnabled == true,
+                        description = "Agrega los nombres del contacto fijado y del contacto para conducir.",
+                        onCheckedChange = { enabled ->
+                          scope.launch {
+                            try { preferences.setGroqPinnedContactHintsEnabled(enabled) }
+                            catch (_: IOException) { message = "No se pudo guardar el ajuste de contactos." }
+                          }
+                        },
+                      )
+                    }
+                  }
+                  SECTION_PHRASES -> SettingsSection("Aprendizaje local") {
+                    val phrases by learned.uiSettings.collectAsState(initial = null)
+                    val settings = phrases
+                    SettingsSwitch(
+                      "Aprender y usar frases",
+                      checked = settings?.enabled == true,
+                      enabled = settings != null,
+                      description = "Guarda frases y sus acciones en este teléfono.",
+                      onCheckedChange = { enabled ->
+                        scope.launch {
+                          try { learned.setEnabled(enabled) }
+                          catch (_: IOException) { message = "No pude cambiar el aprendizaje." }
+                        }
+                      },
+                    )
+                    val entries = settings?.entries.orEmpty()
+                    if (settings != null && entries.isEmpty()) SettingsDescription("Todavía no hay frases aprendidas.")
+                    if (entries.isNotEmpty()) {
+                      var confirmDeleteAll by remember { mutableStateOf(false) }
+                      TextButton(onClick = { confirmDeleteAll = true }) { Text("Borrar todas", color = MaterialTheme.colorScheme.error) }
+                      if (confirmDeleteAll) AlertDialog(
+                        onDismissRequest = { confirmDeleteAll = false },
+                        title = { Text("¿Borrar todas las frases?") },
+                        confirmButton = {
+                          TextButton(onClick = {
+                            confirmDeleteAll = false
+                            scope.launch {
+                              try { learned.clear() } catch (_: java.io.IOException) { message = "No pude borrar las frases." }
+                            }
+                          }) { Text("Borrar todas", color = MaterialTheme.colorScheme.error) }
+                        },
+                        dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancelar") } },
+                      )
+                      for (entry in entries) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                          Column(Modifier.weight(1f)) {
+                            Text(entry.phrase)
+                            Text(PhoneCommandCodec.summary(entry.command), style = MaterialTheme.typography.bodySmall)
+                          }
+                          TextButton(onClick = {
+                            scope.launch {
+                              try { learned.delete(entry.phrase) }
+                              catch (_: java.io.IOException) { message = "No pude borrar la frase." }
+                            }
+                          }) { Text("Borrar", color = MaterialTheme.colorScheme.error) }
+                        }
+                      }
+                    }
+                  }
+                  else -> Unit
                 }
               }
             }
-            message?.let { Text(it) }
-            TextButton(onClick = { finish() }) { Text("Volver") }
           }
         }
       }
     }
+  }
+}
+
+@Composable
+private fun ConnectionStatus(label: String, active: Boolean) {
+  val colors = MaterialTheme.colorScheme
+  Surface(
+    shape = MaterialTheme.shapes.small,
+    color = if (active) colors.primaryContainer else colors.surfaceVariant,
+    contentColor = if (active) colors.onPrimaryContainer else colors.onSurfaceVariant,
+  ) {
+    Text(label, Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelLarge)
   }
 }

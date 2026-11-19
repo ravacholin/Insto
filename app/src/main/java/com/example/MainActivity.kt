@@ -25,6 +25,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.assist.AssistantRoleHelper
+import com.example.speech.GroqSettingsActivity
 import com.example.ui.MainViewModel
 import com.example.ui.components.ContactEditorSheet
 import com.example.ui.screens.AssistantHomeScreen
@@ -152,10 +153,11 @@ class MainActivity : ComponentActivity() {
           onStopAndSend = { viewModel.stopAndSendRecording() },
           onCancelRecording = { viewModel.cancelRecording() },
           onRequestAudioPermission = { requestMicOrOpenSettings() },
-          onSelectActivationMode = { viewModel.setActivationMode(it) },
+          onOpenProviderSettings = {
+            startActivity(Intent(this@MainActivity, GroqSettingsActivity::class.java))
+          },
           onSelectOrbHoldBehavior = { viewModel.setOrbHoldBehavior(it) },
           onSelectWhatsAppFlavor = { viewModel.setPreferredFlavor(it) },
-          onSelectVoiceRecordingMode = { viewModel.setVoiceRecordingMode(it) },
           onSelectVolumeKeyTrigger = { viewModel.setVolumeKeyTrigger(it) },
           onSelectFloatingPillMode = { viewModel.setFloatingPillMode(it) },
           onToggleEyesFreeCues = { viewModel.setEyesFreeAudioCues(it) },

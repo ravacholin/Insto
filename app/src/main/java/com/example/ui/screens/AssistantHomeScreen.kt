@@ -29,19 +29,16 @@ import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.material.icons.filled.Assistant
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WarningAmber
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,7 +50,6 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -62,6 +58,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,15 +70,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.data.AssistantActivationMode
 import com.example.data.FloatingPillMode
 import com.example.data.OrbHoldBehavior
 import com.example.data.PinnedContact
-import com.example.data.VoiceRecordingMode
 import com.example.data.VolumeKeyTrigger
 import com.example.data.WhatsAppFlavor
 import com.example.ui.PingAssistUiState
 import com.example.ui.components.PingOrb
+import com.example.ui.components.SettingsCategory
+import com.example.ui.components.SettingsChoices
+import com.example.ui.components.SettingsDescription
+import com.example.ui.components.SettingsSwitch
 import com.example.whatsapp.PhoneNumberUtils
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -99,10 +98,9 @@ fun AssistantHomeScreen(
   onStopAndSend: () -> Unit,
   onCancelRecording: () -> Unit,
   onRequestAudioPermission: () -> Unit,
-  onSelectActivationMode: (AssistantActivationMode) -> Unit,
+  onOpenProviderSettings: () -> Unit,
   onSelectOrbHoldBehavior: (OrbHoldBehavior) -> Unit,
   onSelectWhatsAppFlavor: (WhatsAppFlavor) -> Unit,
-  onSelectVoiceRecordingMode: (VoiceRecordingMode) -> Unit,
   onSelectVolumeKeyTrigger: (VolumeKeyTrigger) -> Unit,
   onSelectFloatingPillMode: (FloatingPillMode) -> Unit,
   onToggleEyesFreeCues: (Boolean) -> Unit,
@@ -117,7 +115,7 @@ fun AssistantHomeScreen(
 ) {
   val context = LocalContext.current
   val snackbarHostState = remember { SnackbarHostState() }
-  var showSetupSheet by remember { mutableStateOf(false) }
+  var showSetupSheet by rememberSaveable { mutableStateOf(false) }
 
   LaunchedEffect(uiState.statusBanner) {
     val msg = uiState.statusBanner
@@ -184,7 +182,7 @@ fun AssistantHomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            Column {
+            Column(Modifier.weight(1f).padding(end = 8.dp)) {
               Text(
                 text = "PingAssist",
                 style = MaterialTheme.typography.headlineMedium,
@@ -210,7 +208,7 @@ fun AssistantHomeScreen(
                 modifier = Modifier.size(18.dp),
               )
               Spacer(modifier = Modifier.width(6.dp))
-              Text("Setup")
+              Text("Ajustes")
             }
           }
 
@@ -287,10 +285,9 @@ fun AssistantHomeScreen(
     AssistantSetupSheet(
       uiState = uiState,
       onDismiss = { showSetupSheet = false },
-      onSelectActivationMode = onSelectActivationMode,
+      onOpenProviderSettings = onOpenProviderSettings,
       onSelectOrbHoldBehavior = onSelectOrbHoldBehavior,
       onSelectWhatsAppFlavor = onSelectWhatsAppFlavor,
-      onSelectVoiceRecordingMode = onSelectVoiceRecordingMode,
       onSelectVolumeKeyTrigger = onSelectVolumeKeyTrigger,
       onSelectFloatingPillMode = onSelectFloatingPillMode,
       onToggleEyesFreeCues = onToggleEyesFreeCues,
@@ -298,7 +295,10 @@ fun AssistantHomeScreen(
       onToggleBoomerangReturn = onToggleBoomerangReturn,
       onToggleCarBtAutoVoice = onToggleCarBtAutoVoice,
       onToggleNightWindow = onToggleNightWindow,
-      onEditDrivingContactClick = onEditDrivingContactClick,
+      onEditDrivingContactClick = {
+        showSetupSheet = false
+        onEditDrivingContactClick()
+      },
       onClearDrivingContact = onClearDrivingContact,
       onSetDefaultAssistantClick = onSetDefaultAssistantClick,
       onOpenAccessibilitySettings = {
@@ -369,10 +369,9 @@ private fun StatusPill(
 private fun AssistantSetupSheet(
   uiState: PingAssistUiState,
   onDismiss: () -> Unit,
-  onSelectActivationMode: (AssistantActivationMode) -> Unit,
+  onOpenProviderSettings: () -> Unit,
   onSelectOrbHoldBehavior: (OrbHoldBehavior) -> Unit,
   onSelectWhatsAppFlavor: (WhatsAppFlavor) -> Unit,
-  onSelectVoiceRecordingMode: (VoiceRecordingMode) -> Unit,
   onSelectVolumeKeyTrigger: (VolumeKeyTrigger) -> Unit,
   onSelectFloatingPillMode: (FloatingPillMode) -> Unit,
   onToggleEyesFreeCues: (Boolean) -> Unit,
@@ -390,347 +389,147 @@ private fun AssistantSetupSheet(
   val prefs = uiState.preferences
   val system = uiState.systemState
 
+  var confirmClearLogs by rememberSaveable { mutableStateOf(false) }
+  var expandedCategory by rememberSaveable { mutableStateOf<String?>(null) }
+  val toggleCategory: (String) -> Unit = { category ->
+    expandedCategory = if (expandedCategory == category) null else category
+  }
+
   ModalBottomSheet(
     onDismissRequest = onDismiss,
     sheetState = sheetState,
-    containerColor = MaterialTheme.colorScheme.surface,
+    containerColor = MaterialTheme.colorScheme.background,
   ) {
     Column(
-      modifier =
-        Modifier.fillMaxWidth()
-          .verticalScroll(rememberScrollState())
-          .padding(horizontal = 24.dp)
-          .padding(bottom = 24.dp)
-          .navigationBarsPadding(),
-      verticalArrangement = Arrangement.spacedBy(16.dp),
+      Modifier.align(Alignment.CenterHorizontally).widthIn(max = 620.dp).fillMaxWidth()
+        .navigationBarsPadding().verticalScroll(rememberScrollState())
+        .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Text(
-        text = "Assistant & Automation Setup",
-        style = MaterialTheme.typography.headlineMedium,
-        color = MaterialTheme.colorScheme.onSurface,
-      )
-
-      if (!system.installedWhatsApp.hasAnyWhatsApp) {
-        Surface(
-          shape = RoundedCornerShape(16.dp),
-          color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f),
-        ) {
-          Row(
-            modifier = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Icon(
-              Icons.Filled.WarningAmber,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onTertiaryContainer,
-            )
-            Text(
-              text = "WhatsApp is not installed on this device; link fallback will be used.",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onTertiaryContainer,
-            )
-          }
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Ajustes", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+        IconButton(onClick = onDismiss) {
+          Icon(Icons.Filled.Close, contentDescription = "Cerrar ajustes")
         }
       }
 
-      // 1. Hold Duration & Voice Strategy
-      Text(text = "1. Orb Hold Timing (Chat vs Audio)", style = MaterialTheme.typography.titleMedium)
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OrbHoldBehavior.entries.forEach { behavior ->
-          val selected = prefs.orbHoldBehavior == behavior
-          Surface(
-            shape = RoundedCornerShape(16.dp),
-            color =
-              if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-              else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            border =
-              BorderStroke(
-                width = if (selected) 1.5.dp else 1.dp,
-                color =
-                  if (selected) MaterialTheme.colorScheme.primary
-                  else MaterialTheme.colorScheme.outlineVariant,
-              ),
-            modifier =
-              Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .clickable { onSelectOrbHoldBehavior(behavior) }
-                .testTag("orb_hold_${behavior.name.lowercase()}"),
-          ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-              Text(text = behavior.title, style = MaterialTheme.typography.titleMedium)
-              Text(
-                text = behavior.subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
+      SettingsCategory("Asistente y accesos rápidos", expandedCategory == "access", { toggleCategory("access") }) {
+        Text("Asistente predeterminado", style = MaterialTheme.typography.titleMedium)
+        SettingsDescription(
+          if (system.isDefaultAssistant) "PingAssist está activo como asistente de Android."
+          else "Elegí PingAssist en Android para abrir el panel flotante y hablar o escribir.",
+          modifier = Modifier.testTag("floating_assistant_hint"),
+        )
+        OutlinedButton(onClick = onSetDefaultAssistantClick, modifier = Modifier.testTag("set_default_assistant_button")) {
+          Text(if (system.isDefaultAssistant) "Cambiar asistente" else "Elegir asistente")
         }
+        HorizontalDivider()
+        Text("Servicio de accesibilidad", style = MaterialTheme.typography.titleMedium)
+        SettingsDescription(
+          if (system.isAutoSendEnabled) "Activo. Controla los atajos de volumen, el botón flotante y el envío automático."
+          else "Activá el servicio de PingAssist en Android para usar los atajos de volumen, el botón flotante y el envío automático.",
+        )
+        OutlinedButton(onClick = onOpenAccessibilitySettings) { Text("Abrir Accesibilidad") }
+        Text("Mantener presionado un botón de volumen", style = MaterialTheme.typography.titleMedium)
+        SettingsChoices(VolumeKeyTrigger.entries, prefs.volumeKeyTrigger, onSelectVolumeKeyTrigger, label = {
+          when (it) {
+            VolumeKeyTrigger.DISABLED -> "Desactivado"
+            VolumeKeyTrigger.VOLUME_DOWN_HOLD -> "Bajar volumen"
+            VolumeKeyTrigger.VOLUME_UP_HOLD -> "Subir volumen"
+          }
+        })
+        Text("Botón flotante", style = MaterialTheme.typography.titleMedium)
+        SettingsChoices(FloatingPillMode.entries, prefs.floatingPillMode, onSelectFloatingPillMode, label = {
+          when (it) {
+            FloatingPillMode.OFF -> "Oculto"
+            FloatingPillMode.CAR_OR_BLUETOOTH_ONLY -> "Solo en el auto o con Bluetooth"
+            FloatingPillMode.ALWAYS_ON -> "Siempre visible"
+          }
+        })
       }
 
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-      // 2. Voice Recording Strategy (Native WhatsApp PTT vs Audio File)
-      Text(text = "Modo de audio de accesos anteriores", style = MaterialTheme.typography.titleMedium)
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        VoiceRecordingMode.entries.forEach { mode ->
-          val selected = prefs.voiceRecordingMode == mode
-          Surface(
-            shape = RoundedCornerShape(16.dp),
-            color =
-              if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-              else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            border =
-              BorderStroke(
-                width = if (selected) 1.5.dp else 1.dp,
-                color =
-                  if (selected) MaterialTheme.colorScheme.primary
-                  else MaterialTheme.colorScheme.outlineVariant,
-              ),
-            modifier =
-              Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .clickable { onSelectVoiceRecordingMode(mode) }
-                .testTag("voice_mode_${mode.name.lowercase()}"),
-          ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-              Text(text = mode.label, style = MaterialTheme.typography.titleMedium)
-              Text(
-                text = mode.description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
+      SettingsCategory("WhatsApp y notas de voz", expandedCategory == "whatsapp", { toggleCategory("whatsapp") }) {
+        if (!system.installedWhatsApp.hasAnyWhatsApp) {
+          Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.tertiaryContainer) {
+            Text("WhatsApp no está instalado. PingAssist usará un enlace para abrir el chat.", Modifier.padding(12.dp))
           }
         }
-      }
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-      // 2. System & Physical Triggers
-      Text(text = "2. System & Physical Triggers", style = MaterialTheme.typography.titleMedium)
-
-      Text(
-        text = "El atajo del asistente abre el panel flotante para escribir o hablar. " +
-          "Escucha inicial: 4 s. Envío de audio: 3 s de silencio o botón Enviar. " +
-          "No hace falta mantener pulsada ninguna tecla.",
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier.testTag("floating_assistant_hint"),
-      )
-
-      Button(
-        onClick = onSetDefaultAssistantClick,
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("set_default_assistant_button"),
-      ) {
-        Text(
-          if (system.isDefaultAssistant) "Manage Default Assistant"
-          else "Set PingAssist as Default Assistant"
+        Text("Aplicación para abrir chats", style = MaterialTheme.typography.titleMedium)
+        SettingsChoices(WhatsAppFlavor.entries, prefs.preferredFlavor, onSelectWhatsAppFlavor, label = {
+          if (it == WhatsAppFlavor.AUTO) "Detectar automáticamente" else it.label
+        })
+        HorizontalDivider()
+        Text("Botón principal", style = MaterialTheme.typography.titleMedium)
+        SettingsDescription("Tocá para abrir el chat. Mantené presionado para grabar y soltá para enviar.")
+        SettingsChoices(
+          OrbHoldBehavior.entries, prefs.orbHoldBehavior, onSelectOrbHoldBehavior,
+          label = { if (it == OrbHoldBehavior.PROGRESSIVE_CHAT_THEN_AUDIO) "Grabar después de 2,5 s" else "Grabar después de 0,3 s" },
+          itemModifier = { Modifier.testTag("orb_hold_${it.name.lowercase()}") },
         )
       }
 
-      Text(
-        text = "Physical Volume-Hold Trigger (via Accessibility)",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        VolumeKeyTrigger.entries.forEach { trigger ->
-          FilterChip(
-            selected = prefs.volumeKeyTrigger == trigger,
-            onClick = { onSelectVolumeKeyTrigger(trigger) },
-            label = { Text(trigger.label, maxLines = 1) },
-          )
+      SettingsCategory("Conducción y horarios", expandedCategory == "driving", { toggleCategory("driving") }) {
+        SettingsSwitch("Modo de voz en el auto o con Bluetooth", prefs.contextRule.switchToVoiceInCarOrBluetooth,
+          onToggleCarBtAutoVoice, "Da prioridad a la grabación de voz cuando detecta el modo auto o audio Bluetooth.")
+        HorizontalDivider()
+        Text("Contacto al conducir", style = MaterialTheme.typography.titleMedium)
+        SettingsDescription(prefs.contextRule.drivingContact?.displayName ?: "Se usa el contacto fijado.")
+        OutlinedButton(onClick = onEditDrivingContactClick) {
+          Text(if (prefs.contextRule.drivingContact == null) "Elegir contacto" else "Cambiar contacto")
+        }
+        if (prefs.contextRule.drivingContact != null) {
+          TextButton(onClick = onClearDrivingContact) { Text("Usar contacto fijado") }
+        }
+        HorizontalDivider()
+        SettingsSwitch("Volver a Maps o Waze", prefs.boomerangReturnEnabled, onToggleBoomerangReturn,
+          "Vuelve a la navegación después de enviar una nota de voz. Requiere el servicio de Accesibilidad.")
+        SettingsSwitch("Modo de voz nocturno", prefs.contextRule.nightWindowEnabled, onToggleNightWindow,
+          "Da prioridad a la grabación de voz de 21:00 a 07:00.")
+      }
+
+      SettingsCategory("Sonido y vibración", expandedCategory == "feedback", { toggleCategory("feedback") }) {
+        SettingsSwitch("Avisos al grabar y enviar", prefs.eyesFreeAudioCues, onToggleEyesFreeCues,
+          "Reproduce señales distintas al empezar a grabar, al enviar y si ocurre un error.")
+        OutlinedButton(onClick = onTestAudioCue, modifier = Modifier.testTag("test_audio_cue_button")) {
+          Text("Probar aviso de grabación")
         }
       }
 
-      Text(
-        text = "Tip: Add the PingAssist tile in Android Quick Settings for 1-tap notification shade access.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-      // 3. Context Automation Rules
-      Text(text = "3. Context Automation", style = MaterialTheme.typography.titleMedium)
-      SwitchRow(
-        title = "Auto-Voice in Car / Bluetooth",
-        subtitle = "Automatically switches to direct voice mode when Car Mode or Bluetooth audio is connected.",
-        checked = prefs.contextRule.switchToVoiceInCarOrBluetooth,
-        onCheckedChange = onToggleCarBtAutoVoice,
-      )
-
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text("Driving Contact Override", style = MaterialTheme.typography.bodyLarge)
-          Text(
-            text = prefs.contextRule.drivingContact?.displayName ?: "Uses primary pinned contact",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          if (prefs.contextRule.drivingContact != null) {
-            TextButton(onClick = onClearDrivingContact) { Text("Clear") }
-          }
-          OutlinedButton(onClick = onEditDrivingContactClick) { Text("Set") }
-        }
-      }
-
-      SwitchRow(
-        title = "Night Window Voice Mode (21:00–07:00)",
-        subtitle = "Prioritize instant voice recording at night.",
-        checked = prefs.contextRule.nightWindowEnabled,
-        onCheckedChange = onToggleNightWindow,
-      )
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-      // 4. Eyes-Free Audio & Haptic Cues
-      Text(text = "4. Eyes-Free Feedback", style = MaterialTheme.typography.titleMedium)
-      SwitchRow(
-        title = "Audio & Haptic Cues",
-        subtitle = "Ducks media briefly and plays distinct tones for recording start, sent, and error.",
-        checked = prefs.eyesFreeAudioCues,
-        onCheckedChange = onToggleEyesFreeCues,
-      )
-      OutlinedButton(
-        onClick = onTestAudioCue,
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("test_audio_cue_button"),
-      ) {
-        Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(8.dp))
-        Text("Test Start Audio & Haptic Cue")
-      }
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-      // 5. Floating Pill & Boomerang Return
-      Text(
-        text = "5. Floating Pill & Auto-Return (Accessibility)",
-        style = MaterialTheme.typography.titleMedium,
-      )
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        FloatingPillMode.entries.forEach { pillMode ->
-          FilterChip(
-            selected = prefs.floatingPillMode == pillMode,
-            onClick = { onSelectFloatingPillMode(pillMode) },
-            label = { Text(pillMode.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-          )
-        }
-      }
-
-      SwitchRow(
-        title = "Boomerang Return After Send",
-        subtitle = "Automatically returns to Maps / Waze ~0.7s after sending a voice note.",
-        checked = prefs.boomerangReturnEnabled,
-        onCheckedChange = onToggleBoomerangReturn,
-      )
-
-      Button(
-        onClick = onOpenAccessibilitySettings,
-        shape = RoundedCornerShape(16.dp),
-        colors =
-          if (system.isAutoSendEnabled) ButtonDefaults.outlinedButtonColors()
-          else ButtonDefaults.buttonColors(),
-        modifier = Modifier.fillMaxWidth().height(48.dp),
-      ) {
-        Text(
-          if (system.isAutoSendEnabled) "Accessibility Helper Active (Settings)"
-          else "Enable Accessibility Auto-Send & Triggers"
-        )
-      }
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-      Text(text = "WhatsApp App", style = MaterialTheme.typography.titleMedium)
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        WhatsAppFlavor.entries.forEach { flavor ->
-          FilterChip(
-            selected = prefs.preferredFlavor == flavor,
-            onClick = { onSelectWhatsAppFlavor(flavor) },
-            label = { Text(flavor.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-          )
-        }
+      SettingsCategory("Reconocimiento e interpretación", expandedCategory == "providers", { toggleCategory("providers") }) {
+        SettingsDescription("Configurá Groq para transcribir audio, Gemini para interpretar pedidos y las frases que aprende PingAssist.")
+        OutlinedButton(onClick = onOpenProviderSettings) { Text("Abrir ajustes de voz e IA") }
       }
 
       if (prefs.recentLogs.isNotEmpty()) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(text = "Recent Activity", style = MaterialTheme.typography.titleMedium)
-          TextButton(onClick = onClearLogs) {
-            Icon(Icons.Filled.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(4.dp))
-            Text("Clear")
+        SettingsCategory("Actividad reciente", expandedCategory == "activity", { toggleCategory("activity") }) {
+          prefs.recentLogs.take(5).forEach { log ->
+            val timeText = remember(log.timestampMillis) {
+              SimpleDateFormat("d MMM, HH:mm", Locale.getDefault()).format(Date(log.timestampMillis))
+            }
+            Column {
+              Text("${log.statusLabel} (${log.contactName})", style = MaterialTheme.typography.bodyMedium)
+              SettingsDescription(timeText)
+            }
           }
-        }
-        prefs.recentLogs.take(5).forEach { log ->
-          val timeText = remember(log.timestampMillis) {
-            SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(log.timestampMillis))
-          }
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-          ) {
-            Text(
-              text = "${log.statusLabel} (${log.contactName})",
-              style = MaterialTheme.typography.bodyMedium,
-              modifier = Modifier.weight(1f),
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = timeText,
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+          TextButton(onClick = { confirmClearLogs = true }) {
+            Text("Borrar historial", color = MaterialTheme.colorScheme.error)
           }
         }
       }
     }
   }
-}
-
-@Composable
-private fun SwitchRow(
-  title: String,
-  subtitle: String,
-  checked: Boolean,
-  onCheckedChange: (Boolean) -> Unit,
-) {
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    horizontalArrangement = Arrangement.SpaceBetween,
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-      Text(text = title, style = MaterialTheme.typography.bodyLarge)
-      Text(
-        text = subtitle,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
-    Switch(checked = checked, onCheckedChange = onCheckedChange)
+  if (confirmClearLogs) {
+    AlertDialog(
+      onDismissRequest = { confirmClearLogs = false },
+      title = { Text("¿Borrar la actividad reciente?") },
+      dismissButton = { TextButton(onClick = { confirmClearLogs = false }) { Text("Cancelar") } },
+      confirmButton = {
+        TextButton(onClick = {
+          confirmClearLogs = false
+          onClearLogs()
+        }) { Text("Borrar historial", color = MaterialTheme.colorScheme.error) }
+      },
+    )
   }
 }
 
