@@ -8,6 +8,10 @@ import java.util.Locale
 class FoldedRequest private constructor(val raw: String, val text: String, private val offsets: List<Int>) {
   fun capture(match: MatchResult, group: Int): String {
     val range = match.groups[group]?.range ?: return ""
+    return capture(range)
+  }
+
+  internal fun capture(range: IntRange): String {
     if (range.isEmpty()) return ""
     return raw.substring(offsets[range.first], offsets.getOrNull(range.last + 1) ?: raw.length).trim()
   }

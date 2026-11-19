@@ -3,7 +3,7 @@ package com.example.phone
 import java.util.Calendar
 
 internal object ExtendedCommandParser {
- fun parse(s: String, now: () -> Calendar): PhoneRoute? {
+ fun parse(s: String, now: () -> Calendar, deadlineReply: String? = null): PhoneRoute? {
   fun local(c: PhoneCommand) = PhoneRoute.Local(c)
   if (s in listOf("termina el modo", "termina el modo y restaura ahora", "restaura ahora", "restaura el volumen", "desactiva el modo temporal")) return local(PhoneCommand.EndMode)
   Regex("^(pausa|para|detene) (?:(?:el |la )?(?:audio|musica|reproduccion) (?:de|en) |en )?(spotify|youtube)$").matchEntire(s)?.let {
@@ -29,14 +29,39 @@ internal object ExtendedCommandParser {
   val kind = when {
    volume != null -> ModeKind.MEDIA_VOLUME
    fixed?.action == PlatformAction.SILENT_ON -> ModeKind.SILENT
-   fixed?.action == PlatformAction.DND_ON -> ModeKind.DND
+   fixed?.action == PlatformAction.DND_ON || mode == "no molestar" -> ModeKind.DND
    fixed?.action == PlatformAction.VIBRATE_ON -> return PhoneRoute.Unsupported("El modo vibración temporal no está disponible.")
    else -> return null
   }
   val timing = timed.groupValues[3]
   val clockDeadline = timed.groupValues[2] == "hasta"
+  if (deadlineReply != null && !clockDeadline) return null
   val current = if (clockDeadline) now() else null
-  val deadline = current?.let { deadlineMillis(timing, it) }
+  val deadline = if (current != null) {
+   val match = Regex("^(?:(hoy|manana)(?: (?:a )?|$))?(?:las? )?(.*?)(?<!de la)(?: (hoy|manana))?$").matchEntire(timing)
+   val prefixDay = match?.groupValues?.get(1).orEmpty()
+   val clock = match?.groupValues?.get(2).orEmpty()
+   val suffixDay = match?.groupValues?.get(3).orEmpty()
+   val resolvedClock = when {
+    deadlineReply == null -> clock
+    clock.isNotEmpty() && !ClockTime.shape(clock) -> return null
+    ClockTime.isPeriod(deadlineReply) -> ClockTime.replacePeriod(clock, deadlineReply)
+    else -> deadlineReply
+   }
+   val time = ClockTime.parse(resolvedClock)
+   if (time == ClockTime.Ambiguous) return PhoneRoute.Clarify(
+    "Indicá si la hora es de la mañana o de la tarde, o usá una hora de 24 horas como 17:30.", "temporary_deadline")
+   if (time !is ClockTime.Exact || prefixDay.isNotEmpty() && suffixDay.isNotEmpty()) {
+    val message = "No pude leer la hora de restauración. Probá con un formato como 12:20 pm, 12.20 pm o 23:00."
+    return if ((clock.isEmpty() || ClockTime.shape(clock)) && !(prefixDay.isNotEmpty() && suffixDay.isNotEmpty()))
+     PhoneRoute.Clarify(message, "temporary_deadline") else PhoneRoute.Unsupported(message)
+   }
+   val day = prefixDay.ifEmpty { suffixDay }
+   val tomorrow = (current.clone() as Calendar).apply { add(Calendar.DATE, 1) }
+   val first = time.onDate(if (day == "manana") tomorrow else current)
+   val resolved = if (day.isEmpty() && first != null && first <= current.timeInMillis) time.onDate(tomorrow) else first
+   resolved ?: return PhoneRoute.Unsupported("Esa hora no existe o se repite por un cambio de horario. Indicá otra hora.")
+  } else null
   val duration = if (current != null) {
    val remaining = deadline?.minus(current.timeInMillis)
    if (remaining == null || remaining !in 1..86_400_000) return PhoneRoute.Unsupported(
@@ -54,50 +79,4 @@ internal object ExtendedCommandParser {
   return local(PhoneCommand.TemporaryMode(kind, duration, percent, deadlineMillis = deadline))
  }
 
- private fun deadlineMillis(text: String, now: Calendar): Long? {
-  val time = Regex(
-   "^(?:(hoy|manana) (?:a )?)?(?:las? )?([a-z0-9]+)(?::([0-9]{2})| y (media|cuarto))?" +
-    "(?: ?(a ?m|p ?m|de la manana|de la tarde|de la noche|horas))?(?: (hoy|manana))?$"
-  ).matchEntire(text) ?: return null
-  val (prefixDay, hourText, numericMinute, spokenMinute, period, suffixDay) = time.destructured
-  if (prefixDay.isNotEmpty() && suffixDay.isNotEmpty()) return null
-  val day = prefixDay.ifEmpty { suffixDay }
-  var hour = PhoneCommandParser.number(hourText) ?: return null
-  val minute = when (spokenMinute) {
-   "media" -> 30
-   "cuarto" -> 15
-   else -> numericMinute.toIntOrNull() ?: 0
-  }
-  if (hour !in 0..23 || minute !in 0..59) return null
-  if (period.isNotEmpty() && period != "horas") {
-   if (hour !in 1..12) return null
-   hour = when (period) {
-    "am", "a m", "de la manana" -> hour % 12
-    "de la noche" -> if (hour == 12) 0 else hour + 12
-    else -> hour % 12 + 12
-   }
-  } else if (period.isEmpty() && numericMinute.isEmpty() && hour in 1..12) return null
-
-  fun onDay(offset: Int): Long? {
-   val target = (now.clone() as Calendar).apply {
-    add(Calendar.DAY_OF_MONTH, offset)
-    isLenient = false
-    set(Calendar.HOUR_OF_DAY, hour)
-    set(Calendar.MINUTE, minute)
-    set(Calendar.SECOND, 0)
-    set(Calendar.MILLISECOND, 0)
-   }
-   val instant = runCatching { target.timeInMillis }.getOrNull() ?: return null
-   val zone = target.timeZone
-   val currentOffset = zone.getOffset(instant)
-   // Reject a wall-clock time that occurs twice when clocks move backward.
-   for (nearby in listOf(instant - 86_400_000, instant + 86_400_000)) {
-    val difference = currentOffset - zone.getOffset(nearby)
-    if (difference != 0 && zone.getOffset(instant + difference) == currentOffset - difference) return null
-   }
-   return instant
-  }
-  val first = onDay(if (day == "manana") 1 else 0) ?: return null
-  return if (day.isEmpty() && first <= now.timeInMillis) onDay(1) else first
- }
 }

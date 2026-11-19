@@ -82,7 +82,8 @@ class LocalIntentRegistryTest {
     val tomorrow=now.clone() as java.util.Calendar;tomorrow.add(java.util.Calendar.DAY_OF_MONTH,1)
     val expected="%04d-%02d-%02d".format(java.util.Locale.ROOT,tomorrow.get(java.util.Calendar.YEAR),tomorrow.get(java.util.Calendar.MONTH)+1,tomorrow.get(java.util.Calendar.DAY_OF_MONTH))
     assertEquals(expected,alarm.date);assertEquals(8,alarm.hour)
-    assertTrue(registry.reply("alarm","a las siete de la mañana",source) is PhoneRoute.Clarify)
+    assertEquals(PhoneRoute.Local(PhoneCommand.Alarm(7, 0, date = expected)),
+      registry.reply("alarm", "a las siete de la mañana", source))
   }
   @Test fun extendedCatalogResolvesPublicOperationsRatherThanConstantRejections() {
     for((id,text) in listOf("file_open" to "abrí el archivo informe.pdf","file_delete" to "eliminá el archivo informe.pdf","file_copy" to "copiá un archivo","calendar_query" to "qué tengo mañana","calendar_update" to "editá el evento \"Reunión\"","calendar_delete" to "cancelá el evento \"Reunión\"","routine_run" to "ejecutá la rutina Estudio")) {

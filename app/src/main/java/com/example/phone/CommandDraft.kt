@@ -48,6 +48,7 @@ class CommandDraft internal constructor(
     val required = CapabilityCatalog.specs.getValue(type).required.toMutableSet()
     if (type == "volume" && o.optString("operation") == "SET" || type == "temporary_mode" && o.optString("kind") == "MEDIA_VOLUME") required += "percent"
     if (type == "alarm" && o.has("hour") && o.getInt("hour") in 1..12) required += "period"
+    if (type == "calendar" && o.has("time") && ClockTime.parse(ClockTime.reply(o.getString("time"))) == ClockTime.Ambiguous) required += "period"
     if (type in CalendarSelection.types) {
       if (type != "calendar_query" && !o.has("title") && (!o.has("from") || !o.has("at") || o.has("until"))) required += "title"
       if (type == "calendar_query" && listOf("title", "from", "next").none(o::has)) required += "from"
@@ -66,14 +67,13 @@ class CommandDraft internal constructor(
       return PhoneCommandCodec.decode(PhoneCommandCodec.encode(selection.command(action)))
     }
     if (type == "calendar" && o.has("date")) {
-      val title = o.getString("title")
-      require(title.none { it in "\"“”" }) { "Título con comillas no representable" }
-      val route = PhoneCommandParser { now.clone() as Calendar }.parse(
-        "agendá \"$title\" ${o.getString("date")} a las ${o.getString("time")} durante ${o.optInt("durationSeconds", 3600)} segundos")
+      val route = CalendarRequestParser { now }.create(o.getString("title"), o.getString("date"),
+        o.getString("time"), o.optInt("durationSeconds", 3600), o.optString("description").takeIf(String::isNotEmpty))
       return when (route) {
-        is PhoneRoute.Local -> (route.command as PhoneCommand.CalendarEvent).copy(title = title, description = o.optString("description").takeIf(String::isNotEmpty))
+        is PhoneRoute.Local -> route.command
         is PhoneRoute.Clarify -> null
-        else -> throw IllegalArgumentException("Fecha u hora inválida")
+        is PhoneRoute.Unsupported -> throw IllegalArgumentException(route.message)
+        else -> error("Ruta inesperada para un evento")
       }
     }
     if (type == "alarm") {
@@ -169,24 +169,44 @@ data class DraftPlan(
         if (mode != null) patch.put("mode", mode) else if (!o.has("destination")) patch.put("destination", text.trim()) else return null
       }
       "alarm" -> {
-        val period = mapOf("de la manana" to "AM", "de la tarde" to "PM", "am" to "AM", "pm" to "PM")[s]
-        if (period != null) patch.put("period", period) else {
-          val route = PhoneCommandParser { now }.parse("alarma $s")
-          val command = (route as? PhoneRoute.Local)?.command as? PhoneCommand.Alarm ?: return null
-          patch.put("hour", command.hour).put("minute", command.minute).put("period", "24H")
+        val answer = ClockTime.reply(text)
+        if (ClockTime.isPeriod(answer)) {
+          val period = when (ClockTime.compactPeriod(answer)) {
+            "am", "de la manana" -> "AM"
+            "de la noche" -> if (o.optInt("hour") == 12) "AM" else "PM"
+            else -> "PM"
+          }
+          patch.put("period", period)
+        } else {
+          val time = ClockTime.parse(answer) as? ClockTime.Exact ?: return null
+          patch.put("hour", time.hour).put("minute", time.minute).put("period", "24H")
         }
       }
-      "calendar" -> when {
-        !o.has("title") -> patch.put("title", text.trim())
-        Regex("^(?:hoy|manana|pasado manana|(?:el )?[0-9]{1,2}/[0-9]{1,2}(?:/[0-9]{4})?)$").matches(s) -> patch.put("date", s.removePrefix("el "))
-        s in listOf("de la manana", "de la tarde", "de la noche") && o.has("time") -> {
-          val oldTime = PhoneCommandParser.normalize(o.getString("time")).replace(Regex(" (?:de la (?:manana|tarde|noche)|am|pm)$"), "")
-          patch.put("time", "$oldTime $s")
+      "calendar" -> {
+        val answer = ClockTime.reply(text)
+        when {
+          !o.has("title") -> patch.put("title", text.trim())
+          Regex("^" + CalendarSelectionParser { now }.datePattern + "$").matches(s) -> patch.put("date", s.removePrefix("el "))
+          ClockTime.isPeriod(answer) && o.has("time") -> patch.put("time", ClockTime.replacePeriod(ClockTime.reply(o.getString("time")), answer))
+          s.startsWith("durante ") || s.startsWith("que dure ") -> patch.put("durationSeconds", CommandDuration.seconds(s.removePrefix("durante ").removePrefix("que dure ")) ?: return null)
+          ClockTime.parse(answer) != ClockTime.Invalid -> patch.put("time", answer)
+          else -> return null
         }
-        s.startsWith("durante ") || s.startsWith("que dure ") -> patch.put("durationSeconds", CommandDuration.seconds(s.removePrefix("durante ").removePrefix("que dure ")) ?: return null)
-        Regex("^(?:a las? )?(?:[0-9]{1,2}(?::[0-9]{2})?|una?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)(?: y (?:media|cuarto|[a-z]+(?: y [a-z]+)?))?(?: de la (?:manana|tarde|noche)| am| pm| horas)?$").matches(s) ->
-          patch.put("time", s.removePrefix("a las ").removePrefix("a la "))
-        else -> return null
+      }
+      "calendar_query", "calendar_update", "calendar_delete" -> {
+        val time = ClockTime.parse(ClockTime.reply(text)) as? ClockTime.Exact ?: return null
+        val hasDay = o.has("from") && !o.has("until") && !o.optBoolean("afternoon")
+        val hasSelection = o.has("title") || hasDay && o.has("at")
+        val hasChange = listOf("newDate", "newTime", "durationSeconds").any(o::has)
+        val field = when (step.type) {
+          "calendar_update" -> when {
+            hasSelection -> "newTime"
+            hasDay && hasChange -> "at"
+            else -> return null
+          }
+          else -> if (hasDay) "at" else return null
+        }
+        patch.put(field, time.canonical())
       }
       "dial", "maps", "music", "youtube", "open_app" -> {
         val field = mapOf("dial" to "target", "open_app" to "name")[step.type] ?: "query"

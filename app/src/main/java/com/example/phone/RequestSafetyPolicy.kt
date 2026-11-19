@@ -16,7 +16,8 @@ object RequestSafetyPolicy {
   private val scheduledTime = Regex("\\ba las? ([a-z0-9]+)")
 
   internal fun isDoNotDisturbRequest(syntax: String): Boolean =
-    syntax == "no molestar" || syntax.startsWith("no molestar durante ") || syntax.startsWith("no molestar por ")
+    syntax == "no molestar" || syntax.startsWith("no molestar durante ") ||
+      syntax.startsWith("no molestar por ") || syntax == "no molestar hasta" || syntax.startsWith("no molestar hasta ")
 
   internal fun withoutQuotedText(text: String): String = text.replace(quotes, " ")
 

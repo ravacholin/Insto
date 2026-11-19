@@ -268,7 +268,7 @@ class GeminiCoordinatorTest {
     assertEquals(command, DraftPlan.fromCommands(listOf(command), now).steps.single().complete(delayed))
     val dnd = parser.parse("poné no molestar hasta las 23:30") as PhoneRoute.Local
     assertEquals(PhoneCommand.TemporaryMode(ModeKind.DND, 41_400, deadlineMillis = now.timeInMillis + 41_400_000), dnd.command)
-    assertTrue(parser.parse("silenciar teléfono hasta las 11") is PhoneRoute.Unsupported)
+    assertTrue(parser.parse("silenciar teléfono hasta las 11") is PhoneRoute.Clarify)
     assertTrue(parser.parse("silenciar teléfono hasta hoy a las 11 am") is PhoneRoute.Unsupported)
     val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { error("Gemini called") }),
       StructuredCommandExtractor { error("Gemini extraction") }, fallback = StructuredCommandExtractor { error("Groq called") })

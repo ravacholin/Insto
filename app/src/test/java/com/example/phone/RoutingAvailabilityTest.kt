@@ -92,9 +92,12 @@ class RoutingAvailabilityTest {
     assertEquals("intent:alarm", result.context)
     assertEquals(0, currentTime)
     // A complete time alone must not replace tomorrow with the next occurrence today.
-    val reply = LocalIntentRegistry.default.reply("alarm", "19:00", text to java.util.Calendar.getInstance())
-    assertTrue(reply is PhoneRoute.Clarify)
-    assertEquals("intent:alarm", (reply as PhoneRoute.Clarify).context)
+    val now = java.util.Calendar.getInstance()
+    val tomorrow = (now.clone() as java.util.Calendar).apply { add(java.util.Calendar.DATE, 1) }
+    val reply = LocalIntentRegistry.default.reply("alarm", "19:00", text to now)
+    assertEquals(PhoneRoute.Local(PhoneCommand.Alarm(19, 0, date = CalendarSelection.iso(tomorrow))), reply)
+    val previousDay = (now.clone() as java.util.Calendar).apply { add(java.util.Calendar.DATE, -1) }
+    assertTrue(LocalIntentRegistry.default.reply("alarm", "19:00", text to previousDay) is PhoneRoute.Clarify)
   }
 
   @Test fun pendingDraftAndExplicitRestrictionsRemainLocalOnFailure() = runTest {
