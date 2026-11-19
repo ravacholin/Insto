@@ -5,6 +5,7 @@ import java.util.Locale
 
 /** Deliberately anchored grammar: mentioning a capability is not an instruction to use it. */
 class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { java.util.Calendar.getInstance() }) {
+  private val alarmRequest = Regex("^(?:(?:(?:pone|configura|crea|programa|inicia|arranca|activa|establece)\\s+)?(?:(?:un|una|el|la)\\s+)?(?:alarma|despertador)\\b|despertame\\b)(.*)$")
   /** General searches require a leading command verb and a nonempty query. */
   fun chatGptSearchQuery(text: String, local: PhoneRoute = parse(text)): String? {
     val match = chatGptSearchPrefix.find(text.trimStart()) ?: return null
@@ -59,7 +60,8 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       return PhoneRoute.Unsupported("Pedime una acción por vez para interpretar todos sus detalles.")
     val command = request.withCommandHead()
     if (Regex("^(?:borra|limpia|pone en cero) (?:el )?(?:tiempo del )?cronometro(?: para empezar de cero)?$").matches(s)) return PhoneRoute.Local(PhoneCommand.Stopwatch(StopwatchOp.RESET))
-    ExtendedCommandParser.parse(s, calendarNow)?.let { return it }
+    val clockSyntax = if (numericDot.containsMatchIn(text)) canonicalRequest(normalizeForClock(text)) else s
+    ExtendedCommandParser.parse(clockSyntax, calendarNow)?.let { return it }
     if (RequestSafetyPolicy.rejection(text) == null) CalendarSelectionParser(calendarNow).parse(command)?.let { return it }
     val everyday = EverydayCommandParser(calendarNow).parse(command)
     // An explicit platform search must not be read as a contact or document search for its title.
@@ -78,8 +80,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       val label = when { " para " in body -> body.substringAfter(" para "); " llamado " in body -> body.substringAfter(" llamado "); else -> "" }
       return PhoneRoute.Local(PhoneCommand.Timer(seconds, label))
     }
-    val alarm = Regex("^(?:${commandPrefix}(?:alarma|despertador)\\b|despertame\\b)(.*)$").matchEntire(s)
-    if (alarm != null) return alarm(alarm.groupValues[1])
+    alarmRequest.matchEntire(clockSyntax)?.let { return alarm(it.groupValues[1]) }
     if (Regex("^(?:mostra|ver|abrir|abri|muestra) (?:las |los |mis )?(alarmas|timers|temporizadores)$").matches(s)) {
       return PhoneRoute.Local(PhoneCommand.ClockList(s.endsWith("alarmas")))
     }
@@ -128,7 +129,20 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     return PhoneRoute.Instinct
   }
 
-  private fun alarm(input: String): PhoneRoute {
+  internal fun replyToAlarm(source: String, reply: String): PhoneRoute? {
+    val time = ClockTime.reply(reply)
+    if (!ClockTime.isClockReply(time)) return null
+    val match = alarmRequest.matchEntire(canonicalRequest(normalizeForClock(source))) ?: return null
+    return alarm(match.groupValues[1], time)
+  }
+
+  internal fun replyToDeadline(source: String, reply: String): PhoneRoute? {
+    val time = ClockTime.reply(reply)
+    if (!ClockTime.isClockReply(time)) return null
+    return ExtendedCommandParser.parse(canonicalRequest(normalizeForClock(source)), calendarNow, time)
+  }
+
+  private fun alarm(input: String, replacement: String? = null): PhoneRoute {
     var body = input.trim()
     var requestedDate: String? = null
     Regex("^(?:para )?(hoy|manana)\\b\\s*(.*)$").matchEntire(body)?.let { match ->
@@ -137,19 +151,20 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       requestedDate = "%04d-%02d-%02d".format(java.util.Locale.ROOT,day.get(java.util.Calendar.YEAR),day.get(java.util.Calendar.MONTH)+1,day.get(java.util.Calendar.DAY_OF_MONTH))
       body = match.groupValues[2]
     }
-    val datePart = body.replace("de la manana", "")
+    val suffix = Regex("(?:^| )(todos los dias|cada dia|(?:todos los|cada) [a-z]+(?: y [a-z]+)*)(?: (?:llamad[ao]|con nombre) (.+))?$|(?:^| )(?:llamad[ao]|con nombre) (.+)$").find(body)
+    val clock = body.substring(0, suffix?.range?.first ?: body.length)
+      .removePrefix("para las ").removePrefix("para la ").removePrefix("a las ").removePrefix("a la ")
+      .takeUnless { it in listOf("a las", "a la", "para las", "para la") }.orEmpty()
+    val datePart = clock.replace("de la manana", "")
     if (Regex("\\b(?:manana|pasado|hoy|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\\b|[0-9]+[/-][0-9]+|\\bel [0-9]+").containsMatchIn(datePart)) {
       return PhoneRoute.Unsupported("Para una fecha específica, abrí las alarmas del Reloj y completá la fecha allí.")
     }
-    if (Regex("\\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\\b").containsMatchIn(body) &&
-      !body.contains("todos los") && !body.contains("cada ")) {
+    if (Regex("\\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\\b").containsMatchIn(clock)) {
       return PhoneRoute.Unsupported("Para una fecha específica, abrí las alarmas del Reloj y completá la fecha allí.")
     }
-    if (body.isEmpty()) return PhoneRoute.Clarify("¿A qué hora? Por ejemplo, siete y media de la mañana.", "alarm")
-    // Consume the whole request: unsupported qualifiers must never silently change scheduling.
-    val time = Regex("^(?:(?:a|para) las? )?([a-z0-9]+)(?::([0-9]{1,2})| y (media|cuarto|[a-z]+(?: y [a-z]+)?))?(?: (de la manana|de la tarde|de la noche|am|pm|horas))?(?: (todos los dias|cada dia|(?:todos los|cada) [a-z]+(?: y [a-z]+)*))?(?: (?:llamad[ao]|con nombre) (.+))?$").matchEntire(body)
-      ?: return PhoneRoute.Unsupported("No pude interpretar todos los detalles de esa alarma. Indicá la hora completa; para fechas especiales, abrí las alarmas del Reloj.")
-    val repeating = time.groupValues[5]
+    if (clock.isNotEmpty() && !ClockTime.shape(clock))
+      return PhoneRoute.Unsupported("No pude interpretar todos los detalles de esa alarma. Indicá la hora completa; para fechas especiales, abrí las alarmas del Reloj.")
+    val repeating = suffix?.groupValues?.get(1).orEmpty()
     val days = if (repeating in listOf("todos los dias", "cada dia")) (1..7).toList() else if (repeating.isEmpty()) emptyList() else {
       val names = mapOf("domingo" to 1, "domingos" to 1, "lunes" to 2, "martes" to 3, "miercoles" to 4, "jueves" to 5, "viernes" to 6, "sabado" to 7, "sabados" to 7)
       val requested = repeating.removePrefix("todos los ").removePrefix("cada ").split(" y ")
@@ -157,20 +172,26 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       requested.map { names.getValue(it) }.distinct().sorted()
     }
 
-    var hour = number(time.groupValues[1]) ?: return PhoneRoute.Clarify("¿A qué hora?", "alarm")
-    val minutes = when (val m = time.groupValues[3]) { "media" -> 30; "cuarto" -> 15; "" -> time.groupValues[2].toIntOrNull() ?: 0; else -> number(m) ?: -1 }
-    val period = time.groupValues[4]
-    if (hour !in 0..23 || minutes !in 0..59 || (period.isNotEmpty() && period != "horas" && hour !in 1..12)) return PhoneRoute.Clarify("Indicá una hora válida, por ejemplo 07:30.", "alarm")
-    if (period.isEmpty() && hour in 1..12 && !Regex("\\b0[0-9]:").containsMatchIn(body)) return PhoneRoute.Clarify("¿De la mañana o de la tarde? Repetí la hora completa.", "alarm")
-    if (period in listOf("de la tarde", "pm")) hour = hour % 12 + 12
-    if (period == "de la noche") hour = if (hour == 12) 0 else hour % 12 + 12
-    if (period in listOf("de la manana", "am")) hour %= 12
-    val label = time.groupValues[6]
     if (requestedDate != null && days.isNotEmpty()) return PhoneRoute.Unsupported("Indicá una fecha o una repetición, sin combinar ambas.")
-    return PhoneRoute.Local(PhoneCommand.Alarm(hour, minutes, days, label, requestedDate))
+    val label = normalize(suffix?.let { it.groupValues[2].ifEmpty { it.groupValues[3] } }.orEmpty())
+    val resolved = when {
+      replacement == null -> clock
+      ClockTime.isPeriod(replacement) -> ClockTime.replacePeriod(clock, replacement)
+      else -> replacement
+    }
+    return when (val time = ClockTime.parse(resolved)) {
+      is ClockTime.Exact -> PhoneRoute.Local(PhoneCommand.Alarm(time.hour, time.minute, days, label, requestedDate))
+      ClockTime.Ambiguous -> PhoneRoute.Clarify("¿De la mañana o de la tarde? Indicá el período o una hora como 17:30.", "alarm")
+      ClockTime.Invalid -> PhoneRoute.Clarify(
+        if (clock.isEmpty()) "¿A qué hora? Por ejemplo, siete y media de la mañana."
+        else "Indicá una hora válida, por ejemplo 07:30.", "alarm")
+    }
   }
 
   companion object {
+    private val numericDot = Regex("(?<=[0-9])\\.(?=[0-9])")
+    private val punctuation = Regex("[¿?¡!,.;]")
+    private val clockPunctuation = Regex("[¿?¡!,;]|(?<![0-9])\\.|\\.(?![0-9])")
     private val chatGptSearchPrefix = Regex("^(\\p{L}[\\p{L}\\p{M}]*)(?:\\s*:\\s*|\\s+)")
     private const val COURTESY = "(?:por (?:favor|fa)|porfa)"
     private val politeness = Regex("^$COURTESY[,\\s]+[¿¡]*\\s*")
@@ -286,8 +307,11 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       val verb = canonicalVerb(head.groupValues[1]) ?: return request
       return verb + request.substring(head.value.length)
     }
-    fun normalize(text: String): String = Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFD)
-      .replace(Regex("\\p{M}+"), "").replace(Regex("[¿?¡!,.;]"), " ").replace(Regex("\\s+"), " ").trim()
+    fun normalize(text: String): String = normalize(text, punctuation)
+    private fun normalizeForClock(text: String): String = normalize(text, clockPunctuation)
+    private fun normalize(text: String, punctuation: Regex): String =
+      Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "").replace(punctuation, " ").replace(Regex("\\s+"), " ").trim()
     private val words = listOf("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce", "trece", "catorce", "quince", "dieciseis", "diecisiete", "dieciocho", "diecinueve", "veinte", "veintiuno", "veintidos", "veintitres", "veinticuatro", "veinticinco", "veintiseis", "veintisiete", "veintiocho", "veintinueve")
     fun choiceIndex(text: String): Int? {
       val s=normalize(text).removePrefix("el ").removePrefix("la ").removePrefix("opcion ")

@@ -16,7 +16,8 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
   private var pending: String? = null
   private var lastPlan: List<PhoneCommand>? = null
   private var pendingDraft: DraftPlan? = null
-  fun clear() { calendarDraft = null; pending = null; lastPlan = null; pendingDraft = null }
+  private var pendingClockRequest: Pair<String, Calendar>? = null
+  fun clear() { calendarDraft = null; pending = null; lastPlan = null; pendingDraft = null; pendingClockRequest = null }
 
   fun accept(text: String, allowSemantic: Boolean = false): ConversationResult {
     val normalized = PhoneCommandParser.normalize(text)
@@ -44,9 +45,11 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       lastPlan = plan
       return ConversationResult.Plan(plan)
     }
-    val isCalendar = Regex("^(?:agenda|agendar|agendame|programa|crea (?:un |una )?(?:evento|clase|reunion|turno|cita)|agrega (?:un |una )?(?:evento|clase|reunion|turno|cita))\\b").containsMatchIn(normalized)
+    val isCalendar = Regex("^(?:agenda|agendar|agendame|programa(?! (?:un |una |el |la )?(?:alarma|despertador|timer|temporizador)\\b)|crea (?:un |una )?(?:evento|clase|reunion|turno|cita)|agrega (?:un |una )?(?:evento|clase|reunion|turno|cita))\\b").containsMatchIn(normalized)
     val correcting = Regex("^(?:mejor|cambia|cambialo|que dure|durante|a las?|de la|en vez|para |el |hoy|manana|pasado manana)").containsMatchIn(normalized)
-    if (isCalendar || calendarDraft != null && correcting) return calendar(text, isCalendar)
+    if (isCalendar || calendarDraft != null && (correcting || ClockTime.isClockReply(ClockTime.reply(text)))) {
+      return calendar(text, isCalendar)
+    }
     if (calendarDraft != null && allowSemantic && parser.parse(text) == PhoneRoute.Instinct) {
       val known = calendarDraft!!
       val fields = org.json.JSONObject().put("type", "calendar")
@@ -74,6 +77,23 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       }
     }
     pending?.let { context ->
+      pendingClockRequest?.let { (source, sourceDate) ->
+        val reply = if (context == "alarm") parser.replyToAlarm(source, text) else parser.replyToDeadline(source, text)
+        val current = now()
+        if (reply != null && (sourceDate.timeZone.id != current.timeZone.id ||
+            CalendarSelection.iso(sourceDate) != CalendarSelection.iso(current))) {
+          return ConversationResult.Prompt("Cambió el día o la zona horaria. Repetí el pedido con el día y la hora deseados.")
+        }
+        when (reply) {
+          is PhoneRoute.Local -> {
+            clear()
+            return ConversationResult.Plan(listOf(reply.command)).also { lastPlan = it.commands }
+          }
+          is PhoneRoute.Clarify -> return ConversationResult.Prompt(reply.prompt)
+          is PhoneRoute.Unsupported -> return ConversationResult.Prompt(reply.message)
+          else -> Unit
+        }
+      }
       pendingDraft?.let { draft ->
         if (parser.parse(text) == PhoneRoute.Instinct) {
           val result = try { draft.reply(text, now()) } catch (_: Exception) {
@@ -89,7 +109,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
         }
       }
       when (val route = parser.parseReply(context, text)) {
-        is PhoneRoute.Local -> { pending = null; return ConversationResult.Plan(listOf(route.command)).also { lastPlan = it.commands } }
+        is PhoneRoute.Local -> { clear(); return ConversationResult.Plan(listOf(route.command)).also { lastPlan = it.commands } }
         is PhoneRoute.Clarify -> return ConversationResult.Prompt(route.prompt)
         is PhoneRoute.Unsupported -> return ConversationResult.Prompt(route.message)
         else -> Unit
@@ -99,6 +119,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       is PhoneRoute.Clarify -> {
         pending = route.context
         pendingDraft = seedDraft(text, route.context)
+        pendingClockRequest = if (route.context in setOf("alarm", "temporary_deadline")) text to (now().clone() as Calendar) else null
         return ConversationResult.Prompt(route.prompt)
       }
       is PhoneRoute.Local -> {
@@ -118,14 +139,15 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
 
   private data class CalendarDraft(var title: String = "", var date: String = "", var time: String = "", var duration: String = "una hora", var description: String? = null)
   private fun calendar(input: String, fresh: Boolean): ConversationResult {
-    val raw = input.trim().trimStart('¿', '¡').trim().trimEnd('.', '!', '?')
+    val raw = input.trim().trimStart('¿', '¡').trim()
     val folded = FoldedRequest.of(raw)
     if (fresh) { clear(); calendarDraft = CalendarDraft() }
     val draft = calendarDraft ?: return ConversationResult.Pass
     val fullSyntax = if (fresh) FoldedRequest.of(maskQuotes(raw)).text else folded.text
     val description = Regex(" (?:con descripcion|descripcion)[: ]+(.+)$").find(fullSyntax)
     if (description != null) draft.description = folded.capture(description, 1)
-    val syntax = description?.let { fullSyntax.substring(0, it.range.first).trimEnd(',', ' ') } ?: fullSyntax
+    val syntax = (description?.let { fullSyntax.substring(0, it.range.first) } ?: fullSyntax)
+      .trimEnd(',', '.', '!', '?', ' ')
     val dates = CalendarSelectionParser(now)
     val date = Regex("\\b${dates.datePattern}\\b").findAll(syntax)
       .firstOrNull { !syntax.substring(0, it.range.first).endsWith("de la ") }
@@ -139,20 +161,31 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       val head = Regex("^(?:agenda|agendar|agendame|programa|crea|agrega)\\s+").find(folded.text)
       if (head != null) {
         val timeStart=Regex("\\ba las?\\b").find(syntax)?.range?.first
-        val end = listOfNotNull(date?.range?.first,timeStart).minOrNull() ?: folded.text.length
-        draft.title = raw.substring(head.range.last + 1, end).trim().trim('"', '“', '”')
+        val end = listOfNotNull(date?.range?.first,timeStart).minOrNull() ?: syntax.length
+        draft.title = folded.capture(head.range.last + 1 until end)
+          .removeSurrounding("\"").removeSurrounding("“", "”").removeSurrounding("«", "»")
       }
     }
-    val duration = Regex("(?:que dure |durante |y (?:que dure )?)(media hora|[a-z0-9]+(?: y [a-z]+)? (?:horas?|minutos?))$").find(syntax)
+    val quantity = "[a-z0-9]+(?: y [a-z]+)? (?:horas?|minutos?|segundos?)"
+    val duration = Regex("(?:que dure |durante |y (?:que dure )?)(media hora|$quantity(?: (?:y )?$quantity)*)$").find(syntax)
     if (duration != null) draft.duration = if (duration.groupValues[1] == "media hora") "treinta minutos" else duration.groupValues[1]
-    val time = Regex("(?:a las? |^mejor (?:a las? )?)([a-z0-9]+(?::[0-9]{2}| y (?:media|cuarto|(?!que\\b)[a-z]+))?(?: de la (?:manana|tarde|noche)| am| pm| horas)?)").find(syntax)
+    val timeSyntax = syntax.substring(0, duration?.range?.first ?: syntax.length).trimEnd()
+    val explicitTime = Regex("(?:\\ba las? |^mejor (?:a las? )?)(${ClockTime.PATTERN})(?=$|[ ,.!?])").find(timeSyntax)
+    val time = explicitTime ?: if (!fresh) {
+      Regex("^(?:(?:a |para )?las? )?(${ClockTime.PATTERN})$").matchEntire(timeSyntax)
+        ?.takeUnless { ClockTime.isPeriod(it.groupValues[1]) || date != null }
+    } else null
     if (time != null) {
-      val replacement=time.groupValues[1]
-      val oldPeriod=Regex("(?:de la (?:manana|tarde|noche)|am|pm)$").find(draft.time)?.value
-      draft.time=if(!fresh && oldPeriod!=null && !Regex(":|de la| am| pm|horas").containsMatchIn(replacement)) "$replacement $oldPeriod" else replacement
+      val replacement = time.groupValues[1]
+      val oldPeriod = ClockTime.periodOf(draft.time)
+      draft.time = if (!fresh && oldPeriod != null && ClockTime.parse(replacement) == ClockTime.Ambiguous) {
+        "$replacement $oldPeriod"
+      } else replacement
     }
-    if (time == null && Regex("^de la (?:manana|tarde|noche)$").matches(folded.text) && draft.time.isNotBlank()) {
-      draft.time = draft.time.substringBefore(" de la ") + " " + folded.text
+    val periodAnswer = ClockTime.reply(input)
+    val periodOnly = time == null && ClockTime.isPeriod(periodAnswer)
+    if (periodOnly && draft.time.isNotBlank()) {
+      draft.time = ClockTime.replacePeriod(draft.time, periodAnswer)
     }
     val consumed=BooleanArray(folded.text.length)
     fun consume(range:IntRange) {range.forEach {if(it in consumed.indices)consumed[it]=true}}
@@ -165,16 +198,17 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       .replace(Regex("^(?:mejor|cambia|cambialo)\\s+"), "")
       .replace(Regex("^[,\\s]*(?:y\\s+)?(?:que dure|durante)\\s*$"), "")
       .trim(' ', ',', '.', '!', '?')
-    val periodOnly=time==null && Regex("^de la (?:manana|tarde|noche)$").matches(folded.text)
     if(residue.isNotBlank() && !periodOnly && !(fresh && date==null))
       return ConversationResult.Prompt("Hay detalles del evento que todavía no puedo representar. Conservé el borrador; indicá fecha, hora y duración sin condiciones adicionales.")
     if (draft.title.isBlank()) return ConversationResult.Prompt("¿Qué título le pongo al evento?")
     if (draft.date.isBlank()) return ConversationResult.Prompt("¿Qué día? Podés decir mañana o una fecha completa.")
     if (draft.time.isBlank()) return ConversationResult.Prompt("¿A qué hora? Conservé el título y la fecha.")
     // CalendarRequestParser validates the full date/time, DST and duration before a plan is offered.
-    val route = parser.parse("agendá \"${draft.title}\" ${draft.date} a las ${draft.time} durante ${draft.duration}")
+    val seconds = CommandDuration.seconds(draft.duration)
+      ?: return ConversationResult.Prompt("Indicá una duración válida para el evento.")
+    val route = CalendarRequestParser(now).create(draft.title, draft.date, draft.time, seconds, draft.description)
     return when (route) {
-      is PhoneRoute.Local -> ConversationResult.Plan(listOf((route.command as PhoneCommand.CalendarEvent).copy(title = draft.title, description = draft.description))).also { lastPlan = it.commands }
+      is PhoneRoute.Local -> ConversationResult.Plan(listOf(route.command)).also { lastPlan = it.commands }
       is PhoneRoute.Clarify -> ConversationResult.Prompt("¿De la mañana o de la tarde? Conservé los demás datos.")
       is PhoneRoute.Unsupported -> ConversationResult.Prompt(route.message)
       else -> ConversationResult.Prompt("Completá la fecha y hora del evento.")

@@ -32,7 +32,22 @@ internal class CalendarSelectionParser(private val now: () -> Calendar = { Calen
     CalendarSelection.day(CalendarSelection.iso(result), current)
   }.getOrNull()
 
-  fun parse(request: FoldedRequest): PhoneRoute? {
+  fun parse(request: FoldedRequest): PhoneRoute? = parse(request, ::readClock)
+
+  fun reply(request: FoldedRequest, text: String, action: PlatformAction): PhoneRoute.Local? {
+    val answer = ClockTime.reply(text)
+    val exact = readClock(answer)
+    if (exact == null && !ClockTime.isPeriod(answer)) return null
+    var corrected = 0
+    val route = parse(request) { original ->
+      readClock(original) ?: if (original.isEmpty() || ClockTime.shape(original)) {
+        (exact ?: readClock(ClockTime.replacePeriod(original, answer)))?.also { corrected++ }
+      } else null
+    } as? PhoneRoute.Local ?: return null
+    return route.takeIf { corrected == 1 && (it.command as? PhoneCommand.Platform)?.action == action }
+  }
+
+  private fun parse(request: FoldedRequest, time: (String) -> String?): PhoneRoute? {
     val text = request.text.trimEnd('.', '!', '?', ' ')
     fun result(action: PlatformAction, selection: CalendarSelection) =
       PhoneRoute.Local(selection.command(action))
@@ -69,7 +84,7 @@ internal class CalendarSelectionParser(private val now: () -> Calendar = { Calen
         }
         return PhoneRoute.Clarify("Indicá un intervalo válido para consultar tu agenda.", "intent:calendar_query")
       }
-      Regex("^($datePattern) a las? (.+)$").matchEntire(period)?.let {
+      Regex("^($datePattern) a las?(?: (.+))?$").matchEntire(period)?.let {
         val day = date(it.groupValues[1], current)
         val hour = time(it.groupValues[2])
         if (day != null && hour != null) {
@@ -91,40 +106,65 @@ internal class CalendarSelectionParser(private val now: () -> Calendar = { Calen
       return result(PlatformAction.CALENDAR_QUERY, CalendarSelection(title = request.capture(it, 1), next = true))
     }
     Regex("^(?:cuando es|a que hora es) (.+)$").matchEntire(text)?.let {
-      val selection = selector(it.groupValues[1], current) ?: return null
+      val target = it.groupValues[1]
+      val selection = selector(target, current, time)
+      if (selection == null) {
+        val beforeTime = Regex("^(.+?) a las?(?: .+)?$").matchEntire(target)?.groupValues?.get(1)
+        if (beforeTime != null && selector(beforeTime, current, time)?.from != null)
+          return PhoneRoute.Clarify("Indicá el horario completo, por ejemplo 17:30.", "intent:calendar_query")
+        return null
+      }
       if (selection.from == null) return null
       return result(PlatformAction.CALENDAR_QUERY, selection)
     }
     Regex("^(?:cancela|elimina|borra|quita) (.+)$").matchEntire(text)?.let {
       val target = it.groupValues[1]
-      val selection = selector(target, current)
+      val selection = selector(target, current, time)
       if (selection == null) {
-        val beforeTime = Regex("^(.+?) a las? (.+)$").matchEntire(target)?.groupValues?.get(1)
-        if (beforeTime != null && selector(beforeTime, current) != null)
+        val beforeTime = Regex("^(.+?) a las?(?: .+)?$").matchEntire(target)?.groupValues?.get(1)
+        if (beforeTime != null && selector(beforeTime, current, time) != null)
           return PhoneRoute.Clarify("Indicá el horario completo del evento que querés eliminar.", "intent:calendar_delete")
         return null
       }
-      if (selection.title == null && (selection.from == null || selection.at == null))
+      if (selection.title == null && selection.at == null) {
+        val at = if (selection.from != null) time("") else null
+        if (at != null) return result(PlatformAction.CALENDAR_DELETE, selection.copy(at = at))
         return PhoneRoute.Clarify("Indicá el título o el día y el horario exactos del evento.", "intent:calendar_delete")
+      }
       return result(PlatformAction.CALENDAR_DELETE, selection)
     }
     Regex("^hace que (.+) dure (.+)$").matchEntire(text)?.let {
-      val selection = selector(it.groupValues[1], current) ?: return null
+      val selection = selector(it.groupValues[1], current, time) ?: return null
       val duration = CommandDuration.seconds(it.groupValues[2]) ?: return invalidChange()
       return result(PlatformAction.CALENDAR_UPDATE, selection.copy(durationSeconds = duration))
     }
-    Regex("^(?:pasa|cambia|move|reprograma|edita|modifica) (.+?)(?: (?:a|al|para) (.+))?$").matchEntire(text)?.let {
-      val selection = selector(it.groupValues[1], current) ?: return null
-      val change = it.groupValues[2]
-      if (change.isBlank()) {
-        if (text.contains('"') && (text.startsWith("edita ") || text.startsWith("modifica ")))
-          return result(PlatformAction.CALENDAR_UPDATE, selection)
-        return invalidChange()
+    Regex("^(?:pasa|cambia|move|reprograma|edita|modifica) (.+)$").matchEntire(text)?.let {
+      val body = it.groupValues[1]
+      val changeSyntax = Regex("^(?:$datePattern(?: a las?(?: ${ClockTime.PATTERN})?)?|las?(?: ${ClockTime.PATTERN})?|${ClockTime.PATTERN})$")
+      val boundaries = Regex(" (?:a|al|para) ").findAll(body).toList()
+      fun targetBefore(boundary: MatchResult) = body.substring(0, boundary.range.first)
+      fun changeAfter(boundary: MatchResult) = body.substring(boundary.range.last + 1)
+      // The first complete change clause can include a date and time. An old time
+      // followed by another change clause cannot be mistaken for the new time.
+      val boundary = boundaries.firstOrNull { candidate ->
+        changeSyntax.matches(changeAfter(candidate)) &&
+          selector(targetBefore(candidate), current) { oldTime -> "00:00".takeIf { oldTime.isEmpty() || ClockTime.shape(oldTime) } } != null
       }
-      val dayAndTime = Regex("^($datePattern)(?: a las? (.+))?$").matchEntire(change)
+      if (boundary == null) {
+        val selection = selector(body, current, time)
+        if (selection != null && text.contains('"') && (text.startsWith("edita ") || text.startsWith("modifica ")))
+          return result(PlatformAction.CALENDAR_UPDATE, selection)
+        if (selection != null) time("")?.let { return result(PlatformAction.CALENDAR_UPDATE, selection.copy(newTime = it)) }
+        if (selection != null || boundaries.any { selector(targetBefore(it), current, ::readClock) != null }) return invalidChange()
+        return null
+      }
+      val selection = selector(targetBefore(boundary), current, time) ?: return invalidChange()
+      val change = changeAfter(boundary)
+      val dayAndTime = Regex("^($datePattern)(?: a (las?)(?: (.+))?)?$").matchEntire(change)
       val newDay = dayAndTime?.let { match -> date(match.groupValues[1], current)?.let(CalendarSelection::iso) ?: return invalidChange() }
-      val timeText = dayAndTime?.groupValues?.get(2) ?: change.replace(Regex("^las? "), "")
-      val newTime = if (timeText.isEmpty()) null else time(timeText) ?: return invalidChange()
+      val timeText = dayAndTime?.groupValues?.get(3) ?: change.replace(Regex("^las?(?: |$)"), "")
+      val expectsTime = dayAndTime == null || dayAndTime.groupValues[2].isNotEmpty()
+      val newTime = if (expectsTime) time(timeText) ?: return invalidChange() else null
       return result(PlatformAction.CALENDAR_UPDATE, selection.copy(newDate = newDay, newTime = newTime))
     }
     return null
@@ -134,8 +174,8 @@ internal class CalendarSelectionParser(private val now: () -> Calendar = { Calen
     "Indicá el cambio y, si hay una hora ambigua, mañana o tarde. Por ejemplo, cambiá la reunión del viernes para las 18:00.",
     "intent:calendar_update")
 
-  private fun selector(raw: String, current: Calendar): CalendarSelection? {
-    val match = Regex("^(.+?)(?:(?: d?el | de | )($datePattern))?(?: a las? (.+))?$").matchEntire(raw) ?: return null
+  private fun selector(raw: String, current: Calendar, time: (String) -> String?): CalendarSelection? {
+    val match = Regex("^(.+?)(?:(?: d?el | de | )($datePattern))?(?: (a las?)(?: (.+))?)?$").matchEntire(raw) ?: return null
     val target = match.groupValues[1].replace(Regex("^(?:el|la|mi|un|una) "), "")
     val quoted = Regex("^(?:evento (?:llamado )?)?\"([^\"]+)\"$").matchEntire(target)
     val isEvent = Regex("^(?:reunion|clase|turno|cita|evento|cumpleanos)\\b(?: [a-z0-9]+)*$").matches(target)
@@ -143,27 +183,9 @@ internal class CalendarSelectionParser(private val now: () -> Calendar = { Calen
     val title = quoted?.groupValues?.get(1) ?: target.takeUnless { it == "evento" }
     if (title == null && match.groupValues[2].isEmpty()) return null
     val from = match.groupValues[2].takeIf { it.isNotEmpty() }?.let { date(it, current)?.let(CalendarSelection::iso) ?: return null }
-    val at = match.groupValues[3].takeIf { it.isNotEmpty() }?.let { time(it) ?: return null }
+    val at = if (match.groupValues[3].isNotEmpty()) time(match.groupValues[4]) ?: return null else null
     return CalendarSelection(title = title, from = from, at = at)
   }
 
-  fun time(text: String): String? {
-    val match = Regex("^([a-z0-9]+)(?::([0-9]{2})| y (media|cuarto))?(?: (de la manana|de la tarde|de la noche|am|pm|horas))?$").matchEntire(text) ?: return null
-    val hour = PhoneCommandParser.number(match.groupValues[1]) ?: return null
-    val minute = when (match.groupValues[3]) {
-      "media" -> 30
-      "cuarto" -> 15
-      else -> match.groupValues[2].toIntOrNull() ?: 0
-    }
-    val period = match.groupValues[4]
-    if (hour !in 0..23 || minute !in 0..59 || period !in setOf("", "horas") && hour !in 1..12) return null
-    if (hour in 1..12 && period.isEmpty() && match.groupValues[2].isEmpty()) return null
-    val adjusted = when (period) {
-      "am", "de la manana" -> hour % 12
-      "pm", "de la tarde" -> hour % 12 + 12
-      "de la noche" -> if (hour == 12) 0 else hour + 12
-      else -> hour
-    }
-    return "%02d:%02d".format(Locale.ROOT, adjusted, minute)
-  }
+  private fun readClock(text: String): String? = (ClockTime.parse(text) as? ClockTime.Exact)?.canonical()
 }

@@ -125,10 +125,11 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
       val current=java.util.Calendar.getInstance()
       if(listOf(java.util.Calendar.YEAR,java.util.Calendar.DAY_OF_YEAR).any {current.get(it)!=source.second.get(it)} || current.timeZone.id!=source.second.timeZone.id)
         return PhoneRoute.Clarify("Cambió el día o la zona horaria. Repetí el pedido completo con la fecha y hora deseadas.","intent:$id")
-      if(Regex("^(?:de la (?:manana|tarde|noche)|am|pm)$").matches(normalized)) {
-        val combined=parser.parse("${source.first} $text")
-        return if(combined is PhoneRoute.Local && d.accepts(combined.command)) combined
-          else PhoneRoute.Clarify("Repetí la alarma con día y hora completos; no se creará sin conservar esos datos.","intent:$id")
+      when (val reply = parser.replyToAlarm(source.first, text)) {
+        is PhoneRoute.Local -> return reply
+        is PhoneRoute.Clarify -> return reply.copy(context = "intent:$id")
+        is PhoneRoute.Unsupported -> return reply
+        else -> Unit
       }
       if(Regex("^(?:hoy|manana)\\b").containsMatchIn(normalized)) {
         val combined=parser.parse("alarma $text")
@@ -141,10 +142,9 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
       val current = java.util.Calendar.getInstance()
       if (CalendarSelection.iso(current) != CalendarSelection.iso(source.second) || current.timeZone != source.second.timeZone)
         return PhoneRoute.Clarify("Cambió el día o la zona horaria. Repetí el pedido con la fecha y hora deseadas.", "intent:$id")
-      if (normalized in setOf("de la manana", "de la tarde", "de la noche", "am", "pm")) {
-        val combined = parser.parse("${source.first.trimEnd('.', '!', '?')} $text")
-        if (combined is PhoneRoute.Local && d.accepts(combined.command)) return combined
-      }
+      val action = PlatformAction.valueOf(id.uppercase(java.util.Locale.ROOT))
+      val request = FoldedRequest.of(source.first).withCommandHead()
+      CalendarSelectionParser { current }.reply(request, text, action)?.let { return it }
       return PhoneRoute.Clarify(d.prompt, "intent:$id")
     }
     val route = if (d.parseParameters != null && d.replyPrefix != null) {

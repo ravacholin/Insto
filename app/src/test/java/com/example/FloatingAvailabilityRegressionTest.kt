@@ -4,6 +4,7 @@ import com.example.data.emptyLearnedPhrasesForTest
 
 import android.Manifest
 import android.app.Application
+import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Intent
 import android.content.IntentFilter
@@ -20,6 +21,9 @@ import com.example.speech.AudioTranscriber
 import com.example.testsupport.ConnectedAccessibility
 import com.example.ui.MainViewModel
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
@@ -73,6 +77,47 @@ class FloatingAvailabilityRegressionTest {
       assertFalse(vm.floatingAssistant.value.status.orEmpty().contains("Gemini"))
       assertEquals("prender linterna", vm.floatingAssistant.value.text)
     } finally { vm.dismissFloatingAssistant(); Dispatchers.resetMain() }
+  }
+
+  @Test fun aDottedClockTimeReachesTheSilenceConfirmationFromTextAndVoice() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    shadowOf(app.getSystemService(NotificationManager::class.java)).setNotificationPolicyAccessGranted(true)
+    val deadline = Date(System.currentTimeMillis() + 1_200_000)
+    val clock = SimpleDateFormat("h.mm a", Locale.US).format(deadline)
+    val request = "silenciar teléfono hasta $clock"
+    val expectedDeadline = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(deadline)
+    val file = File.createTempFile("instinct_", ".m4a", File(app.cacheDir, "voice_notes").apply { mkdirs() })
+      .apply { writeText("recorded request") }
+    val capture = object : FloatingAudioCapture {
+      override val snapshot = FloatingVoiceCapture.Snapshot(VoiceSessionPolicy.State.RECORDING, 1500, .5f)
+      override fun start() = Result.success(Unit)
+      override fun finish() = RecordedAudio(file, "audio/mp4")
+      override fun cancel() {}
+    }
+    try {
+      for (voice in listOf(false, true)) {
+        val vm = MainViewModel(app, capture, StandardTestDispatcher(testScheduler), AudioTranscriber { request },
+          HybridPhoneRouter({ true }, DecisionClassifier { error("The clock request is local") }),
+          learnedPhrases = emptyLearnedPhrasesForTest())
+        try {
+          val onDispatched = { fail("Native request was sent to Instinct") }
+          if (voice) {
+            vm.startFloatingListening(onDispatched)
+            runCurrent()
+            vm.sendFloatingAudio(onDispatched)
+          } else {
+            vm.updateFloatingText(request)
+            vm.sendFloatingText(onDispatched)
+          }
+          advanceUntilIdle()
+          val state = vm.floatingAssistant.value
+          assertNull(state.error)
+          assertTrue(state.needsConfirmation)
+          assertTrue(state.status.orEmpty().contains("hasta $expectedDeadline"))
+          assertNull(TemporaryModeManager(app).read())
+        } finally { vm.dismissFloatingAssistant() }
+      }
+    } finally { file.delete(); Dispatchers.resetMain() }
   }
 
   private suspend fun configureInstinct() {
