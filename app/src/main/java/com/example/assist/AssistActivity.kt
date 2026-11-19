@@ -84,7 +84,6 @@ class AssistActivity : ComponentActivity() {
         var showGeminiSetup by remember { mutableStateOf(gemini.shouldPromptSetup()) }
         var hasMic by remember { mutableStateOf(hasMicrophonePermission()) }
         var startAfterPermission by remember { mutableStateOf(false) }
-        var startAfterGeminiSetup by remember { mutableStateOf(false) }
         val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
           hasMic = granted
           if (granted && startAfterPermission && state.mode != FloatingMode.TYPING) {
@@ -95,12 +94,15 @@ class AssistActivity : ComponentActivity() {
         val groqSetup = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
           if (result.resultCode == RESULT_OK && viewModel.floatingAssistant.value.needsGroqKey) {
             viewModel.sendFloatingAudio { finish() }
-          } else if (startAfterGeminiSetup && result.resultCode == RESULT_OK && hasMic &&
-            viewModel.floatingAssistant.value.mode == FloatingMode.IDLE) {
+          }
+        }
+        val geminiSetup = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+          if (result.resultCode == RESULT_OK && hasMic &&
+            viewModel.floatingAssistant.value.mode == FloatingMode.IDLE
+          ) {
             viewModel.resumeFloatingAssistant()
             viewModel.startFloatingListening { finish() }
           }
-          startAfterGeminiSetup = false
         }
         val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
           viewModel.onFloatingCameraPermission(granted)
@@ -140,9 +142,11 @@ class AssistActivity : ComponentActivity() {
             confirmButton = {
               TextButton(onClick = {
                 showGeminiSetup = false
-                startAfterGeminiSetup = true
                 viewModel.pauseFloatingAssistant()
-                groqSetup.launch(Intent(this@AssistActivity, GroqSettingsActivity::class.java))
+                geminiSetup.launch(
+                  Intent(this@AssistActivity, GroqSettingsActivity::class.java)
+                    .putExtra(GroqSettingsActivity.EXTRA_PROVIDER, GroqSettingsActivity.PROVIDER_GEMINI),
+                )
               }) { Text("Configurar Gemini") }
             },
             dismissButton = {
@@ -190,7 +194,10 @@ class AssistActivity : ComponentActivity() {
           },
           onConfigureGroq = {
             viewModel.pauseFloatingAssistant()
-            groqSetup.launch(Intent(this, GroqSettingsActivity::class.java))
+            groqSetup.launch(
+              Intent(this, GroqSettingsActivity::class.java)
+                .putExtra(GroqSettingsActivity.EXTRA_PROVIDER, GroqSettingsActivity.PROVIDER_GROQ),
+            )
           },
           onConfigureClockAccessibility = {
             viewModel.pauseFloatingAssistant()
