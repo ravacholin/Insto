@@ -178,7 +178,11 @@ class MainViewModel @JvmOverloads constructor(
   private val floatingState = MutableStateFlow(FloatingAssistantState())
   val floatingAssistant: StateFlow<FloatingAssistantState> = floatingState
   private var floatingJob: Job? = null
-  private var floatingGeneration = 0L
+  /** Identity and state of floating requests: a result applies only while its request is current. */
+  private val sessions = com.example.session.SessionLifecycle()
+  private val floatingGeneration: Long get() = sessions.current
+  /** Exactly-once outcome recording and the uncertain-result retry guard. */
+  private val executions = com.example.session.ActionExecutionLedger()
   private var cancelClockAutomation: (() -> Unit)? = null
   private var floatingReturnPackage: String? = null
   private var floatingPrefs: AssistantPreferences? = null
@@ -269,7 +273,7 @@ class MainViewModel @JvmOverloads constructor(
     // Cancelling ends the operational session: the next order cannot lean on what came before.
     operationalContext.clear()
     val hadWorkflow = activeWorkflow() != null
-    floatingGeneration++; floatingJob?.cancel()
+    sessions.cancel(); floatingJob?.cancel()
     cancelClockAutomation?.invoke(); cancelClockAutomation = null
     workflow.cancel(); conversation.clear(); clarification=null; clarificationRequest=null; semanticDraft = null; pendingQuery = null; approvedQueryText = null
     confirmation = null; cameraCommand = null; contactsCommand = null; notificationsCommand = null; calendarQuery = null
@@ -484,6 +488,9 @@ class MainViewModel @JvmOverloads constructor(
       } catch(_:Exception) {retainDecisionRequest("No se pudo leer la configuración de rutinas. No se ejecutó ningún paso.")}
       return
     }
+    val session = floatingGeneration
+    // A cancelled or finished request never executes, whatever answer or callback arrives for it.
+    if (!sessions.canExecute(session) || !sessions.transition(session, com.example.session.SessionState.EXECUTING)) return
     clarificationRequest = null
     clarification = null
     confirmation = null
@@ -493,14 +500,18 @@ class MainViewModel @JvmOverloads constructor(
     if (activeWorkflow() != null) try {workflow.beginReplacement(command)} catch (_: Exception) {
       retainDecisionRequest("No se pudo guardar el paso. No se ejecutó la acción."); return
     }
+    val ticket = executions.open(session, command)
     val result = phoneExecutor.execute(command, confirmed)
+    // An automation result arrives later; anything else is final now.
+    if (result.stopwatchAutomation == null) executions.complete(ticket, result.outcome)
     if (learning != null && result.confirmation == command) learningPreview = learning
     applyPhoneActionResult(command, confirmed, result, learning)
     result.stopwatchAutomation?.let { operation ->
       val generation = floatingGeneration
       floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING)
       cancelClockAutomation = com.example.assist.PingAutoSendAccessibilityService.requestStopwatch(operation) { completed ->
-        if (generation == floatingGeneration) {
+        // A callback delivered twice records and applies its outcome once.
+        if (executions.complete(ticket, completed.outcome) && generation == floatingGeneration) {
           cancelClockAutomation = null
           applyPhoneActionResult(command, confirmed, completed, learning)
         }
@@ -551,6 +562,15 @@ class MainViewModel @JvmOverloads constructor(
       phoneActionCompletion = result.message.takeIf {
         !inWorkflow && (result.outcome == PhoneActionOutcome.COMPLETED || result.outcome == PhoneActionOutcome.HANDOFF)
       })
+    sessions.transition(floatingGeneration, when {
+      result.stopwatchAutomation != null -> com.example.session.SessionState.EXECUTING
+      inWorkflow && workflow.snapshot?.finished != true -> com.example.session.SessionState.AWAITING_CONFIRMATION
+      result.confirmation != null -> com.example.session.SessionState.AWAITING_CONFIRMATION
+      result.outcome == PhoneActionOutcome.NEEDS_INPUT || result.needsCamera || result.needsContacts ||
+        result.needsNotifications || result.appOptions.isNotEmpty() || result.contactOptions.isNotEmpty() -> com.example.session.SessionState.AWAITING_CLARIFICATION
+      result.outcome == PhoneActionOutcome.REJECTED -> com.example.session.SessionState.FAILED
+      else -> com.example.session.SessionState.COMPLETED
+    })
     if (inWorkflow) {
       syncWorkflow()
       if (workflow.snapshot?.finished == true) finishWorkflow()
@@ -652,7 +672,11 @@ class MainViewModel @JvmOverloads constructor(
     if (confirmation != null && !fresh) { retainDecisionRequest("Confirmá el pedido o decí cancelar."); return true }
     if (active?.confirmed == true) { retainDecisionRequest("Hay una secuencia en curso. Continuá o cancelala antes de iniciar otra acción."); return true }
     val retry = retryLocalCommand
-    if (retry != null && retryLocalText == text) { runPhoneCommand(retry.first,retry.second); return true }
+    if (retry != null && retryLocalText == text) {
+      // The previous attempt may have happened: repeating it needs a new, explicit confirmation.
+      if (executions.needsReconfirmation(retry.first)) confirmRepeat(retry.first) else runPhoneCommand(retry.first, retry.second)
+      return true
+    }
     retryLocalCommand = null; retryLocalText = null
     if (searchQuery == null) RequestSafetyPolicy.rejection(text)?.let { retainDecisionRequest(it); return true }
     val correction = Regex("^(?:mejor|cambia|cambiale|que dure|durante|a las?|de la|el segundo|la segunda|el primero|la primera)\\b").containsMatchIn(normalized)
@@ -821,6 +845,7 @@ class MainViewModel @JvmOverloads constructor(
 
   private suspend fun interpretWithGemini(text: String, local: PhoneRoute, draft: DraftPlan?): Boolean {
     val generation = floatingGeneration
+    sessions.transition(generation, com.example.session.SessionState.INTERPRETING)
     decidingRequest = true
     floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true, error = null)
     return try {
@@ -864,6 +889,7 @@ class MainViewModel @JvmOverloads constructor(
     when (result) {
       is InterpretationResult.Query -> {
         if (!result.needsConfirmation) return false
+        sessions.transition(floatingGeneration, com.example.session.SessionState.AWAITING_CONFIRMATION)
         pendingQuery = QueryPreview(text, floatingGeneration)
         retainLocalAudio = true
         floatingState.value = floatingState.value.copy(
@@ -885,6 +911,7 @@ class MainViewModel @JvmOverloads constructor(
         } else runPhoneCommand(result.command)
       }
       is InterpretationResult.Clarification -> {
+        sessions.transition(floatingGeneration, com.example.session.SessionState.AWAITING_CLARIFICATION)
         clarification = result.context
         // A learned structure or a contextual reading clarifies the request the local grammar understood.
         val source = result.source ?: text
@@ -901,20 +928,31 @@ class MainViewModel @JvmOverloads constructor(
           queryFloatingWeather(weatherQuery); return true
         }
         semanticDraft = result.draft ?: runCatching { DraftPlan.fromCommands(result.commands) }.getOrNull()
+        sessions.transition(floatingGeneration, com.example.session.SessionState.AWAITING_CONFIRMATION)
         previewWorkflow(result.commands)
         if (result.fallback) floatingState.value = floatingState.value.copy(status = "Revisá el pedido interpretado con Groq y confirmá.")
       }
       is InterpretationResult.Incomplete -> {
+        sessions.transition(floatingGeneration, com.example.session.SessionState.AWAITING_CLARIFICATION)
         semanticDraft = result.draft; conversation.clear(); clarification = null
         workflow.invalidatePreview(); syncWorkflow()
         retainLocalAudio = true
         floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
           status = result.prompt)
       }
-      is InterpretationResult.Rejected -> retainDecisionRequest(result.message)
-      is InterpretationResult.Failure -> retainDecisionRequest(result.message)
+      is InterpretationResult.Rejected -> { sessions.transition(floatingGeneration, com.example.session.SessionState.FAILED); retainDecisionRequest(result.message) }
+      is InterpretationResult.Failure -> { sessions.transition(floatingGeneration, com.example.session.SessionState.FAILED); retainDecisionRequest(result.message) }
     }
     return true
+  }
+
+  private fun confirmRepeat(command: PhoneCommand) {
+    retryLocalCommand = null; retryLocalText = null
+    confirmation = command
+    sessions.transition(floatingGeneration, com.example.session.SessionState.AWAITING_CONFIRMATION)
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, needsConfirmation = true, error = null,
+      status = "El intento anterior pudo haberse realizado: ${PhoneCommandCodec.summary(command)}. " +
+        "Revisalo antes de repetir. Confirmá solo si querés hacerlo de nuevo.")
   }
 
   private fun retainDecisionRequest(message: String) {
@@ -969,7 +1007,7 @@ class MainViewModel @JvmOverloads constructor(
   fun startFloatingListening(onDispatched: () -> Unit) {
     prepareFloatingAssistant()
     if (floatingState.value.mode == FloatingMode.SENDING || floatingState.value.attachment != null) return
-    floatingGeneration++
+    sessions.begin(com.example.session.SessionState.CAPTURING)
     pendingQuery = null; approvedQueryText = null
     floatingState.value = floatingState.value.copy(queryPreview = false)
     stopFloatingCapture(discard = true)
@@ -1017,7 +1055,7 @@ class MainViewModel @JvmOverloads constructor(
       pendingQuery = null; approvedQueryText = null
       floatingState.value = floatingState.value.copy(queryPreview = false, needsConfirmation = false)
     }
-    floatingGeneration++
+    sessions.begin(com.example.session.SessionState.CAPTURING)
     floatingJob?.cancel()
     decidingRequest = false
     transcribingAudio = false
@@ -1117,7 +1155,8 @@ class MainViewModel @JvmOverloads constructor(
   fun pauseFloatingAssistant(error: String? = null) {
     floatingPaused = true
     if (transcribingAudio || decidingRequest) {
-      floatingGeneration++
+      // The request is kept for a retry; its late answer must not apply.
+      sessions.cancel()
       floatingJob?.cancel()
       floatingJob = null
       transcribingAudio = false
@@ -1130,11 +1169,12 @@ class MainViewModel @JvmOverloads constructor(
     if (floatingState.value.mode != FloatingMode.LISTENING && floatingState.value.mode != FloatingMode.RECORDING) return
     floatingJob?.cancel()
     floatingJob = null
-    val generation = ++floatingGeneration
+    val generation = sessions.begin(com.example.session.SessionState.CAPTURING)
     floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, amplitude = 0f)
     viewModelScope.launch {
       val audio = finishFloatingCapture()
       if (generation != floatingGeneration) { audio?.file?.delete(); return@launch }
+      sessions.transition(generation, com.example.session.SessionState.IDLE)
       pendingFloatingAudio = audio
       floatingState.value = floatingState.value.copy(
         mode = if (audio != null) FloatingMode.AUDIO_READY else FloatingMode.IDLE,
@@ -1152,7 +1192,7 @@ class MainViewModel @JvmOverloads constructor(
     patternExample = null
     cancelClockAutomation?.invoke()
     cancelClockAutomation = null
-    floatingGeneration++
+    sessions.cancel()
     transcribingAudio = false
     decidingRequest = false
     stopFloatingCapture(discard = true)
@@ -1176,7 +1216,7 @@ class MainViewModel @JvmOverloads constructor(
     if (floatingState.value.mode !in listOf(FloatingMode.RECORDING, FloatingMode.AUDIO_READY)) return
     floatingJob?.cancel()
     floatingJob = null
-    val generation = ++floatingGeneration
+    val generation = sessions.begin(com.example.session.SessionState.TRANSCRIBING)
     val sendStarted = monotonicClock()
     val previousLatency = floatingState.value.voiceLatency
     val endpoint = floatingCapture.snapshot.speechEndAtMs?.let { (sendStarted - it).coerceAtLeast(0) }
@@ -1189,6 +1229,7 @@ class MainViewModel @JvmOverloads constructor(
       val audio = pendingFloatingAudio ?: finishFloatingCapture()
       if (generation != floatingGeneration) { audio?.file?.delete(); return@launch }
       if (audio == null) {
+        sessions.transition(generation, com.example.session.SessionState.FAILED)
         floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE,
           error = floatingCapture.snapshot.error ?: "No se pudo finalizar el audio. Activá el micrófono para volver a grabar.")
         return@launch
@@ -1196,6 +1237,7 @@ class MainViewModel @JvmOverloads constructor(
       pendingFloatingAudio = audio
       if (!reusedAudio) updateVoiceLatency(latency.copy(finalizationMs = monotonicClock() - finalizationStarted))
       if (floatingPaused) {
+        sessions.transition(generation, com.example.session.SessionState.IDLE)
         floatingState.value = floatingState.value.copy(mode = FloatingMode.AUDIO_READY, status = "Audio guardado.")
         return@launch
       }
@@ -1214,6 +1256,7 @@ class MainViewModel @JvmOverloads constructor(
       } catch (failure: Exception) {
         if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
         transcribingAudio = false
+        sessions.transition(generation, com.example.session.SessionState.IDLE)
         val transcriptionError = failure as? TranscriptionException
         floatingState.value = floatingState.value.copy(needsGroqKey = transcriptionError?.needsKey == true)
         val state = floatingState.value
@@ -1229,6 +1272,7 @@ class MainViewModel @JvmOverloads constructor(
       }
       if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
       transcribingAudio = false
+      sessions.transition(generation, com.example.session.SessionState.INTERPRETING)
       if (!reusedTranscript) updateVoiceLatency(floatingState.value.voiceLatency!!.copy(transcriptionMs = monotonicClock() - transcriptionStarted))
       pendingTranscript = transcript
       floatingState.value = floatingState.value.copy(transcript = transcript)
@@ -1276,6 +1320,7 @@ class MainViewModel @JvmOverloads constructor(
       retainDecisionRequest(result.message)
       floatingState.value = floatingState.value.copy(needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
     } else {
+      sessions.transition(floatingGeneration, com.example.session.SessionState.COMPLETED)
       pendingFloatingAudio = null // FileProvider/WhatsApp owns the shared file from here.
       floatingState.value = floatingState.value.copy(needsGroqKey = false)
       onDispatched()
@@ -1349,7 +1394,7 @@ class MainViewModel @JvmOverloads constructor(
     if (floatingState.value.mode == FloatingMode.SENDING || floatingState.value.text.isBlank()) return
     stopFloatingCapture(discard = true)
     val text = floatingState.value.text
-    val generation = ++floatingGeneration
+    val generation = sessions.begin(com.example.session.SessionState.INTERPRETING)
     floatingPaused = false
     floatingJob = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
       if (routeFloatingRequest(text, onDispatched)) return@launch
@@ -1382,6 +1427,7 @@ class MainViewModel @JvmOverloads constructor(
       floatingState.value = floatingState.value.copy(mode = failureMode, error = result.message,
         needsWhatsAppAccessibility = result.message.contains("Accesibilidad"))
     } else {
+      sessions.transition(floatingGeneration, com.example.session.SessionState.COMPLETED)
       pendingFloatingAudio?.file?.delete()
       pendingFloatingAudio = null; pendingTranscript = null
       onDispatched()
