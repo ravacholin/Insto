@@ -8,6 +8,8 @@ Los pedidos completos y los datos faltantes identificados se resuelven en el tel
 
 Con Gemini Decisions activado, Groq puede verificar una categoría o interpretar el pedido como respaldo ante fallos del proveedor principal, respuestas incompatibles o una categoría incierta con evaluación de seguridad afirmativa. Usa la clave de **IA → Groq** y el modelo `openai/gpt-oss-20b`. Ambos proveedores deben conservar los pasos y datos ya reconocidos. Los planes propuestos pasan por revisión antes de ejecutar.
 
+Las frases aprendidas, las estructuras con un parámetro (hora, duración o porcentaje) y el contexto operativo breve entre órdenes se consultan después de este catálogo y antes de Gemini; ver [Estructuras aprendidas y contexto operativo](LOCAL-LEARNING.md).
+
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 
 Total de entradas: 94.

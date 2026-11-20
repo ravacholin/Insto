@@ -32,4 +32,22 @@ class MediaSessionPolicyTest {
   assertEquals(MediaResolution.Unsupported,
    MediaSessionPolicy.resolve(sessions, MediaOp.PAUSE, "com.google.android.youtube"))
  }
+ @Test fun theContextAppOnlyReplacesTheChoiceAmongSeveralSessions() {
+  val spotify = MediaSessionOption("com.spotify.music", setOf(MediaOp.PAUSE, MediaOp.NEXT))
+  val youtube = MediaSessionOption("com.google.android.youtube", setOf(MediaOp.PAUSE))
+  val sessions = listOf(youtube, spotify)
+  assertEquals(MediaResolution.Ready("com.spotify.music"),
+   MediaSessionPolicy.resolve(sessions, MediaOp.NEXT, null, preferred = "com.spotify.music"))
+  // An explicit app prevails over the context.
+  assertEquals(MediaResolution.Ready("com.google.android.youtube"),
+   MediaSessionPolicy.resolve(sessions, MediaOp.PAUSE, "com.google.android.youtube", preferred = "com.spotify.music"))
+  // A context app without a session does not invent one: the user still chooses.
+  assertEquals(MediaResolution.Choose,
+   MediaSessionPolicy.resolve(sessions, MediaOp.PAUSE, null, preferred = "com.example.radio"))
+  // A single session is used as before, whatever the context says.
+  assertEquals(MediaResolution.Ready("com.google.android.youtube"),
+   MediaSessionPolicy.resolve(listOf(youtube), MediaOp.PAUSE, null, preferred = "com.spotify.music"))
+  assertEquals(MediaResolution.Unsupported,
+   MediaSessionPolicy.resolve(sessions, MediaOp.NEXT, null, preferred = "com.google.android.youtube"))
+ }
 }

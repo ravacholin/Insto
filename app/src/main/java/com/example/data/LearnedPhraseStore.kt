@@ -15,6 +15,7 @@ import com.example.phone.PhoneActionResult
 import com.example.phone.PhoneCommand
 import com.example.phone.PhoneCommandCodec
 import com.example.phone.PhoneCommandParser
+import com.example.phone.PhrasePatterns
 import com.example.phone.PlatformAction
 import com.example.phone.RequestSafetyPolicy
 import java.io.IOException
@@ -62,9 +63,48 @@ class LearnedPhraseStore internal constructor(
     /** The request the user wrote for a manual entry, kept to edit it later. */
     val target: String? = null,
   )
-  data class Settings(val enabled: Boolean = true, val entries: List<Entry> = emptyList())
+  /**
+   * A structure generalized from executed model interpretations. [values] are the distinct canonical parameters
+   * seen so far; it is used only with [PhrasePatterns.MIN_EXAMPLES] of them and while [enabled].
+   */
+  data class PatternEntry(
+    val prefix: String,
+    val suffix: String,
+    val action: PhrasePatterns.Action,
+    val values: List<String>,
+    val examples: List<String>,
+    val date: Long,
+    val uses: Long = 0,
+    val enabled: Boolean = true,
+  ) {
+    val template: String get() = prefix + action.slot.placeholder + suffix
+    val active: Boolean get() = values.size >= PhrasePatterns.MIN_EXAMPLES
+    internal val pattern get() = PhrasePatterns.Pattern(prefix, suffix, action, enabled && active)
+  }
+  data class Settings(
+    val enabled: Boolean = true,
+    val entries: List<Entry> = emptyList(),
+    /** Learned structures, including those still collecting examples. */
+    val patterns: List<PatternEntry> = emptyList(),
+  ) {
+    val activePatterns: List<PatternEntry> get() = patterns.filter { it.active }
+  }
 
-  private val settings = store.data.map { Settings(it[enabled] ?: true, entries(it)) }
+  private val settings = store.data.map { Settings(it[enabled] ?: true, entries(it), patterns(it)) }
+
+  /**
+   * Decoded and compiled once per stored value: the raw JSON is compared by identity, then by content.
+   * Requests never re-validate or recompile structures; only a store update does.
+   */
+  private class PatternCache(val raw: String?, val entries: List<PatternEntry>) {
+    val index: PhrasePatterns.Index by lazy { PhrasePatterns.Index(entries.map { it.pattern }) }
+  }
+  @Volatile private var patternCache = PatternCache(null, emptyList())
+
+  init {
+    // Decode and validate stored structures once, on the storage dispatcher, before the first request needs them.
+    updates.launch { try { patternState(store.data.first()).index } catch (_: IOException) { } }
+  }
   val uiSettings = settings.catch { error ->
     if (error is IOException) emit(Settings(enabled = false)) else throw error
   }
@@ -89,11 +129,88 @@ class LearnedPhraseStore internal constructor(
     return command
   }
 
+  /**
+   * Matches a learned structure. Runs after exact phrases and only for requests the local grammar did not resolve.
+   * The same safety key as phrases applies: questions, negations, conditions, quotes and joined actions never match.
+   */
+  suspend fun lookupPattern(request: InterpretationRequest): PhrasePatterns.Match? {
+    val phrase = key(request) ?: return null
+    val prefs = try { store.data.first() } catch (_: IOException) { return null }
+    if (prefs[enabled] == false) return null
+    return patternState(prefs).index.match(phrase) { request.now.clone() as java.util.Calendar }
+  }
+
+  private fun patternState(prefs: Preferences): PatternCache {
+    val raw = prefs[patternData]
+    val cached = patternCache
+    if (cached.raw === raw || cached.raw == raw) return cached
+    return PatternCache(raw, decodePatterns(raw)).also { patternCache = it }
+  }
+
   // El panel puede cerrarse como resultado de una acción exitosa.
   internal fun saveConfirmed(request: InterpretationRequest, command: PhoneCommand, result: PhoneActionResult) {
     updates.launch(start = CoroutineStart.UNDISPATCHED) {
       try { learn(request, command, confirmed = true, result = result) } catch (_: IOException) { }
+      try { observePattern(request, command, result) } catch (_: IOException) { }
     }
+  }
+
+  /** A model interpretation executed without a confirmation step. Only feeds structures, never exact phrases. */
+  internal fun savePatternExample(request: InterpretationRequest, command: PhoneCommand, result: PhoneActionResult) {
+    updates.launch(start = CoroutineStart.UNDISPATCHED) {
+      try { observePattern(request, command, result) } catch (_: IOException) { }
+    }
+  }
+
+  internal fun savePatternUse(template: String) {
+    updates.launch(start = CoroutineStart.UNDISPATCHED) {
+      try {
+        store.edit { prefs ->
+          val current = patterns(prefs)
+          val entry = current.firstOrNull { it.template == template } ?: return@edit
+          writePatterns(prefs, current.map { if (it === entry) it.copy(uses = it.uses + 1, date = clock()) else it })
+        }
+      } catch (_: IOException) { }
+    }
+  }
+
+  /**
+   * Records one executed example. Alarms and timers are handed to the Clock app, so their handoff counts;
+   * volume must complete. Anything that needed input, failed or is uncertain is ignored.
+   */
+  internal suspend fun observePattern(request: InterpretationRequest, command: PhoneCommand, result: PhoneActionResult) {
+    val phrase = key(request) ?: return
+    val action = PhrasePatterns.actionFor(command) ?: return
+    val succeeded = result.outcome == PhoneActionOutcome.COMPLETED ||
+      result.outcome == PhoneActionOutcome.HANDOFF && action != PhrasePatterns.Action.VOLUME
+    if (!succeeded || result.retainRequest || result.confirmation != null || result.appOptions.isNotEmpty()) return
+    store.edit { prefs ->
+      if (prefs[enabled] == false) return@edit
+      // Parsing every span happens in the store transaction, off the caller's (main) thread.
+      val observation = PhrasePatterns.observe(phrase, command) { request.now.clone() as java.util.Calendar } ?: return@edit
+      val current = patterns(prefs)
+      val existing = current.firstOrNull { it.prefix == observation.prefix && it.suffix == observation.suffix && it.action == observation.action }
+      val updated = if (existing == null) {
+        PatternEntry(observation.prefix, observation.suffix, observation.action, listOf(observation.value),
+          listOf(observation.example), clock())
+      } else existing.copy(
+        values = (existing.values + observation.value).distinct().takeLast(MAX_PATTERN_VALUES),
+        examples = (existing.examples + observation.example).distinct().takeLast(MAX_PATTERN_VALUES),
+        date = clock(),
+      )
+      writePatterns(prefs, listOf(updated) + current.filterNot { it === existing })
+    }
+  }
+
+  /** Turns a structure on or off without losing its examples. A disabled structure is never re-enabled by use. */
+  suspend fun setPatternEnabled(template: String, value: Boolean) {
+    store.edit { prefs ->
+      writePatterns(prefs, patterns(prefs).map { if (it.template == template) it.copy(enabled = value) else it })
+    }
+  }
+
+  suspend fun deletePattern(template: String) {
+    store.edit { prefs -> writePatterns(prefs, patterns(prefs).filterNot { it.template == template }) }
   }
 
   internal fun saveUse(request: InterpretationRequest, command: PhoneCommand) {
@@ -202,7 +319,7 @@ class LearnedPhraseStore internal constructor(
   }
 
   suspend fun clear() {
-    store.edit { it.remove(data); it.remove(lastUsed) }
+    store.edit { it.remove(data); it.remove(lastUsed); it.remove(patternData) }
   }
 
   suspend fun setEnabled(value: Boolean) {
@@ -229,6 +346,20 @@ class LearnedPhraseStore internal constructor(
     prefs[data] = encode(trim(entries)).toString()
   }
 
+  /** Stores without patterns (before version 1.12) have no key: they read as an empty list, nothing is rewritten. */
+  private fun patterns(prefs: Preferences): List<PatternEntry> = patternState(prefs).entries
+
+  /**
+   * Writes run on the storage dispatcher. The cache is primed with what was written, so the next request does not
+   * decode or compile on the main thread. A failed write leaves a different raw value, which simply misses the cache.
+   */
+  private fun writePatterns(prefs: androidx.datastore.preferences.core.MutablePreferences, entries: List<PatternEntry>) {
+    val kept = trimPatterns(entries)
+    val raw = encodePatterns(kept)
+    prefs[patternData] = raw
+    patternCache = PatternCache(raw, kept).also { it.index }
+  }
+
   companion object {
     const val LIMIT = 200
     private const val EXPORT_LIMIT = 262_144
@@ -236,6 +367,9 @@ class LearnedPhraseStore internal constructor(
     private val enabled = booleanPreferencesKey("enabled")
     private val data = stringPreferencesKey("entries")
     private val lastUsed = stringPreferencesKey("last_used")
+    private val patternData = stringPreferencesKey("patterns")
+    const val PATTERN_LIMIT = 60
+    private const val MAX_PATTERN_VALUES = 6
     private val conditionalOrNegative = Regex(
       "\\b(?:no|nunca|jamas|tampoco|ni|sin|si|cuando|salvo|excepto|mientras|siempre que|a condicion de|en caso de)\\b",
     )
@@ -263,6 +397,62 @@ class LearnedPhraseStore internal constructor(
       }
       return result
     }
+
+    /** Keeps [PATTERN_LIMIT] structures. Those still collecting examples go first, then the least recent. */
+    internal fun trimPatterns(entries: List<PatternEntry>): List<PatternEntry> {
+      if (entries.size <= PATTERN_LIMIT) return entries
+      val result = entries.toMutableList()
+      while (result.size > PATTERN_LIMIT) {
+        val index = result.indexOfLast { !it.active }.takeIf { it >= 0 } ?: result.lastIndex
+        result.removeAt(index)
+      }
+      return result
+    }
+
+    internal fun encodePatterns(entries: List<PatternEntry>): String = JSONObject().put("version", 1)
+      .put("patterns", JSONArray(entries.map {
+        JSONObject().put("prefix", it.prefix).put("suffix", it.suffix).put("action", it.action.id)
+          .put("values", JSONArray(it.values)).put("examples", JSONArray(it.examples))
+          .put("date", it.date).put("uses", it.uses).put("enabled", it.enabled)
+      })).toString()
+
+    /** Unknown versions, actions or damaged items are skipped; they never block exact phrases. */
+    internal fun decodePatterns(raw: String?): List<PatternEntry> {
+      if (raw.isNullOrBlank()) return emptyList()
+      val root = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyList()
+      if (root.optInt("version", 0) != 1) return emptyList()
+      val array = root.optJSONArray("patterns") ?: return emptyList()
+      return (0 until array.length()).mapNotNull { i ->
+        runCatching {
+          val obj = array.getJSONObject(i)
+          val action = PhrasePatterns.Action.of(obj.getString("action")) ?: return@runCatching null
+          fun strings(name: String) = obj.optJSONArray(name)?.let { a -> (0 until a.length()).map(a::getString) }.orEmpty()
+          PatternEntry(obj.getString("prefix"), obj.getString("suffix"), action, strings("values").distinct(),
+            strings("examples"), obj.optLong("date"), obj.optLong("uses").coerceAtLeast(0), obj.optBoolean("enabled", true))
+            .takeIf { validPattern(it) }
+        }.getOrNull()
+      }.distinctBy { it.template }
+    }
+
+    /** Re-checks the literal text: a hand-edited store cannot introduce a broader or parameterized structure. */
+    private fun validPattern(entry: PatternEntry): Boolean {
+      if (entry.prefix.isNotEmpty() && !entry.prefix.endsWith(" ")) return false
+      if (entry.suffix.isNotEmpty() && !entry.suffix.startsWith(" ")) return false
+      val example = entry.examples.firstOrNull() ?: return false
+      val observed = PhrasePatterns.observe(entry.prefix + example + entry.suffix, sampleCommand(entry, example) ?: return false)
+      return observed != null && observed.prefix == entry.prefix && observed.suffix == entry.suffix
+    }
+
+    private fun sampleCommand(entry: PatternEntry, example: String): PhoneCommand? =
+      PhrasePatterns.Index(listOf(entry.pattern.copy(enabled = true))).match(entry.prefix + example + entry.suffix)
+        .let { match ->
+          when (match) {
+            is PhrasePatterns.Match.Command -> match.command
+            // An ambiguous hour still identifies the structure; any reading of it is a valid sample.
+            is PhrasePatterns.Match.Clarify -> (PhoneCommandParser().parse("${entry.action.canonical(example)} de la manana") as? com.example.phone.PhoneRoute.Local)?.command
+            null -> null
+          }
+        }
 
     private fun encode(entries: List<Entry>) = JSONArray(entries.map {
       JSONObject().put("phrase", it.phrase).put("command", PhoneCommandCodec.encode(it.command))

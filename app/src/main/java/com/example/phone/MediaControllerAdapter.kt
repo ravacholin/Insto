@@ -9,7 +9,7 @@ import android.media.session.PlaybackState
 import android.provider.Settings
 
 class MediaControllerAdapter(private val context: Context) {
-  fun execute(command: PhoneCommand.Media): PhoneActionResult {
+  fun execute(command: PhoneCommand.Media, preferredPackage: String? = null): PhoneActionResult {
     val sessions = activeSessions() ?: return PhoneActionResult(
       "Habilitá el acceso a notificaciones para controlar sesiones multimedia. Insto no lee mensajes para esta función.",
       accessSettingsAction = Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS,
@@ -21,7 +21,7 @@ class MediaControllerAdapter(private val context: Context) {
       val operations = MediaOp.entries.filter { it == MediaOp.STATUS || actions and action(it) != 0L }.toSet()
       MediaSessionOption(session.packageName, operations, state?.state == PlaybackState.STATE_PLAYING)
     }
-    val resolution = MediaSessionPolicy.resolve(options, command.operation, command.packageName)
+    val resolution = MediaSessionPolicy.resolve(options, command.operation, command.packageName, preferredPackage)
     val target = when (resolution) {
       MediaResolution.Choose -> return PhoneActionResult("¿Qué aplicación querés controlar?", appOptions = sessions.map {
         AppOption(appLabel(it.packageName), it.packageName)

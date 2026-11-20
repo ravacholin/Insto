@@ -18,6 +18,8 @@ class PhoneActionExecutor(
   private val context: Context,
   private val nowHourMinute: () -> Pair<Int, Int> = { Calendar.getInstance().let { it.get(Calendar.HOUR_OF_DAY) to it.get(Calendar.MINUTE) } },
   private val dateNow: () -> Calendar = { Calendar.getInstance() },
+  /** The media app of the brief operational context, to choose among several sessions instead of asking. */
+  private val preferredMediaPackage: () -> String? = { null },
 ) {
   fun execute(command: PhoneCommand, confirmed: Boolean = false): PhoneActionResult {
     if (context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return PhoneActionResult("Desbloqueá el teléfono para ejecutar este pedido.", outcome = PhoneActionOutcome.REJECTED)
@@ -26,7 +28,8 @@ class PhoneActionExecutor(
       if(command is PhoneCommand.CalendarEvent && command.beginMillis<=System.currentTimeMillis()) return PhoneActionResult("La fecha del evento ya pasó. No preparé un evento con otra fecha.",outcome=PhoneActionOutcome.REJECTED)
       when (command) {
         is PhoneCommand.Platform -> PlatformActionExecutor(context).execute(command,confirmed)
-        is PhoneCommand.Media -> MediaControllerAdapter(context).execute(command)
+        is PhoneCommand.Media -> MediaControllerAdapter(context).execute(command,
+          if (command.packageName == null) preferredMediaPackage() else null)
         is PhoneCommand.TemporaryMode -> TemporaryModeManager(context).execute(command, confirmed)
         PhoneCommand.EndMode -> TemporaryModeManager(context).end(force = true)
         is PhoneCommand.Navigate, is PhoneCommand.MapSearch, is PhoneCommand.SavePlace,

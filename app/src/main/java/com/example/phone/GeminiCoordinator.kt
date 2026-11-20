@@ -17,6 +17,10 @@ class GeminiCoordinator(
   private val fallback: StructuredCommandExtractor? = null,
   private val breaker: DecisionsCircuitBreaker = DecisionsCircuitBreaker(),
   private val lookupLearnedPhrase: suspend (InterpretationRequest) -> PhoneCommand? = { null },
+  /** Learned structures with a typed slot. Consulted after exact phrases, before any provider. */
+  private val lookupLearnedPattern: suspend (InterpretationRequest) -> PhrasePatterns.Match? = { null },
+  /** Brief operational context. Never added to provider input. */
+  private val operationalContext: OperationalContext? = null,
 ) {
   suspend fun interpret(
     request: InterpretationRequest,
@@ -27,6 +31,7 @@ class GeminiCoordinator(
     val canDeferToInstinct = canDeferToInstinct(request, local)
     val indirectPhoneRequest = RequestSafetyPolicy.isIndirectPhoneRequest(request.text)
     val steps = ConversationSession.splitSteps(request.text)
+      .let { if (operationalContext != null) OperationalContext.withoutDiscourseLead(it) else it }
     val explicitQuestion = '?' in request.text || '¿' in request.text || RequestSafetyPolicy.isGeneralRequest(request.text)
     if (request.draft == null && steps.size > 1 && !explicitQuestion) {
       steps.firstNotNullOfOrNull(RequestSafetyPolicy::rejection)?.let { return InterpretationResult.Rejected(it) }
@@ -55,7 +60,11 @@ class GeminiCoordinator(
     val isSingleNewTurn = request.draft == null && steps.size == 1
     if (isSingleNewTurn) {
       when (local) {
-        is PhoneRoute.Local -> return InterpretationResult.Direct(local.command)
+        is PhoneRoute.Local -> {
+          // Context only fills the media app of a music request that named none; the parsed order prevails.
+          val command = operationalContext?.enrich(local.command) ?: local.command
+          return InterpretationResult.Direct(command, contextual = command != local.command)
+        }
         is PhoneRoute.Clarify -> {
           // Missing fields may be present in the explicit reference. Otherwise retain the local fast path.
           if (request.sourceContext == null || !router.isEnabled()) {
@@ -75,6 +84,24 @@ class GeminiCoordinator(
       lookupLearnedPhrase(request)?.let {
         currentCoroutineContext().ensureActive()
         return InterpretationResult.Direct(it, learned = true)
+      }
+      if (isSingleNewTurn && request.sourceContext == null) {
+        lookupLearnedPattern(request)?.let { match ->
+          currentCoroutineContext().ensureActive()
+          return when (match) {
+            is PhrasePatterns.Match.Command -> InterpretationResult.Direct(match.command, learned = true, pattern = match.template)
+            // The structure is known but the value is not complete: the usual clarification, never a guess.
+            is PhrasePatterns.Match.Clarify -> InterpretationResult.Clarification(match.prompt, match.context, source = match.source)
+          }
+        }
+        operationalContext?.resolve(request.text) { request.now.clone() as java.util.Calendar }?.let { resolution ->
+          when (val route = resolution.route) {
+            // Local readings, never model proposals: marked so they teach neither phrases nor structures.
+            is PhoneRoute.Local -> return InterpretationResult.Direct(route.command, contextual = true)
+            is PhoneRoute.Clarify -> return InterpretationResult.Clarification(route.prompt, route.context, source = resolution.source)
+            else -> Unit
+          }
+        }
       }
     }
     if (!router.needsDecision(request.text, local)) return when (local) {

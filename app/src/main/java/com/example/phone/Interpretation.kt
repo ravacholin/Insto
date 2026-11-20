@@ -30,8 +30,18 @@ data class InterpretationRequest(
 
 sealed interface InterpretationResult {
   data class Query(val needsConfirmation: Boolean = false) : InterpretationResult
-  data class Direct(val command: PhoneCommand, val learned: Boolean = false) : InterpretationResult
-  data class Clarification(val prompt: String, val context: String) : InterpretationResult
+  /**
+   * [learned]: an exact learned phrase or, with [pattern], a learned structure. [contextual]: resolved or completed
+   * by the brief operational context stage. Neither comes from a model, so neither teaches phrases or structures.
+   */
+  data class Direct(
+    val command: PhoneCommand,
+    val learned: Boolean = false,
+    val pattern: String? = null,
+    val contextual: Boolean = false,
+  ) : InterpretationResult
+  /** [source]: the request the local grammar understood, when it differs from the text the user wrote. */
+  data class Clarification(val prompt: String, val context: String, val source: String? = null) : InterpretationResult
   data class Plan(val commands: List<PhoneCommand>, val fallback: Boolean = false, val draft: DraftPlan? = null) : InterpretationResult
   data class Incomplete(val draft: DraftPlan, val prompt: String = draft.prompt(), val fallback: Boolean = false) : InterpretationResult
   data class Rejected(val message: String) : InterpretationResult
