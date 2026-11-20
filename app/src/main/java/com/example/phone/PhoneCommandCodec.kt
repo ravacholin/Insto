@@ -54,7 +54,8 @@ object PhoneCommandCodec {
     val percent = if(o.has("percent")) integer("percent",0..100) else null
     require((percent != null) == (action == PlatformAction.BRIGHTNESS))
     val targetActions = setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_SEND,PlatformAction.ROUTINE_RUN,PlatformAction.CALENDAR_QUERY,PlatformAction.CALENDAR_UPDATE,PlatformAction.CALENDAR_DELETE,PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_RENAME,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE,PlatformAction.ALARM_DISMISS,PlatformAction.CONTACT_SEARCH,PlatformAction.CONTACT_PHONES,PlatformAction.APP_SETTINGS,PlatformAction.MESSAGE_OPEN,PlatformAction.MESSAGE_DRAFT,PlatformAction.NOTIFICATION_OPEN,PlatformAction.NOTIFICATION_DISMISS)
-    val optionalTargets=setOf(PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE)
+    if(action==PlatformAction.WEATHER_TEMPERATURE) require(argument==null || argument==WeatherIntentParser.FEELS_LIKE)
+    val optionalTargets=setOf(PlatformAction.WEATHER_TEMPERATURE,PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE)
     require(if(action in optionalTargets) true else (argument != null) == (action in targetActions))
     val requiredContent=setOf(PlatformAction.MESSAGE_SEND,PlatformAction.MESSAGE_DRAFT,PlatformAction.TEXT_SHARE,PlatformAction.FILE_RENAME)
     val optionalContent=CalendarSelection.actions

@@ -82,6 +82,7 @@ red. No se ha medido precisión ni latencia con el servicio real sin una clave.
 - `Subí el volumen`, `bajá el volumen`, `poné el volumen al cincuenta por ciento`: volumen multimedia.
 - `Prendé la linterna` / `apagá la linterna`: pide permiso de cámara cuando corresponda.
 - `Activá el wifi`, `abrí Bluetooth`, `abrí conectividad`: abre los ajustes que Android permite gestionar al usuario; no afirma haber cambiado un interruptor que no controla.
+- `¿Qué temperatura hace?`, `¿cuál es la sensación térmica?`, `¿va a llover?`, `decime si va a llover`: consulta al SMN y responde con texto en el panel («Consultando el SMN…»). Sin Gemini, Groq ni Instinct; no abre el navegador ni WhatsApp. Ver [Clima del SMN](WEATHER-SMN.md).
 
 La interpretación inicial usa una gramática explícita en español; el híbrido opcional consulta Gemini Decisions en los casos no resueltos. No es control arbitrario de cualquier aplicación. Consultas como `explicame cómo funciona un cronómetro` van a Instinct. Los pedidos locales incompletos piden aclaración dentro del panel; se responden por el mismo micrófono o por texto. Los rechazos de Android conservan el pedido para un reintento explícito, sin repetir un despacho incierto. Las acciones locales funcionan sin contacto ni WhatsApp. El control del cronómetro requiere Accesibilidad cuando Reloj de Google no ofrece el intent solicitado; las demás acciones locales no la requieren. Un teléfono bloqueado requiere desbloqueo.
 

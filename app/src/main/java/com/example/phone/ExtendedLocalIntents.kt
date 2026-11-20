@@ -110,6 +110,31 @@ internal object ExtendedLocalIntents {
         "Se abre la interfaz nativa para capturar; solo se informa archivo guardado cuando la app devuelve un resultado válido. Sin filtros ni ajustes adicionales.",
         fixed = PhoneCommand.Platform(op), decisionDescription = decisionDescription))
     }
+    for ((action, description, examples) in listOf(
+      Triple(PlatformAction.WEATHER_TEMPERATURE, "Consultar la temperatura y la sensación térmica medidas por el SMN en la estación Buenos Aires",
+        listOf("qué temperatura hace", "cuál es la sensación térmica")),
+      Triple(PlatformAction.WEATHER_RAIN, "Consultar la probabilidad de precipitaciones del SMN para Capital Federal en las próximas horas",
+        listOf("va a llover", "qué probabilidad de lluvia hay")),
+    )) {
+      val temperature = action == PlatformAction.WEATHER_TEMPERATURE
+      add(LocalIntentDefinition(action.name.lowercase(java.util.Locale.ROOT), IntentCategory.WEATHER, description, examples,
+        if (temperature) listOf(IntentParameter("argument", "feels_like", false, "solo si se pregunta por la sensación térmica")) else emptyList(),
+        emptyList(),
+        if (temperature) "Datos abiertos del SMN «Estado del tiempo presente» (zipopendata tiepre), a pedido y sin token"
+          else "API ws1 del SMN con credencial anónima de la portada, a pedido; sin otros proveedores",
+        if (temperature) "Valor publicado con la hora de medición; más de tres horas de antigüedad no se informa como actual"
+          else "Rangos publicados de los bloques del SMN que cubren las próximas seis horas; nunca promedios ni deducciones",
+        prompt = "Preguntame, por ejemplo, «¿qué temperatura hace?» o «¿va a llover?».",
+        decisionDescription = if (temperature) "Consultar la temperatura o sensación térmica actuales, sin otra ciudad ni otro día."
+          else "Consultar si va a llover en las próximas horas, sin otra ciudad ni otro día.",
+        accepts = { it is PhoneCommand.Platform && it.action == action },
+        // Local grammar only: no Gemini Decisions, no Groq classification, no Instinct.
+        decisions = false,
+        localSyntax = Regex("temperatura|grados|termica|llov|lluvia|precipitaci|maxima|minima"),
+        parseParameters = { request ->
+          WeatherIntentParser.parse(request.raw)?.takeIf { it !is PhoneRoute.Local || (it.command as? PhoneCommand.Platform)?.action == action }
+        }))
+    }
     for((id,op,desc,examples) in listOf(
       listOf("routine_list",PlatformAction.ROUTINE_LIST,"Listar rutinas locales configuradas",listOf("mostrá mis rutinas","qué rutinas tengo")),
       listOf("routine_import",PlatformAction.ROUTINE_IMPORT,"Importar plantillas de rutinas revisadas desde JSON",listOf("importá rutinas","configurá rutinas desde un archivo")))) {

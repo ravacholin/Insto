@@ -17,7 +17,9 @@ enum class PlatformAction {
   ALARM_DISMISS, ALARM_SNOOZE, TIMER_DISMISS, CALENDAR_AGENDA, DIALER_OPEN,
   CONTACT_SEARCH, CONTACT_PHONES, APP_SETTINGS, MESSAGE_OPEN, MESSAGE_DRAFT, TEXT_SHARE,
   FILES_BROWSE, RECORDER_OPEN, BATTERY, BRIGHTNESS, ACCESSIBILITY_SETTINGS, DISPLAY_SETTINGS,
-  SILENT_ON, SILENT_OFF, VIBRATE_ON, DND_ON, DND_OFF, NOTIFICATION_LIST, NOTIFICATION_OPEN, NOTIFICATION_DISMISS
+  SILENT_ON, SILENT_OFF, VIBRATE_ON, DND_ON, DND_OFF, NOTIFICATION_LIST, NOTIFICATION_OPEN, NOTIFICATION_DISMISS,
+  /** Read-only SMN queries, answered asynchronously by the floating assistant; never by PhoneActionExecutor. */
+  WEATHER_TEMPERATURE, WEATHER_RAIN
 }
 sealed interface PhoneCommand {
   data class Platform(val action: PlatformAction, val argument: String? = null, val percent: Int? = null, val content: String? = null) : PhoneCommand

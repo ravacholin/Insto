@@ -80,6 +80,8 @@ object RequestSafetyPolicy {
   }
   fun rejection(text: String): String? {
     if (isExplicitQuery(text) || isQuestion(text)) return null
+    // «Decime si va a llover» is an indirect question, not a condition on an action.
+    if (WeatherIntentParser.isQuery(text)) return null
     val s = PhoneCommandParser.normalize(withoutQuotedText(text))
     if (text.trimStart().firstOrNull() in listOf('"', '“', '«') ||
       Regex("^(?:supone|imagina|dijo|dice|escribio|cito)\\b").containsMatchIn(s))

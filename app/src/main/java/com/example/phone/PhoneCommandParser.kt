@@ -53,6 +53,9 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     val registry = LocalIntentRegistry.default
     val phrase = registry.matchPhrase(s)
     if (phrase is PhoneRoute.Local) return phrase
+    // SMN queries are questions with an anchored grammar (no negations, explanations or extra actions);
+    // resolve them before the generic «qué/cómo/contame» rules below send them to Instinct.
+    WeatherIntentParser.parse(text)?.let { return it }
     if (s.isBlank() || (!RequestSafetyPolicy.isDoNotDisturbRequest(s) &&
         Regex("^(no |nunca |si |(?:me )?expli|conta|instinct)").containsMatchIn(s))) return PhoneRoute.Instinct
     val request = FoldedRequest.of(text)

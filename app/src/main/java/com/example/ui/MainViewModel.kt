@@ -165,6 +165,8 @@ class MainViewModel @JvmOverloads constructor(
   private val learnedPhrases: LearnedPhraseStore = LearnedPhraseStore(application),
   /** Process-wide and in memory only: the panel closes after each handoff, the next order may refer to it. */
   private val operationalContext: com.example.phone.OperationalContext = com.example.phone.OperationalContext.shared,
+  /** SMN temperature and rain queries; process-wide in-memory cache and cooldown. */
+  private val weather: com.example.phone.weather.WeatherQueries = com.example.phone.weather.SmnWeatherService.shared,
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
@@ -225,6 +227,10 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private fun previewWorkflow(commands: List<PhoneCommand>) {
+    if (commands.any(WorkflowRunner::isWeatherQuery)) {
+      retainDecisionRequest("Las consultas al SMN se hacen de a una, fuera de secuencias. Pedila sola.")
+      return
+    }
     try {
       if (commands.size > 1) {
         val missing = commands.filterIsInstance<PhoneCommand.OpenApp>().firstOrNull { phoneExecutor.matchingApps(it.name).isEmpty() }
@@ -342,6 +348,36 @@ class MainViewModel @JvmOverloads constructor(
       }
     }
   }
+
+  /**
+   * Same pattern as [queryFloatingCalendar]: the generation guards a stale answer, cancellation propagates and
+   * failures keep the request for retrying. Network and parsing run on Dispatchers.IO inside [weather].
+   * The answer is text on the floating surface only: no browser, WhatsApp, Instinct or speech.
+   */
+  private fun queryFloatingWeather(command: PhoneCommand.Platform) {
+    val generation = floatingGeneration
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, status = "Consultando el SMN…", error = null)
+    viewModelScope.launch {
+      val reply = try {
+        weather.answer(command)
+      } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+      } catch (_: Exception) {
+        null
+      }
+      if (generation != floatingGeneration) return@launch
+      if (reply == null || !reply.answered) {
+        retainDecisionRequest(reply?.text ?: "No pude consultar el SMN. Volvé a intentarlo.")
+      } else {
+        retainLocalAudio = false
+        pendingFloatingAudio?.file?.delete()
+        pendingFloatingAudio = null
+        pendingTranscript = null
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = reply.text, error = null)
+      }
+    }
+  }
+
   private var appChoiceCommand: PhoneCommand? = null
   private var notificationsCommand: PhoneCommand? = null
   private var retainLocalAudio = false
@@ -812,6 +848,8 @@ class MainViewModel @JvmOverloads constructor(
           previewWorkflow(listOf(result.command))
         } else if (result.command is PhoneCommand.Platform && result.command.action == PlatformAction.CALENDAR_QUERY) {
           queryFloatingCalendar(result.command)
+        } else if (result.command is PhoneCommand.Platform && WorkflowRunner.isWeatherQuery(result.command)) {
+          queryFloatingWeather(result.command)
         } else runPhoneCommand(result.command)
       }
       is InterpretationResult.Clarification -> {
@@ -825,6 +863,11 @@ class MainViewModel @JvmOverloads constructor(
       }
       is InterpretationResult.Plan -> {
         clarification = null; conversation.clear()
+        val weatherQuery = result.commands.singleOrNull() as? PhoneCommand.Platform
+        if (weatherQuery != null && WorkflowRunner.isWeatherQuery(weatherQuery)) {
+          semanticDraft = null; routedRequestText = text
+          queryFloatingWeather(weatherQuery); return true
+        }
         semanticDraft = result.draft ?: runCatching { DraftPlan.fromCommands(result.commands) }.getOrNull()
         previewWorkflow(result.commands)
         if (result.fallback) floatingState.value = floatingState.value.copy(status = "Revisá el pedido interpretado con Groq y confirmá.")

@@ -31,6 +31,7 @@ class ConfiguredRoutineStore(private val file:File) {
         val commands=o.getJSONArray("commands");require(commands.length() in 1..10)
         ConfiguredRoutine(name,(0 until commands.length()).map {PhoneCommandCodec.decode(commands.getJSONObject(it))}.also { steps ->
           require(steps.none {it is PhoneCommand.Platform && it.action in setOf(PlatformAction.ROUTINE_RUN,PlatformAction.ROUTINE_IMPORT)}) {"No se admiten rutinas anidadas ni importaciones dentro de rutinas"}
+          require(steps.none(WorkflowRunner::isWeatherQuery)) {"Las consultas al SMN no forman parte de rutinas"}
         })
       }
       require(values.map {PhoneCommandParser.normalize(it.name)}.distinct().size==values.size) {"Nombres de rutina duplicados"}

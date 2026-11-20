@@ -12,7 +12,7 @@ Las frases aprendidas, las estructuras con un parámetro (hora, duración o porc
 
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 
-Total de entradas: 94.
+Total de entradas: 96.
 
 ## `timer` · CLOCK
 
@@ -990,6 +990,28 @@ Importar plantillas de rutinas revisadas desde JSON.
 - Resultado: Listar no ejecuta; importar reemplaza solo después de revisar las plantillas
 - Disponibilidad: adaptador implementado; depende de app, versión y permisos
 
+## `weather_temperature` · WEATHER
+
+Consultar la temperatura y la sensación térmica medidas por el SMN en la estación Buenos Aires. Ver [Clima del SMN](WEATHER-SMN.md).
+
+- Equivalentes: qué temperatura hace / cuál es la sensación térmica
+- Parámetros: argument (`feels_like`, opcional): solo si se pregunta por la sensación térmica
+- Permisos: sin acceso especial adicional (red)
+- Ejecución: datos abiertos del SMN «Estado del tiempo presente» (`zipopendata.php?dato=tiepre`), a pedido y sin token
+- Resultado: valor publicado con la hora de medición; una medición de más de tres horas no se informa como actual
+- Disponibilidad: solo gramática local; no lo elige Gemini Decisions. Otra localidad, otro día o el pasado se informan como fuera de alcance
+
+## `weather_rain` · WEATHER
+
+Consultar la probabilidad de precipitaciones del SMN para Capital Federal en las próximas seis horas. Ver [Clima del SMN](WEATHER-SMN.md).
+
+- Equivalentes: va a llover / qué probabilidad de lluvia hay
+- Parámetros: ninguno
+- Permisos: sin acceso especial adicional (red)
+- Ejecución: API `ws1` del SMN con la credencial anónima de su portada, a pedido; sin otros proveedores
+- Resultado: rangos publicados de hasta dos bloques del SMN que cubren la ventana; nunca promedios ni deducciones
+- Disponibilidad: solo gramática local; no lo elige Gemini Decisions. **No verificado en vivo:** la portada del SMN respondió 403 de Cloudflare en la auditoría; si bloquea, Insto lo informa y no insiste
+
 ## Frases aprendidas
 
 Una frase aprendida es un atajo: una frase tuya que Insto traduce a un comando
@@ -1003,7 +1025,8 @@ del catálogo. Hay dos maneras de sumarlas.
   «cuando diga luz, prendé la linterna» o «aprendé que modo estudio es ejecutá
   la rutina Estudio». La acción se escribe como un pedido que Insto ya entiende
   localmente. Además de lo anterior admite temporizadores, alarmas sin fecha,
-  rutinas, navegación, búsquedas de música y video, ajustes y No molestar.
+  rutinas, navegación, búsquedas de música y video, ajustes, No molestar y las
+  consultas del SMN (temperatura y lluvia, grupo «Clima (SMN)» del editor).
 
 Las llamadas, los mensajes, los archivos y los cambios de calendario nunca se
 asocian a una frase. Una coincidencia usa la ruta local con todos sus
