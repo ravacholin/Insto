@@ -553,3 +553,11 @@ El usuario aprobó el PASO 0 y las cuatro propuestas: contraseña también en «
 - **Micrófono:** la descripción debe **empezar** con la etiqueta, porque WhatsApp suele agregar una indicación («…, mantené presionado»). Tampoco usa «contiene».
 - **Resultado `UNVERIFIED_CONTENT`:** se agregó para distinguir «no se pudo verificar el texto o la grabación» de «no apareció el control».
 - **Camino manual:** `MainViewModel.openFloatingInstinctManually`. Después de un toque incierto solo abre el chat y conserva el pedido en el panel.
+
+### Parte C
+
+- **PBKDF2 propio en todas las versiones:** se reemplazó «`SecretKeyFactory` en API ≥ 26 y RFC 8018 en API 24-25» por la implementación RFC 8018 sobre `HmacSHA256` en todas las versiones, con la contraseña en UTF-8. Los proveedores de Android difieren en cómo codifican la contraseña, y un archivo tiene que abrirse igual en cualquier teléfono. Se verifica con los vectores de la RFC 7914 y contra el `SecretKeyFactory` de la JVM.
+- **Preparación en dos pasos:** cada `BackupSection` calcula el estado final contra el actual (`prepare`) sin escribir. El gestor prepara todas las categorías elegidas antes de tocar la primera. La vista previa usa el mismo cálculo.
+- **Componentes:** `BackupCrypto`, `BackupFormat`, `ConfigurationBackupManager` y las secciones de claves, asistente, rutinas y lugares son puros y se prueban en la JVM con almacenes en memoria. `AndroidBackup.kt` tiene la sección de frases, los adaptadores sobre `GroqKeyStore`, `GeminiSettings`, `AssistantPreferencesRepository` y `SavedPlacesRepository`, y el informe de permisos.
+- **Clave de Gemini restaurada:** se guarda con `GroqKeyStore("gemini")` y el interruptor se restaura aparte (`GeminiSettings.setEnabled`). `saveKey` activaría Decisions por su cuenta.
+- **Migración de categoría:** no existe ninguna versión anterior real. La prueba de migración usa una migración de esquema sintética y el archivo de frases de 1.11, que es la única migración real.

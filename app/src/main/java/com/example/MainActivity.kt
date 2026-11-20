@@ -160,6 +160,7 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(this@MainActivity, GroqSettingsActivity::class.java)
               .putExtra(GroqSettingsActivity.EXTRA_PROVIDER, GroqSettingsActivity.SECTION_PHRASES))
           },
+          onConfigurationImported = { viewModel.onConfigurationImported() },
           onSelectOrbHoldBehavior = { viewModel.setOrbHoldBehavior(it) },
           onSelectWhatsAppFlavor = { viewModel.setPreferredFlavor(it) },
           onSelectVolumeKeyTrigger = { viewModel.setVolumeKeyTrigger(it) },

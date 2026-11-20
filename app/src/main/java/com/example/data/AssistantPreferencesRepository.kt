@@ -143,6 +143,60 @@ class AssistantPreferencesRepository(private val context: Context) {
     context.assistantDataStore.edit { prefs -> prefs.remove(Keys.RECENT_LOGS) }
   }
 
+  /**
+   * The configuration values present now, by stable backup name (the DataStore name). Absent keys use their defaults
+   * and are not listed. Logs and the microphone-prompt state are never part of a backup.
+   */
+  suspend fun backupValues(): Map<String, Any> {
+    val prefs = context.assistantDataStore.data.first()
+    return buildMap {
+      for ((name, type) in BACKUP_KEYS) {
+        val value: Any? = when (type) {
+          BackupType.STRING -> prefs[stringPreferencesKey(name)]
+          BackupType.BOOLEAN -> prefs[booleanPreferencesKey(name)]
+          BackupType.INT -> prefs[intPreferencesKey(name)]
+        }
+        if (value != null) put(name, value)
+      }
+    }
+  }
+
+  /** Writes validated backup values and removes [remove] in a single DataStore transaction. */
+  suspend fun restoreBackupValues(set: Map<String, Any>, remove: Set<String>) {
+    require((set.keys + remove).all { it in BACKUP_KEYS })
+    context.assistantDataStore.edit { prefs ->
+      for (name in remove) when (BACKUP_KEYS.getValue(name)) {
+        BackupType.STRING -> prefs.remove(stringPreferencesKey(name))
+        BackupType.BOOLEAN -> prefs.remove(booleanPreferencesKey(name))
+        BackupType.INT -> prefs.remove(intPreferencesKey(name))
+      }
+      for ((name, value) in set) when (BACKUP_KEYS.getValue(name)) {
+        BackupType.STRING -> prefs[stringPreferencesKey(name)] = value as String
+        BackupType.BOOLEAN -> prefs[booleanPreferencesKey(name)] = value as Boolean
+        BackupType.INT -> prefs[intPreferencesKey(name)] = value as Int
+      }
+    }
+  }
+
+  enum class BackupType { STRING, BOOLEAN, INT }
+
+  companion object {
+    private const val MAX_LOG_ENTRIES = 12
+
+    /** Stable names and types of the user configuration a backup carries. */
+    val BACKUP_KEYS: Map<String, BackupType> = linkedMapOf(
+      "contact_name" to BackupType.STRING, "contact_phone" to BackupType.STRING,
+      "driving_contact_name" to BackupType.STRING, "driving_contact_phone" to BackupType.STRING,
+      "activation_mode" to BackupType.STRING, "orb_hold_behavior" to BackupType.STRING,
+      "whatsapp_flavor" to BackupType.STRING, "voice_recording_mode" to BackupType.STRING,
+      "volume_key_trigger" to BackupType.STRING, "floating_pill_mode" to BackupType.STRING,
+      "eyes_free_cues" to BackupType.BOOLEAN, "boomerang_return" to BackupType.BOOLEAN,
+      "car_bt_auto_voice" to BackupType.BOOLEAN, "night_window_enabled" to BackupType.BOOLEAN,
+      "night_start_hour" to BackupType.INT, "night_end_hour" to BackupType.INT,
+      "groq_vocabulary" to BackupType.BOOLEAN, "groq_pinned_contact_hints" to BackupType.BOOLEAN,
+    )
+  }
+
   private fun mapPreferences(prefs: Preferences): AssistantPreferences {
     val name = prefs[Keys.CONTACT_NAME]
     val phone = prefs[Keys.CONTACT_PHONE]
@@ -275,7 +329,4 @@ class AssistantPreferencesRepository(private val context: Context) {
       .getOrDefault(emptyList())
   }
 
-  companion object {
-    private const val MAX_LOG_ENTRIES = 12
-  }
 }

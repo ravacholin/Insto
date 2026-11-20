@@ -11,4 +11,13 @@ class SavedPlacesRepository(context: Context) {
     require(alias in supportedAliases && address.isNotBlank() && address.length <= 500)
     check(prefs.edit().putString(alias, address).commit()) { "No se pudo guardar la dirección" }
   }
+  /** Removes one saved address. Used only by a confirmed «replace» restore. */
+  fun remove(alias: String) {
+    require(alias in supportedAliases)
+    check(prefs.edit().remove(alias).commit()) { "No se pudo borrar la dirección" }
+  }
+  companion object {
+    val ALIASES = listOf("casa", "trabajo")
+    fun valid(alias: String, address: String): Boolean = alias in ALIASES && address.isNotBlank() && address.length <= 500
+  }
 }

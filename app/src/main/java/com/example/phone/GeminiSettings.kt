@@ -16,4 +16,10 @@ class GeminiSettings(context: Context) {
   fun saveKey(value: String) { keys.save(value); setEnabled(true) }
   fun setEnabled(value: Boolean) { enabled.writeText(value.toString()) }
   fun clear() { keys.clear(); if (enabled.exists()) check(enabled.delete()) }
+  /** The stored switch, independent of whether a key exists. For backup and restore only. */
+  fun enabledFlag(): Boolean = runCatching { enabled.readText() == "true" }.getOrDefault(false)
+  fun hasLocalChoice(): Boolean = localChoice.exists()
+  fun setLocalChoice(value: Boolean) { if (value) continueLocally() else if (localChoice.exists()) check(localChoice.delete()) }
+  /** Saves a restored key keeping the restored switch, unlike [saveKey], which turns Decisions on. */
+  fun restoreKey(value: String) { keys.save(value) }
 }

@@ -849,6 +849,11 @@ class MainViewModel @JvmOverloads constructor(
       error = message, status = null)
   }
 
+  /** After a restore: preferences and phrases refresh through their flows; derived caches are rebuilt. Nothing runs. */
+  fun onConfigurationImported() {
+    vocabularyHints.invalidate()
+  }
+
   fun prepareFloatingAssistant() {
     runCatching {TemporaryModeManager(getApplication()).reconcile()}
     val prefs = runBlockingPrefs(getApplication())

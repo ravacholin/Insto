@@ -63,6 +63,8 @@ def main():
     sources += [str(ROOT / "app/src/main/java/com/example" / path) for path in (
         "assist/AutoSendGuard.kt", "assist/ShareConfirmationPolicy.kt", "assist/ShareSendAttempt.kt",
         "assist/WhatsAppSelectors.kt", "assist/AutoSendMetrics.kt", "assist/AutoSendHealth.kt",
+        "data/AssistantModels.kt", "backup/BackupCrypto.kt", "backup/BackupFormat.kt",
+        "backup/ConfigurationBackupManager.kt", "backup/BackupSections.kt",
         "whatsapp/PhoneNumberUtils.kt", "speech/AudioTranscriber.kt",
         "speech/GroqTranscriber.kt", "speech/VocabularyHints.kt")]
     tests = [ROOT / "app/src/test/java/com/example/audio/VoiceSessionPolicyTest.kt"]
@@ -72,6 +74,7 @@ def main():
         "speech/GroqTranscriberTest.kt", "speech/VocabularyHintsTest.kt")]
     tests += [ROOT / "app/src/test/java/com/example/assist" / name for name in (
         "WhatsAppSelectorFixtures.kt", "WhatsAppSelectorsTest.kt", "AutoSendMetricsTest.kt")]
+    tests += sorted((ROOT / "app/src/test/java/com/example/backup").glob("*Test.kt"))
     for path in sorted((ROOT / "app/src/test/java/com/example/phone").glob("*Test.kt")):
         text = path.read_text()
         # Tests that use Android-backed stores (DataStore) run with Gradle.

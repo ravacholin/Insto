@@ -122,7 +122,7 @@ aprendidas solas que hace más tiempo que no se usan.
 El registro queda fuera del respaldo y de la transferencia de datos de
 Android. **Exportar** guarda un archivo JSON y **Importar** lo vuelve a cargar
 en este u otro teléfono. El archivo se valida completo antes de cambiar nada.
-Las frases importadas reemplazan a las que tengan el mismo texto.
+Las frases importadas reemplazan a las que tengan el mismo texto. Para guardar frases, estructuras y el resto de la configuración en un solo archivo cifrado, usá **Configuración → Copia de seguridad y restauración** ([detalles](Insto-1.12.0-backup.md)). Esa copia nunca reemplaza una frase que agregaste vos al fusionar.
 
 Si apagás «Aprender y usar frases», las frases se conservan pero no se usan ni
 se aprenden nuevas.

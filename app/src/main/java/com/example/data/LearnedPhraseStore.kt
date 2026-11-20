@@ -391,6 +391,33 @@ class LearnedPhraseStore internal constructor(
   /** The template the phrase would have with generalization turned on, to offer the switch. */
   fun canGeneralize(entry: Entry): Boolean = LearnedPhraseIndex.templateOf(entry.toIndexItem().copy(generalize = true)) != null
 
+  /** Everything a configuration backup carries: the switch, phrases with their metadata and structures. */
+  data class BackupData(val enabled: Boolean?, val entries: List<Entry>, val patterns: List<PatternEntry>)
+
+  suspend fun backupData(): BackupData {
+    val prefs = store.data.first()
+    return BackupData(prefs[enabled], entries(prefs), patterns(prefs))
+  }
+
+  /** Replaces phrases, structures and the switch with [data]. A null switch removes it (the default is on). */
+  suspend fun replaceBackupData(data: BackupData) {
+    store.edit { prefs ->
+      if (data.enabled == null) prefs.remove(enabled) else prefs[enabled] = data.enabled
+      write(prefs, data.entries)
+      if (data.patterns.isEmpty()) prefs.remove(patternData) else writePatterns(prefs, data.patterns)
+      prefs.remove(lastUsed)
+    }
+  }
+
+  /** Adds what is missing with [mergeEntries] and [mergePatterns]. The local switch wins when it was set. */
+  suspend fun mergeBackupData(data: BackupData) {
+    store.edit { prefs ->
+      if (prefs[enabled] == null && data.enabled != null) prefs[enabled] = data.enabled
+      write(prefs, mergeEntries(entries(prefs), data.entries))
+      writePatterns(prefs, mergePatterns(patterns(prefs), data.patterns))
+    }
+  }
+
   suspend fun delete(phrase: String) {
     store.edit { prefs ->
       if (prefs[lastUsed] == phrase) prefs.remove(lastUsed)
@@ -489,6 +516,62 @@ class LearnedPhraseStore internal constructor(
         it.isNotBlank() && it.length <= 2000 &&
           !conditionalOrNegative.containsMatchIn(it) && !questionHead.containsMatchIn(it)
       }
+    }
+
+    /**
+     * Merge rules of a restore: a phrase taught here is never replaced; a taught phrase from the backup replaces one
+     * learned automatically here; between two automatic ones the most recent wins. New phrases are added.
+     */
+    internal fun mergeEntries(local: List<Entry>, incoming: List<Entry>): List<Entry> {
+      val byPhrase = incoming.associateBy { it.phrase }
+      val kept = local.map { here ->
+        val other = byPhrase[here.phrase] ?: return@map here
+        when {
+          here.source == Source.MANUAL -> here
+          other.source == Source.MANUAL -> other
+          other.date > here.date -> other
+          else -> here
+        }
+      }
+      val known = local.map { it.phrase }.toSet()
+      return trim(kept + incoming.filter { it.phrase !in known })
+    }
+
+    /** Structures with the same template join their values; the local on/off switch is kept. */
+    internal fun mergePatterns(local: List<PatternEntry>, incoming: List<PatternEntry>): List<PatternEntry> {
+      val byTemplate = incoming.associateBy { it.template }
+      val merged = local.map { here ->
+        val other = byTemplate[here.template] ?: return@map here
+        here.copy(
+          values = (here.values + other.values).distinct().takeLast(MAX_PATTERN_VALUES),
+          examples = (here.examples + other.examples).distinct().takeLast(MAX_PATTERN_VALUES),
+          date = maxOf(here.date, other.date), uses = maxOf(here.uses, other.uses),
+        )
+      }
+      val known = local.map { it.template }.toSet()
+      return trimPatterns(merged + incoming.filter { it.template !in known })
+    }
+
+    /** The phrases category of a configuration backup. */
+    internal fun encodeBackup(data: BackupData): JSONObject = JSONObject().put("v", 1)
+      .put("phrases", encode(data.entries))
+      .put("patterns", JSONObject(encodePatterns(data.patterns)))
+      .apply { data.enabled?.let { put("enabled", it) } }
+
+    /**
+     * Validates the phrases category completely with the same rules as an export file. Damaged structures are an
+     * error here, not silently dropped: a restore must not lose what the file promised.
+     */
+    internal fun decodeBackup(json: JSONObject): BackupData {
+      val phrases = json.optJSONArray("phrases") ?: JSONArray()
+      val entries = decodeExport(JSONObject().put("format", "insto-learned-phrases").put("version", 1).put("phrases", phrases).toString())
+      val patternsJson = json.optJSONObject("patterns")
+      val declared = patternsJson?.optJSONArray("patterns")?.length() ?: 0
+      require(declared <= PATTERN_LIMIT) { "El archivo tiene más de $PATTERN_LIMIT estructuras." }
+      val patterns = decodePatterns(patternsJson?.toString())
+      require(patterns.size == declared) { "Hay estructuras aprendidas dañadas o repetidas." }
+      val enabled = if (json.has("enabled")) json.get("enabled").also { require(it is Boolean) { "El interruptor de frases no es válido." } } as Boolean else null
+      return BackupData(enabled, entries, patterns)
     }
 
     /** Keeps [LIMIT] entries. Automatic ones are dropped first, starting with the least recent. */
