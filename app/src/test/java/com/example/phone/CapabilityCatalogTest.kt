@@ -23,7 +23,7 @@ class CapabilityCatalogTest {
       dnd_on end_mode file_copy file_delete file_move file_open file_rename file_search file_share
       files_browse instinct maps media_next media_pause media_pause_spotify media_pause_youtube
       media_play media_previous media_status media_stop media_stop_spotify media_stop_youtube
-      message_draft message_open message_send music navigate notification_dismiss notification_list
+      message_send music navigate notification_dismiss notification_list
       notification_open open_app place_save recorder_open recorder_start recorder_stop routine_import
       routine_list routine_run settings settings_bluetooth settings_internet settings_open settings_wifi
       shortcut_run silent_off silent_on spotify stopwatch_pause stopwatch_reset stopwatch_resume

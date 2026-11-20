@@ -37,8 +37,8 @@ class WhatsAppContactMessageTest {
     assertEquals(send("meme", "Te amo"), LocalIntentRegistry.default.resolve("message_send", "enviar un mensaje de whatsapp a meme que diga Te amo"))
   }
 
-  @Test fun withoutChannelOrWithSeveralRecipientsItIsNotAWhatsAppSend() {
-    for (text in listOf("mandale un mensaje a Ana que diga hola", "mandá por WhatsApp a Ana y Juan que diga hola",
+  @Test fun withSeveralRecipientsItIsNotAWhatsAppSend() {
+    for (text in listOf("mandá a Ana el archivo", "mandá por WhatsApp a Ana y Juan que diga hola",
         "mandá por WhatsApp a todos que diga hola", "mandá por WhatsApp a Ana2 que diga hola")) {
       val route = parser.parse(text)
       assertFalse(text, route is PhoneRoute.Local && (route.command as? PhoneCommand.Platform)?.action == PlatformAction.MESSAGE_SEND)
@@ -53,7 +53,7 @@ class WhatsAppContactMessageTest {
     }
     // Other number-only actions keep rejecting names.
     assertThrows(IllegalArgumentException::class.java) {
-      PhoneCommandCodec.decode(PhoneCommandCodec.encode(PhoneCommand.Platform(PlatformAction.MESSAGE_DRAFT, "+541112345678", content = "Hola")).put("argument", "Ana"))
+      PhoneCommandCodec.decode(PhoneCommandCodec.encode(PhoneCommand.Platform(PlatformAction.CALL_DIRECT, "+541112345678")).put("argument", "Ana"))
     }
   }
 

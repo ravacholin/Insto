@@ -53,17 +53,18 @@ object PhoneCommandCodec {
     val content = if(o.has("content")) str("content") else null
     val percent = if(o.has("percent")) integer("percent",0..100) else null
     require((percent != null) == (action == PlatformAction.BRIGHTNESS))
-    val targetActions = setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_SEND,PlatformAction.ROUTINE_RUN,PlatformAction.CALENDAR_QUERY,PlatformAction.CALENDAR_UPDATE,PlatformAction.CALENDAR_DELETE,PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_RENAME,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE,PlatformAction.ALARM_DISMISS,PlatformAction.CONTACT_SEARCH,PlatformAction.CONTACT_PHONES,PlatformAction.APP_SETTINGS,PlatformAction.MESSAGE_OPEN,PlatformAction.MESSAGE_DRAFT,PlatformAction.NOTIFICATION_OPEN,PlatformAction.NOTIFICATION_DISMISS)
+    val targetActions = setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_SEND,PlatformAction.ROUTINE_RUN,PlatformAction.CALENDAR_QUERY,PlatformAction.CALENDAR_UPDATE,PlatformAction.CALENDAR_DELETE,PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_RENAME,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE,PlatformAction.ALARM_DISMISS,PlatformAction.CONTACT_SEARCH,PlatformAction.CONTACT_PHONES,PlatformAction.APP_SETTINGS,PlatformAction.NOTIFICATION_OPEN,PlatformAction.NOTIFICATION_DISMISS)
     if(action==PlatformAction.WEATHER_TEMPERATURE) require(argument==null || argument==WeatherIntentParser.FEELS_LIKE)
     val optionalTargets=setOf(PlatformAction.WEATHER_TEMPERATURE,PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE)
     require(if(action in optionalTargets) true else (argument != null) == (action in targetActions))
-    val requiredContent=setOf(PlatformAction.MESSAGE_SEND,PlatformAction.MESSAGE_DRAFT,PlatformAction.TEXT_SHARE,PlatformAction.FILE_RENAME)
+    val requiredContent=setOf(PlatformAction.MESSAGE_SEND,PlatformAction.TEXT_SHARE,PlatformAction.FILE_RENAME)
     val optionalContent=CalendarSelection.actions
     require(if(action in requiredContent) content != null else action in optionalContent || content == null)
     if(action==PlatformAction.FILE_RENAME) require(content !in setOf(".","..") && content!!.none {it=='/' || it=='\\' || it.code<32})
-    if(action in setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_OPEN,PlatformAction.MESSAGE_DRAFT)) require(PhoneNumbers.canonical(argument!!) == argument)
-    // WhatsApp also accepts one contact name; it is resolved to a number before the confirmation.
-    if(action==PlatformAction.MESSAGE_SEND) require(PhoneNumbers.canonical(argument!!) == argument || ExtendedLocalIntents.whatsappRecipient(argument) == argument)
+    if(action==PlatformAction.CALL_DIRECT) require(PhoneNumbers.canonical(argument!!) == argument)
+    // WhatsApp also accepts one contact name, or a name and text still to split; both become a number before the confirmation.
+    if(action==PlatformAction.MESSAGE_SEND) require(PhoneNumbers.canonical(argument!!) == argument || ExtendedLocalIntents.whatsappRecipient(argument) == argument ||
+      ExtendedLocalIntents.isUnsplitWhatsApp(PhoneCommand.Platform(action,argument,content=content)))
     PhoneCommand.Platform(action,argument,percent,content).also { command ->
       if (action in CalendarSelection.actions) CalendarSelection.decode(command)
     }

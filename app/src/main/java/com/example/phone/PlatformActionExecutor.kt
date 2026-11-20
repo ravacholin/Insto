@@ -77,8 +77,6 @@ internal class PlatformActionExecutor(private val context: Context) {
           PlatformAction.DIALER_OPEN -> Intent(Intent.ACTION_DIAL)
           PlatformAction.CONTACT_SEARCH -> Intent(Intent.ACTION_SEARCH).setType(ContactsContract.Contacts.CONTENT_TYPE)
             .putExtra(SearchManager.QUERY,command.argument)
-          PlatformAction.MESSAGE_OPEN,PlatformAction.MESSAGE_DRAFT -> Intent(Intent.ACTION_SENDTO,Uri.fromParts("smsto",command.argument!!,null))
-            .apply { command.content?.let {putExtra("sms_body",it)} }
           PlatformAction.TEXT_SHARE -> Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
             .putExtra(Intent.EXTRA_TEXT,command.content),"Compartir texto")
           PlatformAction.FILES_BROWSE -> Intent(Intent.ACTION_VIEW,
@@ -93,8 +91,6 @@ internal class PlatformActionExecutor(private val context: Context) {
           else -> return rejected("No hay un adaptador Android para esa acción.")
         }
         handoff(intent,when(command.action) {
-          PlatformAction.MESSAGE_DRAFT -> "Borrador SMS preparado. Revisá el destinatario y enviá desde la aplicación de mensajes."
-          PlatformAction.MESSAGE_OPEN -> "Conversación SMS preparada. No se envió ningún mensaje."
           PlatformAction.ALARM_DISMISS -> "Solicitud para descartar la alarma «${command.argument}» entregada al Reloj. Revisá allí la selección."
           PlatformAction.ALARM_SNOOZE -> "Solicitud para posponer la alarma que suena entregada al Reloj."
           PlatformAction.TIMER_DISMISS -> "Solicitud para descartar el temporizador entregada al Reloj. Revisá allí la selección."
@@ -201,14 +197,29 @@ internal class PlatformActionExecutor(private val context: Context) {
     "Pedido abierto en Insto para resolver permisos, seleccionar el recurso y revisar la operación. El resultado se informa allí.")
 
   private fun whatsappContact(command:PhoneCommand.Platform):PhoneActionResult {
-    val name=command.argument!!
     if(context.checkSelfPermission(Manifest.permission.READ_CONTACTS)!=PackageManager.PERMISSION_GRANTED)
-      return PhoneActionResult("Permití el acceso a tus contactos para buscar a $name, o indicá el número.",needsContacts=true,outcome=PhoneActionOutcome.NEEDS_INPUT)
+      return PhoneActionResult("Permití el acceso a tus contactos para encontrar el destinatario, o indicá el número.",needsContacts=true,outcome=PhoneActionOutcome.NEEDS_INPUT)
+    if(ExtendedLocalIntents.isUnsplitWhatsApp(command)) {
+      // «Meme Te amo»: one contacts query by the first word decides where the name ends.
+      val tail=command.argument!!
+      val first=WhatsAppRecipientSplit.firstWord(tail) ?: return rejected("Indicá a quién y qué querés mandar por WhatsApp.")
+      val (candidates,truncated)=context.findPhoneContacts(first)
+      val split=WhatsAppRecipientSplit.split(tail,candidates)
+        ?: return rejected("No encontré a «$first» en tus contactos. Probá: WhatsApp a Ana que diga Hola, o indicá el número.")
+      return whatsappSelection(command.copy(argument=split.name,content=split.body),WhatsAppRecipientSplit.resolve(split,truncated))
+    }
+    val name=command.argument!!
     val (candidates,truncated)=context.findPhoneContacts(name)
-    return when(val selection=ContactSelection.resolve(name,candidates,truncated)) {
+    return whatsappSelection(command,ContactSelection.resolve(name,candidates,truncated))
+  }
+
+  private fun whatsappSelection(command:PhoneCommand.Platform,selection:ContactResolution):PhoneActionResult {
+    val name=command.argument!!
+    return when(selection) {
       is ContactResolution.Number -> PhoneActionResult("Enviar por WhatsApp a $name (${selection.value}):\n${command.content}",
         confirmation=command.copy(argument=selection.value),outcome=PhoneActionOutcome.NEEDS_INPUT)
-      is ContactResolution.Choose -> PhoneActionResult("Elegí el contacto y número al que querés mandar el WhatsApp.",contactOptions=selection.options,outcome=PhoneActionOutcome.NEEDS_INPUT)
+      is ContactResolution.Choose -> PhoneActionResult("¿A qué $name le mando «${command.content}»?",contactOptions=selection.options,
+        pendingCommand=command,outcome=PhoneActionOutcome.NEEDS_INPUT)
       ContactResolution.Refine -> rejected("Hay muchas coincidencias para $name. Indicá un nombre más completo o el número.")
       ContactResolution.Missing -> rejected("No encontré un número para $name en tus contactos. Podés indicar el número directamente.")
     }

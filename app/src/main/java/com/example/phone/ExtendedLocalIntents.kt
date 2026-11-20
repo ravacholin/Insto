@@ -26,15 +26,11 @@ internal object ExtendedLocalIntents {
         PhoneNumbers.canonical(r.capture(m,1))?.let {PhoneCommand.Platform(PlatformAction.CALL_DIRECT,it)}
       }
     }
-    parsed("message_send",IntentCategory.MESSAGING,"Enviar texto por la integración de WhatsApp a un número explícito o a un contacto por su nombre, tras revisar destinatario y contenido",listOf("mandá por WhatsApp a +541112345678 que diga Estoy llegando","enviá un mensaje de WhatsApp a Ana que diga Hola"),PlatformAction.MESSAGE_SEND,
+    parsed("message_send",IntentCategory.MESSAGING,"Enviar un mensaje por WhatsApp a un número o a un contacto por su nombre, tras revisar destinatario y contenido. Todo mensaje va por WhatsApp; no hay SMS",listOf("mandá un WhatsApp a Ana que diga Estoy llegando","whatsapp a Meme te amo","mandale un mensaje a +541112345678 que diga Hola"),PlatformAction.MESSAGE_SEND,
       listOf(parameter("recipient"),parameter("body")),listOf("WhatsApp instalado y accesibilidad conectada/autorizada","android.permission.READ_CONTACTS para destinatarios por nombre"),"WhatsAppDispatcher con guardas de destinatario y texto existentes",
       "Solicitud de envío entregada a WhatsApp; la automatización verifica destinatario y cuerpo. Un nombre se resuelve en la agenda y se confirma antes de enviar. Sin otro destinatario por defecto.",
-      "Indicá destinatario y texto: mandá por WhatsApp a Ana que diga Estoy llegando.",
-        decisionDescription = "Enviar un mensaje de WhatsApp al número o contacto indicado por su nombre, en vez de preparar un borrador de SMS.") {r ->
-      whatsappMessage.matchEntire(r.text)?.takeIf {it.groups[1]!=null || it.groups[3]!=null}?.let {m ->
-        whatsappRecipient(r.capture(m,2))?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_SEND,it,content=r.capture(m,4))}
-      }
-    }
+      "Indicá destinatario y texto: WhatsApp a Ana Estoy llegando.",
+        decisionDescription = "Enviar un mensaje (siempre por WhatsApp) al número o contacto indicado por su nombre.") {r -> whatsappCommand(r)}
     for((id,op,verb) in listOf(
       Triple("file_open",PlatformAction.FILE_OPEN,"abri|mostra|ver"),Triple("file_search",PlatformAction.FILE_SEARCH,"busca|encontra"),
       Triple("file_share",PlatformAction.FILE_SHARE,"comparti"),Triple("file_delete",PlatformAction.FILE_DELETE,"borra|elimina"),
@@ -145,10 +141,55 @@ internal object ExtendedLocalIntents {
   }
   private fun literalTarget(text:String)=text.isNotBlank() && text.length<=2000 && !Regex("\\b(?:y (?:abri|llama|manda|elimina|borra)|si|cuando|despues|luego)\\b").containsMatchIn(PhoneCommandParser.normalize(text))
 
-  private const val WHATSAPP = "(?:whatsapp|whats app|wasap|wsp)"
-  /** Channel before the recipient («un mensaje de WhatsApp a…») or after it («a Ana por WhatsApp…»); one is required. */
-  private val whatsappMessage = Regex("^(?:manda|envia) (?:(?:un )?(?:mensaje )?(?:(?:por|de|en) )?($WHATSAPP) |un mensaje )?" +
-    "(?:al?|para) (.+?)(?: (?:por|en) ($WHATSAPP))?:? (?:que diga|con el texto|diciendo):? (.+)$")
+  /** Every message goes through WhatsApp: «SMS» and «mensaje» name the same channel. */
+  private const val WHATSAPP = "(?:whatsapp|whats app|wasap|wasa|wsp|sms)"
+  private const val CONNECTOR = "(?:que diga|que dice|con el texto|diciendo)"
+  private const val MESSAGE_HEAD = "^(?:(manda|envia|escribile|escribirle|escribi|redacta|prepara) )?" +
+    "(?:((?:un |una )?(?:mensajito|mensaje)(?: (?:por|de|en) $WHATSAPP)?|(?:(?:un|por|de|en) )?$WHATSAPP) )?(?:al?|para) "
+  /** «…a Ana por WhatsApp (que diga) Hola». */
+  private val trailingChannel = Regex("$MESSAGE_HEAD(.+?) (?:por|en) ($WHATSAPP)(?: $CONNECTOR)? (.+)$")
+  /** «…a Ana que diga Hola». */
+  private val withConnector = Regex("$MESSAGE_HEAD(.+?) $CONNECTOR (.+)$")
+  /** «WhatsApp a Meme Te amo»: the contacts decide where the name ends. */
+  private val bare = Regex("$MESSAGE_HEAD(.+)$")
+  private val leadingNumber = Regex("^\\+?[0-9][0-9 ()-]{5,}?(?=\\s+\\D)")
+
+  private fun whatsappCommand(r:FoldedRequest):PhoneCommand.Platform? {
+    trailingChannel.matchEntire(r.text)?.takeIf {it.groups[1]!=null || it.groups[2]!=null}?.let {m ->
+      return whatsappRecipient(r.capture(m,3))?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_SEND,it,content=literalBody(r.capture(m,5)))}
+    }
+    withConnector.matchEntire(r.text)?.takeIf {it.groups[1]!=null || it.groups[2]!=null}?.let {m ->
+      return whatsappRecipient(r.capture(m,3))?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_SEND,it,content=literalBody(r.capture(m,4)))}
+    }
+    // Without a connector a channel is required, so «mandá a…» alone never becomes a message.
+    val m = bare.matchEntire(r.text)?.takeIf {it.groups[2]!=null || it.groups[1]?.value?.startsWith("escribi")==true} ?: return null
+    val tail = r.capture(m,3)
+    leadingNumber.find(tail)?.let {number ->
+      val body = literalBody(tail.substring(number.range.last+1))
+      return PhoneNumbers.canonical(number.value)?.takeIf {it.count(Char::isDigit)>=7 && body.isNotEmpty()}
+        ?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_SEND,it,content=body)}
+    }
+    return tail.takeIf(::isUnsplitTail)?.let(::unsplitWhatsApp)
+  }
+
+  private val quotes = listOf("“" to "”", "\"" to "\"", "«" to "»", "'" to "'")
+  /** The dictated text without the quotes that only delimit it: «que diga “no voy”» sends «no voy». */
+  internal fun literalBody(text:String):String {
+    val body = text.trim()
+    return quotes.firstOrNull {(open,close) -> body.length>2 && body.startsWith(open) && body.endsWith(close)}
+      ?.let {body.substring(1,body.length-1).trim()} ?: body
+  }
+
+  /**
+   * «Meme Te amo» without a connector: name and text are split later against the contacts.
+   * Encoded as recipient == body, which no real message has.
+   */
+  internal fun unsplitWhatsApp(tail:String) = PhoneCommand.Platform(PlatformAction.MESSAGE_SEND,tail,content=tail)
+  internal fun isUnsplitWhatsApp(command:PhoneCommand.Platform) = command.action==PlatformAction.MESSAGE_SEND &&
+    command.argument!=null && command.argument==command.content && isUnsplitTail(command.argument)
+  private fun isUnsplitTail(tail:String) = tail.length<=2000 && tail.firstOrNull()?.isLetter()==true &&
+    tail.trim().contains(Regex("\\s"))
+
   private val recipientName = Regex("^\\p{L}[\\p{L}' .-]{0,59}$")
   private val severalRecipients = Regex("\\b(?:y|e|o|todos|todas)\\b")
 
