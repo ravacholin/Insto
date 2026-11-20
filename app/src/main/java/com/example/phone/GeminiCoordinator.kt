@@ -9,6 +9,13 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
+/**
+ * When the fallback provider (Groq) is asked in parallel with Decisions, before knowing it is needed.
+ * [ALWAYS] was the original behaviour; [WHEN_DEGRADED] keeps it only after recent Decisions failures, where the
+ * fallback is likely. See docs/metrics/reliability-before-after.md for the replay that chose the default.
+ */
+enum class FallbackSpeculation { ALWAYS, WHEN_DEGRADED, NEVER }
+
 /** Interpretation only. The caller owns session freshness, previews and Android side effects. */
 class GeminiCoordinator(
   private val router: HybridPhoneRouter,
@@ -21,6 +28,7 @@ class GeminiCoordinator(
   private val lookupLearnedPattern: suspend (InterpretationRequest) -> PhrasePatterns.Match? = { null },
   /** Brief operational context. Never added to provider input. */
   private val operationalContext: OperationalContext? = null,
+  private val speculation: FallbackSpeculation = FallbackSpeculation.WHEN_DEGRADED,
 ) {
   /**
    * Every interpretation, whatever produced it, passes the final [SemanticCommandGuard] here, once, before the
@@ -142,7 +150,12 @@ class GeminiCoordinator(
           return@withTimeout resolveStructured(request, local, steps, stage)
         }
         val attempt = breaker.acquire()
-        val speculative: Deferred<Result<InterpretationResult>>? = if (attempt != null && fallback != null) async {
+        val speculate = attempt != null && fallback != null && when (speculation) {
+          FallbackSpeculation.ALWAYS -> true
+          FallbackSpeculation.WHEN_DEGRADED -> attempt.probe || breaker.degraded()
+          FallbackSpeculation.NEVER -> false
+        }
+        val speculative: Deferred<Result<InterpretationResult>>? = if (speculate) async {
           try {
             Result.success(extract(request, fallback, fallback = true, timeout = 6_000))
           } catch (error: CancellationException) {

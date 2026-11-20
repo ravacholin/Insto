@@ -17,7 +17,7 @@ class GeminiCoordinatorTest {
       delay(3_000)
       throw DecisionException("Sin acceso", GeminiFailureKind.AUTH)
     }), StructuredCommandExtractor { error("Extracción primaria inesperada") },
-      fallback = StructuredCommandExtractor { delay(5_000); listOf(command) })
+      fallback = StructuredCommandExtractor { delay(5_000); listOf(command) }, speculation = FallbackSpeculation.ALWAYS)
     val result = c.interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
     assertEquals(5_000L, currentTime)
     assertEquals(listOf(command), (result as InterpretationResult.Plan).commands)
@@ -34,7 +34,7 @@ class GeminiCoordinatorTest {
       fallback = StructuredCommandExtractor {
         started = true
         try { awaitCancellation() } finally { cancelled = true }
-      })
+      }, speculation = FallbackSpeculation.ALWAYS)
     assertEquals(InterpretationResult.Direct(PhoneCommand.Torch(true)),
       c.interpret(InterpretationRequest("iluminá acá"), PhoneRoute.Instinct))
     assertTrue(started && cancelled)
@@ -42,7 +42,7 @@ class GeminiCoordinatorTest {
   }
 
   @Test fun unRespaldoYaListoNoSalteaLaVerificacionNiLaSeguridad() = runTest {
-    for (safety in listOf(.99, .3)) {
+    for (speculation in FallbackSpeculation.entries) for (safety in listOf(.99, .3)) {
       var extracted = false
       var verified = false
       val coordinator = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {
@@ -50,12 +50,44 @@ class GeminiCoordinatorTest {
         SemanticDecision("torch_on", .89, .89, safety, .99)
       }), StructuredCommandExtractor { error("Extracción primaria inesperada") },
         verifier = IntentVerifier { _, _ -> verified = true; false },
-        fallback = StructuredCommandExtractor { extracted = true; listOf(PhoneCommand.Torch(true)) })
+        fallback = StructuredCommandExtractor { extracted = true; listOf(PhoneCommand.Torch(true)) }, speculation = speculation)
       val result = coordinator.interpret(InterpretationRequest("iluminá acá"), PhoneRoute.Instinct)
-      assertTrue(extracted)
+      // Only the speculative policy asks Groq before knowing it is needed; none skips verification or safety.
+      assertEquals(speculation == FallbackSpeculation.ALWAYS, extracted)
       assertEquals(safety == .99, verified)
       assertTrue(result is InterpretationResult.Failure)
     }
+  }
+
+  @Test fun conDecisionsSanoGroqSoloSeConsultaCuandoHaceFalta() = runTest {
+    var groq = 0
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier { delay(500); decision("torch_on") }),
+      StructuredCommandExtractor { error("Extracción primaria inesperada") },
+      fallback = StructuredCommandExtractor { groq++; listOf(PhoneCommand.Torch(true)) })
+    assertEquals(InterpretationResult.Direct(PhoneCommand.Torch(true)), c.interpret(InterpretationRequest("iluminá acá"), PhoneRoute.Instinct))
+    assertEquals(0, groq)
+    assertEquals(500L, currentTime)
+  }
+
+  @Test fun trasUnaFallaDeDecisionsElRespaldoVuelveASuperponerse() = runTest {
+    var calls = 0
+    val breaker = DecisionsCircuitBreaker(clock = { currentTime })
+    val c = GeminiCoordinator(HybridPhoneRouter({ true }, DecisionClassifier {
+      calls++
+      delay(3_000)
+      throw DecisionException("Problema temporal", GeminiFailureKind.SERVER)
+    }), StructuredCommandExtractor { error("Extracción primaria inesperada") },
+      fallback = StructuredCommandExtractor { delay(1_000); listOf(PhoneCommand.Timer(600)) }, breaker = breaker)
+    // Healthy circuit: Groq starts after Decisions fails (3 s + 1 s).
+    var start = currentTime
+    c.interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
+    assertEquals(4_000L, currentTime - start)
+    // Degraded circuit: Groq overlaps with Decisions again; the answer waits only for Decisions (3 s).
+    start = currentTime
+    val result = c.interpret(InterpretationRequest("avisame en diez minutos"), PhoneRoute.Instinct)
+    assertEquals(3_000L, currentTime - start)
+    assertEquals(listOf(PhoneCommand.Timer(600)), (result as InterpretationResult.Plan).commands)
+    assertEquals(2, calls)
   }
 
   @Test fun cancelarElTurnoDescartaInclusoUnaPropuestaQueLlegaTarde() = runTest {
