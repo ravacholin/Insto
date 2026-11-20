@@ -379,6 +379,7 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private var appChoiceCommand: PhoneCommand? = null
+  private var contactChoiceCommand: PhoneCommand? = null
   private var notificationsCommand: PhoneCommand? = null
   private var retainLocalAudio = false
   private var routedRequestText = ""
@@ -465,7 +466,12 @@ class MainViewModel @JvmOverloads constructor(
   fun chooseFloatingContact(option: ContactOption) {
     if (option !in floatingState.value.contactOptions || floatingState.value.mode == FloatingMode.SENDING) return
     floatingState.value = floatingState.value.copy(contactOptions = emptyList())
-    runPhoneCommand(PhoneCommand.Dial(option.number))
+    val pending = contactChoiceCommand
+    contactChoiceCommand = null
+    val number = PhoneNumbers.canonical(option.number) ?: return
+    // The chosen number replaces the name; a WhatsApp message still goes through its confirmation.
+    runPhoneCommand(if (pending is PhoneCommand.Platform && pending.action == PlatformAction.MESSAGE_SEND)
+      pending.copy(argument = number) else PhoneCommand.Dial(option.number))
   }
 
   private fun runPhoneCommand(command: PhoneCommand, confirmed: Boolean = false, learning: InterpretationRequest? = null) {
@@ -528,6 +534,7 @@ class MainViewModel @JvmOverloads constructor(
     if (result.needsContacts) contactsCommand = command
     if (result.needsNotifications) notificationsCommand = command
     appChoiceCommand = command.takeIf {result.appOptions.isNotEmpty()}
+    contactChoiceCommand = command.takeIf {result.contactOptions.isNotEmpty()}
     retainLocalAudio = result.retainRequest
     retryLocalCommand = if (result.retainRequest) command to confirmed else null
     retryLocalText = if (result.retainRequest) routedRequestText else null
@@ -683,7 +690,7 @@ class MainViewModel @JvmOverloads constructor(
     patternExample = null
     // A new request has one classification gateway. Continuations above retain their selected intent.
     semanticDraft = null; conversation.clear(); clarification = null; clarificationRequest = null
-    confirmation=null; cameraCommand=null; contactsCommand=null; notificationsCommand=null; appChoiceCommand=null; calendarQuery=null
+    confirmation=null; cameraCommand=null; contactsCommand=null; notificationsCommand=null; appChoiceCommand=null; contactChoiceCommand=null; calendarQuery=null
     workflow.invalidatePreview(); syncWorkflow()
     floatingState.value = floatingState.value.copy(needsConfirmation=false,appOptions=emptyList(),contactOptions=emptyList(),needsCamera=false,needsContacts=false,needsNotifications=false,needsCalendarRead=false)
     operationalContext.beginTurn(local)
@@ -952,7 +959,7 @@ class MainViewModel @JvmOverloads constructor(
     enterFloatingTextMode() // Invalidates generations, pending queries, audio and unconfirmed plans.
     semanticDraft = null; conversation.clear(); clarification = null; clarificationRequest = null
     confirmation = null; retryLocalCommand = null; retryLocalText = null
-    cameraCommand = null; contactsCommand = null; notificationsCommand = null; appChoiceCommand = null
+    cameraCommand = null; contactsCommand = null; notificationsCommand = null; appChoiceCommand = null; contactChoiceCommand = null
     floatingState.value = floatingState.value.copy(sourceContext = context, attachment = if (context != null || error != null) null else floatingState.value.attachment,
       text = if (context != null) "" else floatingState.value.text,
       error = error, status = null, needsConfirmation = false, contactOptions = emptyList(), appOptions = emptyList(),

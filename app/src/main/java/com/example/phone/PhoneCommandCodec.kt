@@ -61,7 +61,9 @@ object PhoneCommandCodec {
     val optionalContent=CalendarSelection.actions
     require(if(action in requiredContent) content != null else action in optionalContent || content == null)
     if(action==PlatformAction.FILE_RENAME) require(content !in setOf(".","..") && content!!.none {it=='/' || it=='\\' || it.code<32})
-    if(action in setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_SEND,PlatformAction.MESSAGE_OPEN,PlatformAction.MESSAGE_DRAFT)) require(PhoneNumbers.canonical(argument!!) == argument)
+    if(action in setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_OPEN,PlatformAction.MESSAGE_DRAFT)) require(PhoneNumbers.canonical(argument!!) == argument)
+    // WhatsApp also accepts one contact name; it is resolved to a number before the confirmation.
+    if(action==PlatformAction.MESSAGE_SEND) require(PhoneNumbers.canonical(argument!!) == argument || ExtendedLocalIntents.whatsappRecipient(argument) == argument)
     PhoneCommand.Platform(action,argument,percent,content).also { command ->
       if (action in CalendarSelection.actions) CalendarSelection.decode(command)
     }
