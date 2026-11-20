@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.AssistantPreferencesRepository
 import com.example.data.LearnedPhraseStore
+import com.example.ui.screens.LearnedPhrasesContent
 import com.example.ui.components.SettingsDescription
 import com.example.ui.components.SettingsSection
 import com.example.ui.components.SettingsSwitch
@@ -32,7 +33,6 @@ import com.example.phone.DecisionException
 import com.example.phone.GeminiDecisionsClient
 import com.example.phone.GeminiDiagnostics
 import com.example.phone.GeminiSettings
-import com.example.phone.PhoneCommandCodec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Job
@@ -43,7 +43,7 @@ class GroqSettingsActivity : ComponentActivity() {
     const val EXTRA_PROVIDER = "com.example.speech.SETUP_PROVIDER"
     const val PROVIDER_GROQ = "groq"
     const val PROVIDER_GEMINI = "gemini"
-    private const val SECTION_PHRASES = "phrases"
+    const val SECTION_PHRASES = "phrases"
   }
 
   @OptIn(ExperimentalMaterial3Api::class)
@@ -51,7 +51,7 @@ class GroqSettingsActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
     val requestedProvider = intent.getStringExtra(EXTRA_PROVIDER)
-      ?.takeIf { it == PROVIDER_GROQ || it == PROVIDER_GEMINI }
+      ?.takeIf { it == PROVIDER_GROQ || it == PROVIDER_GEMINI || it == SECTION_PHRASES }
     val store = GroqKeyStore(this)
     val preferences = AssistantPreferencesRepository(this)
     val gemini = GeminiSettings(this)
@@ -143,7 +143,7 @@ class GroqSettingsActivity : ComponentActivity() {
                       OutlinedButton(onClick = { section = PROVIDER_GEMINI }) { Text("Configurar Gemini") }
                     }
                     SettingsSection("Frases aprendidas") {
-                      SettingsDescription("Administrá los comandos que PingAssist aprende en este teléfono.")
+                      SettingsDescription("Mirá, agregá y corregí las frases que Insto entiende como atajos de comandos.")
                       OutlinedButton(onClick = { section = SECTION_PHRASES }) { Text("Gestionar frases") }
                     }
                   }
@@ -256,55 +256,7 @@ class GroqSettingsActivity : ComponentActivity() {
                       )
                     }
                   }
-                  SECTION_PHRASES -> SettingsSection("Aprendizaje local") {
-                    val phrases by learned.uiSettings.collectAsState(initial = null)
-                    val settings = phrases
-                    SettingsSwitch(
-                      "Aprender y usar frases",
-                      checked = settings?.enabled == true,
-                      enabled = settings != null,
-                      description = "Guarda frases y sus acciones en este teléfono.",
-                      onCheckedChange = { enabled ->
-                        scope.launch {
-                          try { learned.setEnabled(enabled) }
-                          catch (_: IOException) { message = "No pude cambiar el aprendizaje." }
-                        }
-                      },
-                    )
-                    val entries = settings?.entries.orEmpty()
-                    if (settings != null && entries.isEmpty()) SettingsDescription("Todavía no hay frases aprendidas.")
-                    if (entries.isNotEmpty()) {
-                      var confirmDeleteAll by remember { mutableStateOf(false) }
-                      TextButton(onClick = { confirmDeleteAll = true }) { Text("Borrar todas", color = MaterialTheme.colorScheme.error) }
-                      if (confirmDeleteAll) AlertDialog(
-                        onDismissRequest = { confirmDeleteAll = false },
-                        title = { Text("¿Borrar todas las frases?") },
-                        confirmButton = {
-                          TextButton(onClick = {
-                            confirmDeleteAll = false
-                            scope.launch {
-                              try { learned.clear() } catch (_: java.io.IOException) { message = "No pude borrar las frases." }
-                            }
-                          }) { Text("Borrar todas", color = MaterialTheme.colorScheme.error) }
-                        },
-                        dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancelar") } },
-                      )
-                      for (entry in entries) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                          Column(Modifier.weight(1f)) {
-                            Text(entry.phrase)
-                            Text(PhoneCommandCodec.summary(entry.command), style = MaterialTheme.typography.bodySmall)
-                          }
-                          TextButton(onClick = {
-                            scope.launch {
-                              try { learned.delete(entry.phrase) }
-                              catch (_: java.io.IOException) { message = "No pude borrar la frase." }
-                            }
-                          }) { Text("Borrar", color = MaterialTheme.colorScheme.error) }
-                        }
-                      }
-                    }
-                  }
+                  SECTION_PHRASES -> LearnedPhrasesContent(learned, onMessage = { message = it })
                   else -> Unit
                 }
               }
