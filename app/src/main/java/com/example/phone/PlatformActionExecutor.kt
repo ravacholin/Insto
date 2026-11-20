@@ -30,7 +30,9 @@ internal class PlatformActionExecutor(private val context: Context) {
         }
         else if(!confirmed) PhoneActionResult("Enviar por WhatsApp a ${command.argument}:\n${command.content}",confirmation=command,outcome=PhoneActionOutcome.NEEDS_INPUT)
         else {
-          val prefs=kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {com.example.data.AssistantPreferencesRepository(context).getCurrentPreferences()}
+          // A confirmed send follows user interaction, so preferences are loaded; never wait for DataStore here.
+          val prefs=com.example.data.AssistantPreferencesCache.of(context).current
+            ?:return PhoneActionResult("Todavía estoy cargando la configuración. Probá de nuevo en un momento. No se envió ningún mensaje.",outcome=PhoneActionOutcome.REJECTED)
           val result=com.example.whatsapp.WhatsAppDispatcher.sendWhatsAppText(context,command.argument!!,command.content!!,prefs.preferredFlavor,
             com.example.assist.PingAutoSendAccessibilityService.isEnabled(context),recipientName=command.argument!!)
           if(result is com.example.whatsapp.DispatchResult.Error) PhoneActionResult(result.message,outcome=PhoneActionOutcome.REJECTED,

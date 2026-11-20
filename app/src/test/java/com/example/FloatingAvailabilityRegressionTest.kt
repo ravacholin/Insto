@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.emptyLearnedPhrasesForTest
+import com.example.testsupport.awaitCachedPreferences
 
 import android.Manifest
 import android.app.Application
@@ -122,6 +123,7 @@ class FloatingAvailabilityRegressionTest {
 
   private suspend fun configureInstinct() {
     withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
+    awaitCachedPreferences(app) { it.pinnedContact?.phoneNumber == "+447700900123" }
     shadowOf(app.packageManager).installPackage(PackageInfo().apply {
       packageName = "com.whatsapp"; applicationInfo = ApplicationInfo().apply { packageName = "com.whatsapp" }
     })

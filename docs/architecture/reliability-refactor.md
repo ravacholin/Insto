@@ -223,3 +223,37 @@ nuevo). Las capas se mantienen como defensa en profundidad.
   especulación.
 - Las consultas del SMN y del calendario no pasan por `EXECUTING`: son lecturas sin efectos externos y conservan sus
   propias comprobaciones de identidad.
+
+## Seguimiento: lecturas no bloqueantes, dependencias y riesgos residuales
+
+### Fase 1 — Sin `runBlocking` en el hilo principal
+
+Antes había 10 lecturas de DataStore bloqueantes en código de producción: 5 en `MainViewModel` (`runBlockingPrefs`),
+`AssistActivity.onCreate`, `PingQuickSettingsTileService.onStartListening`, dos en `PingAssistWidgetProvider` y una
+en `PlatformActionExecutor` (envío confirmado de WhatsApp). Las tres últimas no estaban en el análisis original, pero
+el criterio era que no quedara ninguna.
+
+- **`AssistantPreferencesCache`** (`com.example.data`): la crea `InstoApplication.onCreate` y expone
+  `StateFlow<AssistantPreferences?>` (`stateIn(Eagerly, null)` sobre el flujo del repositorio), `current` (nunca
+  bloquea) y `awaitCurrent()` (suspende solo hasta el primer valor). Un `IOException` de DataStore se trata como
+  preferencias vacías, como recomienda DataStore, en lugar de dejar la caché en `null` para siempre.
+- **`MainViewModel`**: `prepareFloatingAssistant` aplica el valor cacheado; en arranque en frío lanza la carga en
+  `viewModelScope` y el panel muestra «Instinct» hasta que llega. Las rutas que leen `floatingPrefs` justo después
+  (`dispatchFloatingAudio`, `dispatchFloatingTextQuery`, `sendFloatingAttachment`) son `suspend` y esperan dentro de
+  la corrutina del pedido, así que cancelar el pedido cancela la espera; después comprueban la identidad del pedido.
+  `openFloatingInstinct` y `openFloatingInstinctManually` corren en una corrutina `UNDISPATCHED`: con la caché cargada
+  se ejecutan de forma síncrona, igual que antes. En las sesiones de grabación el micrófono arranca antes de leer
+  preferencias, para no perder audio.
+- **`AssistActivity`**: `ACTION_OPEN_CHAT` decide en `lifecycleScope` y no dibuja nada mientras tanto.
+- **Tile**: pinta con el valor cacheado (o un estado neutro, sin «Set Contact») y se actualiza con cada cambio
+  mientras el sistema lo escucha (`onStartListening` → `onStopListening`).
+- **Widget**: usa el valor cacheado; en frío, `goAsync()` y carga fuera del hilo principal. `requestUpdate` recibe el
+  nombre recién guardado, para no mostrar el contacto anterior.
+- **`PlatformActionExecutor`**: el envío confirmado usa el valor cacheado; si todavía no cargó (no ocurre después de
+  una confirmación), no envía y pide reintentar, en lugar de elegir otra variante de WhatsApp.
+
+Pruebas: `NoBlockingCallsInProductionTest` recorre `app/src/main` y falla ante cualquier `runBlocking` (allowlist
+vacía); `AssistantPreferencesCacheTest` (null hasta el primer valor, espera sin bloquear, sigue cada cambio, archivo
+ilegible) y `AssistantPreferencesCacheRepositoryTest` (escrituras reales del repositorio llegan a la caché). Las
+pruebas Robolectric usan `TestInstoApplication`, que arranca con la caché cargada, y `awaitCachedPreferences` después
+de escribir preferencias, porque la caché las recibe de forma asíncrona.

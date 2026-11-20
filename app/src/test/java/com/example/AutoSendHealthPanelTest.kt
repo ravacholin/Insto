@@ -1,6 +1,7 @@
 package com.example
 
 import android.app.Application
+import com.example.testsupport.awaitCachedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import androidx.test.core.app.ApplicationProvider
@@ -32,6 +33,7 @@ class AutoSendHealthPanelTest {
     AutoSendCoordinator.disarm()
     AutoSendMetricsStore(app).clear()
     runBlocking { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
+    awaitCachedPreferences(app) { it.pinnedContact?.phoneNumber == "+447700900123" }
     shadowOf(app.packageManager).installPackage(PackageInfo().apply {
       packageName = "com.whatsapp"; versionName = "2.26.20"; longVersionCode = 262000
       applicationInfo = ApplicationInfo().apply { packageName = "com.whatsapp" }
