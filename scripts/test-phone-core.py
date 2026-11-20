@@ -69,7 +69,8 @@ def main():
         "backup/ConfigurationBackupManager.kt", "backup/BackupSections.kt",
         "whatsapp/PhoneNumberUtils.kt", "speech/AudioTranscriber.kt",
         "speech/GroqTranscriber.kt", "speech/VocabularyHints.kt")]
-    tests = [ROOT / "app/src/test/java/com/example/audio/VoiceSessionPolicyTest.kt"]
+    tests = [ROOT / "app/src/test/java/com/example/audio" / name for name in (
+        "VoiceSessionPolicyTest.kt", "VoiceCaptureTraceTest.kt")]
     tests += [ROOT / "app/src/test/java/com/example/context/SharedTextContextTest.kt"]
     tests += [ROOT / "app/src/test/java/com/example" / name for name in (
         "AutoSendGuardTest.kt", "ShareConfirmationPolicyTest.kt",

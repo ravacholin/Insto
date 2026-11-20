@@ -39,3 +39,44 @@ Reproducir:
 # Líneas SEMANTIC_METRICS y GUARD_COST en
 # app/build/test-results/testDebugUnitTest/TEST-com.example.phone.SemanticGuardCorpusTest.xml
 ```
+
+## Negaciones y rectificaciones
+
+`ConversationalNegationTest.negationMetrics`: 20 frases que no deben ejecutar nada (prohibiciones, condiciones,
+«No molestes», «No prendé…» sin puntuación) y 12 que sí («No, prendé la linterna», «Activá No molestar», un
+mensaje citado con «no»). «Antes» es `RequestSafetyPolicy.rejection` sola, que no cambió.
+
+| Métrica (32 frases) | Antes | Después |
+| --- | ---: | ---: |
+| Falsos positivos (se ejecuta una prohibición) | 0 | 0 |
+| Falsos negativos (se rechaza una rectificación legítima) | 8 | 0 |
+
+## Captura de voz (simulada)
+
+`VoiceCaptureTraceTest` sobre decisiones reales de WebRTC VAD para 186 sesiones armadas con habla real en
+español. Detalle del método y de los límites en [../VOICE-CAPTURE.md](../VOICE-CAPTURE.md).
+
+| Métrica | 1.12.0 | Ahora |
+| --- | ---: | ---: |
+| Envíos prematuros, 140 sesiones con voz | 71 | 30 |
+| … órdenes breves, largas y con pausa de 600 ms | 31 | 0 |
+| Inicio recortado | 10 | 0 |
+| Grabaciones por ruidos breves (30) | 30 | 18 |
+| Envíos en silencio (16) | 5 | 0 |
+| Fin de orden breve tras la voz, p50 / p95 | 720 / 800 ms | 940 / 1020 ms |
+
+Reproducir:
+
+```sh
+./gradlew :app:testDebugUnitTest --tests 'com.example.audio.*' --tests com.example.phone.ConversationalNegationTest
+# Líneas VOICE_METRICS, ONSET_METRICS y NEGATION_METRICS en app/build/test-results/testDebugUnitTest/
+# Regenerar las trazas (requiere audio de LibriVox y py-webrtcvad):
+#   python scripts/voice/build-vad-traces.py a.pcm b.pcm app/src/test/resources/vad-traces-es.json
+```
+
+## Pruebas
+
+| Ejecución | Antes (`74eb9a5`) | Después |
+| --- | ---: | ---: |
+| `./gradlew :app:testDebugUnitTest` | 633 tests, 0 fallos, 1 omitido | 675 tests, 0 fallos, 1 omitido |
+| `python scripts/test-phone-core.py` | 401 tests, OK | 430 tests, OK |

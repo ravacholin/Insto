@@ -577,6 +577,31 @@ class MainViewModel @JvmOverloads constructor(
         floatingState.value.contactOptions.isNotEmpty() || floatingState.value.appOptions.isNotEmpty())) {
       cancelFloatingWorkflow(); return true
     }
+    val pendingAction = activeWorkflow()?.confirmed == false || semanticDraft != null || clarification != null ||
+      confirmation != null || floatingState.value.contactOptions.isNotEmpty() || floatingState.value.appOptions.isNotEmpty()
+    // «No lo hagas», «No envíes ese mensaje»: cancels what is pending and never runs or sends it.
+    if (RequestSafetyPolicy.cancelsPending(text)) {
+      if (pendingAction) cancelFloatingWorkflow()
+      else retainDecisionRequest("No hay ninguna acción pendiente. No se ejecutó ni se envió nada.")
+      return true
+    }
+    // «No, prendé la linterna»: the «no» answers what came before; the affirmative order is routed again from the
+    // start, through the same safety rules, confirmations and final semantic check as any other order.
+    RequestSafetyPolicy.rectification(text)?.let { rectification ->
+      if (activeWorkflow()?.confirmed == true) {
+        retainDecisionRequest("Hay una secuencia en curso. Continuá o cancelala antes de iniciar otra acción."); return true
+      }
+      // Pending references only: the plan awaiting confirmation (or its draft, which survives a typed edit).
+      val context = listOfNotNull(confirmation) + (activeWorkflow()?.steps?.map { it.command } ?: emptyList()) +
+        (semanticDraft?.steps?.mapNotNull { runCatching { it.complete(java.util.Calendar.getInstance()) }.getOrNull() } ?: emptyList()) +
+        listOfNotNull(PhoneCommand.Volume(VolumeOp.SET).takeIf { clarification == "volume" })
+      val order = if (!rectification.anaphoric) rectification.order
+        else RequestSafetyPolicy.resolveAnaphora(rectification.order, context) ?: run {
+          retainDecisionRequest("¿Qué querés cambiar? Decí la orden completa, por ejemplo «poné el volumen al 30»."); return true
+        }
+      if (pendingAction) cancelFloatingWorkflow()
+      return routeFloatingRequest(order, onDispatched)
+    }
     val active = activeWorkflow()
     when (val phraseCommand = PhraseVoiceCommands.parse(text, phoneParser)) {
       PhraseVoiceCommand.ForgetLast -> { forgetLastLearnedPhrase(); return true }

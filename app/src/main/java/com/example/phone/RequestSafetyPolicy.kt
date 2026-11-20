@@ -81,6 +81,68 @@ object RequestSafetyPolicy {
       fixedModifiers.containsMatchIn(s) || duration.containsMatchIn(s) ||
       scheduledTime.findAll(s).any { PhoneCommandParser.number(it.groupValues[1]) != null }
   }
+  /**
+   * «No, prendé la linterna»: a standalone «no», delimited by punctuation, answering what came before, followed
+   * by a complete affirmative order. [order] is that order, without the «no» or a correction marker such as
+   * «mejor». [anaphoric] orders («ponelo al 30») name no target and need an unambiguous context.
+   */
+  data class Rectification(val order: String, val anaphoric: Boolean)
+
+  private val rectificationLead = Regex(
+    "^\\s*(?:(?:che|bueno|dale|ah|uy|eh|perd[oó]n)[\\s,]+)*no\\s*(?:[,.;:!¡…]+|\\s+[-—–]+)\\s*", RegexOption.IGNORE_CASE)
+  private val correctionMarker = Regex("^(?:mejor|en realidad|quise decir|digo|perd[oó]n)\\b[\\s,]*", RegexOption.IGNORE_CASE)
+  private val anaphoricOrder = Regex("^(?:pone(?:lo|la)|ponlo|ponla|deja(?:lo|la)|subi(?:lo|la)|baja(?:lo|la)) (?:al?|en) ")
+
+  /**
+   * Requires syntactic evidence: the marker is followed by punctuation and the next clause starts with an
+   * affirmative command verb (never «prendas», «apagues»: those continue a prohibition) and passes [rejection]
+   * itself. «No prendas…», «No quiero que…», «No, no prendas…» and «No molestes» are not rectifications.
+   */
+  fun rectification(text: String): Rectification? {
+    if (text.trimStart().firstOrNull() in listOf('"', '“', '«')) return null
+    val lead = rectificationLead.find(text) ?: return null
+    val rest = text.substring(lead.range.last + 1).trim().replaceFirst(correctionMarker, "").trim()
+    if (rest.isEmpty() || isQuestion(rest) || '?' in rest || rejection(rest) != null) return null
+    val normalized = PhoneCommandParser.normalize(rest)
+    val body = normalized.substring(PhoneCommandParser.requestHeadStart(normalized))
+    if (anaphoricOrder.containsMatchIn(body)) return Rectification(rest, anaphoric = true)
+    val head = PhoneCommandParser.leadingWord.find(body)?.groupValues?.get(1) ?: return null
+    if (PhoneCommandParser.canonicalVerb(head) == null || head.endsWith("s")) return null
+    return Rectification(rest, anaphoric = false)
+  }
+
+  private val cancelPending = Regex(
+    "^(?:mejor no|no gracias|no hagas nada|no (?:cancela(?:lo)?|deja(?:lo)?|olvida(?:lo)?)|" +
+      "no (?:lo |la |los |las )?(?:hagas|envies|mandes|ejecutes|confirmes|sigas|continues)(?: (?:eso|nada|(?:ese|el|este) mensaje))?)$")
+
+  /** «No lo hagas», «No envíes ese mensaje», «Mejor no»: a prohibition aimed at what is pending, never an order. */
+  fun cancelsPending(text: String): Boolean = cancelPending.matches(PhoneCommandParser.normalize(text))
+
+  private val anaphoricLevel = Regex("^(?:pone(?:lo|la)|ponlo|ponla|deja(?:lo|la)|subi(?:lo|la)|baja(?:lo|la)) (?:al?|en) ([a-z0-9]+(?: y [a-z]+)?)(?: ?%| por ciento)?$")
+
+  /**
+   * Rewrites «ponelo al 30» as an explicit order when [context] has exactly one adjustable level: the volume or the
+   * brightness of a pending command. Returns null when there is none, several, or the value is not a percentage.
+   */
+  fun resolveAnaphora(order: String, context: List<PhoneCommand>): String? {
+    val match = anaphoricLevel.matchEntire(PhoneCommandParser.normalize(order)) ?: return null
+    val value = PhoneCommandParser.number(match.groupValues[1])?.takeIf { it in 0..100 } ?: return null
+    val levels = context.mapNotNull { command ->
+      when {
+        command is PhoneCommand.Volume -> "volume"
+        command is PhoneCommand.TemporaryMode && command.kind == ModeKind.MEDIA_VOLUME && command.deadlineMillis == null -> "temporary:${command.seconds}"
+        command is PhoneCommand.Platform && command.action == PlatformAction.BRIGHTNESS -> "brightness"
+        else -> null
+      }
+    }.distinct()
+    val level = levels.singleOrNull() ?: return null
+    return when {
+      level == "volume" -> "poné el volumen al $value %"
+      level == "brightness" -> "poné el brillo al $value %"
+      else -> "poné el volumen al $value % durante ${level.substringAfter(':')} segundos"
+    }
+  }
+
   fun rejection(text: String): String? {
     if (isExplicitQuery(text) || isQuestion(text)) return null
     // «Decime si va a llover» is an indirect question, not a condition on an action.
