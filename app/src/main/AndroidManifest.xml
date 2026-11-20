@@ -27,7 +27,6 @@
         <intent><action android:name="android.media.action.IMAGE_CAPTURE" /></intent>
         <intent><action android:name="android.media.action.VIDEO_CAPTURE" /></intent>
         <intent><action android:name="android.intent.action.EDIT" /><data android:mimeType="vnd.android.cursor.item/event" /></intent>
-        <intent><action android:name="android.intent.action.SENDTO" /><data android:scheme="smsto" /></intent>
         <intent><action android:name="android.intent.action.SEARCH" /><data android:mimeType="vnd.android.cursor.dir/contact" /></intent>
         <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="content" android:mimeType="vnd.android.document/root" /></intent>
         <intent><action android:name="android.provider.MediaStore.RECORD_SOUND" /></intent>

@@ -89,7 +89,7 @@ class NaturalIntentVariantsTest {
     val number = "+541112345678"
     assertEquals(PhoneRoute.Local(PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, number, content = "¡Llegué, José!")),
       parser.parse("¿Puedes enviarme un WhatsApp al $number con el texto ¡Llegué, José!"))
-    assertEquals(PhoneRoute.Local(PhoneCommand.Platform(PlatformAction.MESSAGE_DRAFT, number, content = "Avísame, por favor.")),
+    assertEquals(PhoneRoute.Local(PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, number, content = "Avísame, por favor.")),
       parser.parse("Preparar un SMS para $number diciendo Avísame, por favor."))
     assertEquals(PhoneRoute.Local(PhoneCommand.Platform(PlatformAction.TEXT_SHARE, content = "Por favor.")),
       parser.parse("¿Podés compartir este texto: Por favor."))

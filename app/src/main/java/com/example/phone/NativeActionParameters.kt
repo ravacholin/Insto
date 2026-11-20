@@ -20,7 +20,6 @@ internal object NativeActionParameters {
           PlatformAction.CONTACT_SEARCH -> "buscá el contacto"
           PlatformAction.CONTACT_PHONES -> "qué teléfono tiene"
           PlatformAction.APP_SETTINGS -> "abrí ajustes de"
-          PlatformAction.MESSAGE_OPEN -> "abrí SMS con"
           PlatformAction.NOTIFICATION_OPEN -> "abrí la notificación"
           PlatformAction.NOTIFICATION_DISMISS -> "descartá la notificación"
           else -> null
@@ -63,18 +62,6 @@ internal object NativeActionParameters {
         decisionDescription = "Abrir los ajustes de una aplicación concreta, en vez de abrir la aplicación.") { r,m ->
       r.capture(m,1).takeIf(::singleTarget)?.let {PhoneCommand.Platform(PlatformAction.APP_SETTINGS,it)}
     }
-    action("message_open",IntentCategory.MESSAGING,"Abrir conversación SMS para un número explícito",listOf("abrí el chat SMS con +541112345678","abrí SMS con +541112345678"),PlatformAction.MESSAGE_OPEN,
-      listOf(p("number","teléfono 3..15 dígitos")),mechanism="Intent.ACTION_SENDTO smsto:",expected="Conversación preparada en app SMS; sin envío automático",
-      pattern="abri (?:el chat |una conversacion por )?sms (?:con|para|de) ([+0-9 ()-]+)",prompt="Indicá el número completo para abrir SMS.",
-        decisionDescription = "Abrir la conversación SMS de un número, sin redactar un mensaje.") { r,m ->
-      PhoneNumbers.canonical(r.capture(m,1))?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_OPEN,it)}
-    }
-    action("message_draft",IntentCategory.MESSAGING,"Redactar SMS para un número explícito sin enviarlo",listOf("redactá SMS a +541112345678 que diga Estoy llegando","prepará SMS para +541112345678 que diga Estoy llegando"),PlatformAction.MESSAGE_DRAFT,
-      listOf(p("number","teléfono 3..15 dígitos"),p("body")),mechanism="Intent.ACTION_SENDTO con sms_body",expected="Borrador preparado; el usuario revisa y envía en SMS",
-      pattern="(?:redacta|prepara) (?:un )?sms (?:al?|para) ([+0-9 ()-]+) (?:que diga|con el texto|diciendo) (.+)",prompt="Indicá número y mensaje: redactá SMS a +541112345678 que diga Estoy llegando.",
-        decisionDescription = "Redactar un borrador de SMS para el número indicado, sin enviarlo.") { r,m ->
-      PhoneNumbers.canonical(r.capture(m,1))?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_DRAFT,it,content=r.capture(m,2))}
-    }
     action("text_share",IntentCategory.APPLICATIONS,"Compartir texto explícito con una aplicación elegida por el usuario",listOf("compartí el texto Estoy llegando","compartir texto Estoy llegando"),PlatformAction.TEXT_SHARE,
       listOf(p("text")),mechanism="Intent.ACTION_SEND text/plain con chooser",expected="Selector de aplicación abierto; contenido entregado, no envío confirmado",
       pattern="comparti (?:el |este )?texto[: ]\\s*(.+)",prompt="¿Qué texto querés compartir?",
@@ -101,7 +88,7 @@ internal object NativeActionParameters {
     fun unavailable(id:String,cat:IntentCategory,desc:String,params:List<IntentParameter>,permissions:List<String>,mechanism:String,reason:String) {
       add(LocalIntentDefinition(id,cat,desc,listOf(desc.lowercase(),"quiero ${desc.lowercase()}"),params,permissions,mechanism,"Se explica acceso/integración faltante, sin efecto parcial",unavailable=reason))
     }
-    unavailable("message_send",IntentCategory.MESSAGING,"Enviar mensaje mediante una integración configurada",listOf(p("integration"),p("recipient"),p("body")),listOf("autorización específica de la integración"),"Proveedor de mensajería registrado","No hay una integración de envío para ese destinatario configurada. No envié ningún mensaje. Podés pedir redactar un SMS para un número.")
+    unavailable("message_send",IntentCategory.MESSAGING,"Enviar mensaje mediante una integración configurada",listOf(p("integration"),p("recipient"),p("body")),listOf("autorización específica de la integración"),"Proveedor de mensajería registrado","Los mensajes se envían por WhatsApp. No envié ningún mensaje. Probá: WhatsApp a Ana que diga Hola.")
     for ((id,desc) in listOf("file_open" to "Abrir un archivo identificado", "file_search" to "Buscar un archivo por nombre", "file_share" to "Compartir un archivo identificado", "file_rename" to "Renombrar un archivo", "file_copy" to "Copiar un archivo", "file_move" to "Mover un archivo", "file_delete" to "Eliminar un archivo")) {
       unavailable(id,IntentCategory.FILES,desc,listOf(p("document"),p("destination",required=false)),listOf("concesión de URI del Storage Access Framework"),"DocumentsContract y permiso de documento seleccionado","Para operar sobre ese archivo necesito una selección y un permiso de documento que esta instalación no tiene integrados. No modifiqué archivos. Podés pedir abrir el administrador de archivos.")
     }

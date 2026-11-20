@@ -103,7 +103,9 @@ class SemanticCommandGuardTest {
     accepted(text, PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, number, content = "no voy a ir"))
     accepted(text, PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, number, content = "No voy a ir."))
     assertTrue(rejected(text, PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, number, content = "voy a ir")).contains("no voy a ir"))
-    assertFalse(executes(interpret(text, listOf(PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, number, content = "voy a ir")))))
+    // The local reading keeps the literal text, so the altered proposal is never used.
+    assertEquals(InterpretationResult.Direct(PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, "Juan", content = "no voy a ir")),
+      interpret(text, listOf(PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, number, content = "voy a ir"))))
     // Unquoted dictation is grounded in the words said: the provider may not change them.
     rejected("Escribile a Juan que llego tarde", PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, number, content = "llego temprano"))
     accepted("Escribile a Juan que llego tarde", PhoneCommand.Platform(PlatformAction.MESSAGE_SEND, number, content = "Llego tarde"))

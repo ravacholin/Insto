@@ -55,7 +55,7 @@ class PlatformActionExecutorTest {
     }
   }
   @Test fun invalidMessageTargetCannotLaunchAnActivity() {
-    val result=PhoneActionExecutor(app).execute(PhoneCommand.Platform(PlatformAction.MESSAGE_DRAFT,"not a number",content="Hola"))
+    val result=PhoneActionExecutor(app).execute(PhoneCommand.Platform(PlatformAction.MESSAGE_SEND,"com.whatsapp/.Main",content="Hola"))
     assertEquals(PhoneActionOutcome.REJECTED,result.outcome)
     assertNull(shadowOf(app).nextStartedActivity)
   }
@@ -76,7 +76,7 @@ class PlatformActionExecutorTest {
     assertNull(shadowOf(app).nextStartedActivity)
   }
   @Test fun platformCommandsRoundTripAndRejectExtraneousFields() {
-    val command=PhoneCommand.Platform(PlatformAction.MESSAGE_DRAFT,"+541112345678",content="¡Llegué, José!")
+    val command=PhoneCommand.Platform(PlatformAction.MESSAGE_SEND,"+541112345678",content="¡Llegué, José!")
     assertEquals(command,PhoneCommandCodec.decode(PhoneCommandCodec.encode(command)))
     try {
       PhoneCommandCodec.decode(PhoneCommandCodec.encode(command).put("component","arbitrary"));fail("Unknown fields")

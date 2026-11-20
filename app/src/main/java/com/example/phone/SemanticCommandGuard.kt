@@ -231,7 +231,7 @@ object SemanticCommandGuard {
     else -> emptyList()
   }
 
-  private val messageActions = setOf(PlatformAction.MESSAGE_SEND, PlatformAction.MESSAGE_DRAFT, PlatformAction.TEXT_SHARE)
+  private val messageActions = setOf(PlatformAction.MESSAGE_SEND, PlatformAction.TEXT_SHARE)
 
   /** Calendar and weather queries carry their own validated time structure. */
   private fun opaqueTemporal(command: PhoneCommand): Boolean = command is PhoneCommand.Platform &&

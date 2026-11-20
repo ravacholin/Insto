@@ -13,6 +13,8 @@ data class PhoneActionResult(
   val accessSettingsAction: String? = null,
   val stopwatchAutomation: StopwatchOp? = null,
   val contactOptions: List<ContactOption> = emptyList(),
+  /** The command a chosen contact completes, when it differs from the one executed (a split WhatsApp request). */
+  val pendingCommand: PhoneCommand? = null,
   val outcome: PhoneActionOutcome = PhoneActionOutcome.COMPLETED,
   val launchedAppPackage: String? = null,
 ) {

@@ -545,7 +545,7 @@ class MainViewModel @JvmOverloads constructor(
     if (result.needsContacts) contactsCommand = command
     if (result.needsNotifications) notificationsCommand = command
     appChoiceCommand = command.takeIf {result.appOptions.isNotEmpty()}
-    contactChoiceCommand = command.takeIf {result.contactOptions.isNotEmpty()}
+    contactChoiceCommand = (result.pendingCommand ?: command).takeIf {result.contactOptions.isNotEmpty()}
     retainLocalAudio = result.retainRequest
     retryLocalCommand = if (result.retainRequest) command to confirmed else null
     retryLocalText = if (result.retainRequest) routedRequestText else null
