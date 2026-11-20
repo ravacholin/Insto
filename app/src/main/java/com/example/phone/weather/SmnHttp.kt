@@ -1,9 +1,7 @@
 package com.example.phone.weather
 
 import com.example.phone.ProviderHttp
-import java.io.InterruptedIOException
 import java.io.IOException
-import java.net.SocketTimeoutException
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 
@@ -38,15 +36,13 @@ object OkHttpSmnTransport : SmnTransport {
     val response = ProviderHttp.get(url, mapOf("User-Agent" to SMN_USER_AGENT) + headers,
       SMN_CONNECT_MILLIS, SMN_READ_MILLIS, maxBytes)
     SmnHttpResponse(response.code, response.headers, response.body)
-  } catch (error: ProviderHttp.ResponseTooLarge) {
-    throw SmnException(SmnErrorKind.TOO_LARGE, "La respuesta del SMN supera el tamaño admitido.")
-  } catch (error: SocketTimeoutException) {
-    throw SmnException(SmnErrorKind.TIMEOUT, "El SMN no respondió a tiempo.")
-  } catch (error: InterruptedIOException) {
-    // OkHttp reports the whole-call deadline as InterruptedIOException("timeout").
-    throw SmnException(SmnErrorKind.TIMEOUT, "El SMN no respondió a tiempo.")
   } catch (error: IOException) {
-    throw SmnException(SmnErrorKind.NETWORK, "No hubo conexión con el SMN.")
+    throw when (ProviderHttp.classify(error)) {
+      ProviderHttp.FailureKind.TOO_LARGE -> SmnException(SmnErrorKind.TOO_LARGE, "La respuesta del SMN supera el tamaño admitido.")
+      // SocketTimeoutException and OkHttp's whole-call deadline, InterruptedIOException("timeout").
+      ProviderHttp.FailureKind.TIMEOUT -> SmnException(SmnErrorKind.TIMEOUT, "El SMN no respondió a tiempo.")
+      else -> SmnException(SmnErrorKind.NETWORK, "No hubo conexión con el SMN.")
+    }
   }
 }
 

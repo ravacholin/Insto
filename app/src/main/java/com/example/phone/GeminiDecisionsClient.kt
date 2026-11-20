@@ -1,17 +1,18 @@
 package com.example.phone
 
-import java.net.HttpURLConnection
 import kotlin.math.abs
+import okhttp3.Interceptor
 import org.json.JSONObject
 
 /** Decisions only classifies; parameters and Android execution are separate boundaries. */
 class GeminiDecisionsClient(
   private val key: () -> String?,
-  private val connectionFactory: (() -> HttpURLConnection)? = null,
+  /** Test seam replacing the network; production uses the shared transport. */
+  private val transport: Interceptor? = null,
 ) : DecisionClassifier {
   override suspend fun classify(text: String): SemanticDecision {
     if (text.isBlank() || text.length > 16000) throw DecisionException("El pedido está vacío o es demasiado largo. Se conserva para editarlo.", GeminiFailureKind.INVALID_REQUEST)
-    val body = GeminiTransport.post(key, buildRequest(text).toString(), "https://generativelanguage.googleapis.com/v1beta/decisions", connectionFactory, 4000)
+    val body = GeminiTransport.post(key, buildRequest(text).toString(), "https://generativelanguage.googleapis.com/v1beta/decisions", transport, 4000)
     return try { parseResponse(JSONObject(body)) } catch (_: Exception) {
       throw DecisionException("Respuesta inválida de Decisions. El pedido se conserva.", GeminiFailureKind.INVALID_RESPONSE)
     }

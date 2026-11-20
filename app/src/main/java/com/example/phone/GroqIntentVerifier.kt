@@ -1,8 +1,8 @@
 package com.example.phone
 
-import java.net.HttpURLConnection
 import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
+import okhttp3.Interceptor
 import org.json.JSONObject
 
 fun interface IntentVerifier {
@@ -12,7 +12,8 @@ fun interface IntentVerifier {
 
 class GroqIntentVerifier(
   private val key: () -> String?,
-  private val connectionFactory: (() -> HttpURLConnection)? = null,
+  /** Test seam replacing the network; production uses the shared transport. */
+  private val transport: Interceptor? = null,
 ) : IntentVerifier, StructuredCommandExtractor {
   private val registry = LocalIntentRegistry.default
   private val registryOnlyIntents by lazy {
@@ -85,7 +86,7 @@ class GroqIntentVerifier(
       .put("messages", JSONArray()
         .put(JSONObject().put("role", "system").put("content", instruction))
         .put(JSONObject().put("role", "user").put("content", input)))
-    val response = GeminiTransport.post(key, body.toString(), "https://api.groq.com/openai/v1/chat/completions", connectionFactory, timeoutMillis, GeminiTransport.Provider.GROQ)
+    val response = GeminiTransport.post(key, body.toString(), "https://api.groq.com/openai/v1/chat/completions", transport, timeoutMillis, GeminiTransport.Provider.GROQ)
     val choices = JSONObject(response).getJSONArray("choices")
     require(choices.length() == 1)
     val answer = choices.getJSONObject(0)
