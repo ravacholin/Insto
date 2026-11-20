@@ -56,8 +56,10 @@ def main():
              "DecisionsPolicy", "DecisionsCircuitBreaker", "Interpretation", "CommandDraft", "RequestSafetyPolicy", "GeminiCoordinator", "GeminiDiagnostics",
              "LocalIntentRegistry", "LocalIntentPhrases", "ExtendedLocalIntents", "NativeActionParameters",
              "DocumentNamePolicy", "ConfiguredRoutineStore", "PhrasePatterns", "OperationalContext",
-             "PhraseCanonicalizer", "LearnedPhraseIndex"]
+             "PhraseCanonicalizer", "LearnedPhraseIndex", "WeatherIntentParser"]
     sources = [str(source / (name + ".kt")) for name in names if (source / (name + ".kt")).exists()]
+    # SMN weather clients: pure JVM (OkHttp, org.json, coroutines), no Android types.
+    sources += [str(path) for path in sorted((source / "weather").glob("*.kt"))]
     sources += [str(ROOT / "app/src/main/java/com/example/audio/VoiceSessionPolicy.kt")]
     sources += [str(ROOT / "app/src/main/java/com/example/context/SharedTextContext.kt")]
     sources += [str(ROOT / "app/src/main/java/com/example" / path) for path in (
@@ -75,6 +77,7 @@ def main():
     tests += [ROOT / "app/src/test/java/com/example/assist" / name for name in (
         "WhatsAppSelectorFixtures.kt", "WhatsAppSelectorsTest.kt", "AutoSendMetricsTest.kt")]
     tests += sorted((ROOT / "app/src/test/java/com/example/backup").glob("*Test.kt"))
+    tests += sorted((ROOT / "app/src/test/java/com/example/phone/weather").glob("*.kt"))
     for path in sorted((ROOT / "app/src/test/java/com/example/phone").glob("*Test.kt")):
         text = path.read_text()
         # Tests that use Android-backed stores (DataStore) run with Gradle.
