@@ -92,4 +92,35 @@ class FloatingLearnedPhrasesTest {
       Dispatchers.resetMain()
     }
   }
+
+  @Test fun ensenaYCorrigeUnaFrasePorVozSinModelo() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    val store = LearnedPhraseStore(PhraseTestDataStore(), { false }, updates = this)
+    val vm = MainViewModel(app,
+      hybridRouter = HybridPhoneRouter({ true }, DecisionClassifier { fail("Se llamó a Decisions"); error("Decisions") }),
+      groqFallback = StructuredCommandExtractor { fail("Se llamó a Groq"); emptyList() }, learnedPhrases = store,
+    )
+    try {
+      vm.updateFloatingText("Cuando diga menos ruido, bajá el volumen")
+      vm.sendFloatingText { fail("Se envió a Instinct") }
+      runCurrent()
+      assertEquals(command, store.lookup(InterpretationRequest("menos ruido")))
+      assertTrue(vm.floatingAssistant.value.status.orEmpty().startsWith("Aprendí «menos ruido»"))
+
+      vm.updateFloatingText("Corregí esta frase: subí el volumen")
+      vm.sendFloatingText { fail("Se envió a Instinct") }
+      runCurrent()
+      assertEquals(PhoneCommand.Volume(VolumeOp.UP), store.lookup(InterpretationRequest("menos ruido")))
+
+      vm.updateFloatingText("Cuando diga subí el volumen, bajá el volumen")
+      vm.sendFloatingText { fail("Se envió a Instinct") }
+      runCurrent()
+      assertTrue(vm.floatingAssistant.value.error.orEmpty().startsWith("Insto ya entiende"))
+      assertNull(store.lookup(InterpretationRequest("subí el volumen")))
+    } finally {
+      vm.dismissFloatingAssistant()
+      Dispatchers.resetMain()
+    }
+  }
 }

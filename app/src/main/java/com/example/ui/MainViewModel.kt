@@ -40,6 +40,9 @@ import com.example.data.AssistantActivationMode
 import com.example.data.AssistantPreferences
 import com.example.data.AssistantPreferencesRepository
 import com.example.data.LearnedPhraseStore
+import com.example.data.PhraseTeaching
+import com.example.data.PhraseVoiceCommand
+import com.example.data.PhraseVoiceCommands
 import com.example.data.FloatingPillMode
 import com.example.data.OrbHoldBehavior
 import com.example.data.PingActionLog
@@ -57,6 +60,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -520,9 +524,16 @@ class MainViewModel @JvmOverloads constructor(
       cancelFloatingWorkflow(); return true
     }
     val active = activeWorkflow()
-    if (normalized == "olvida esta frase" && text.none { it == '?' || it == '¿' }) {
-      forgetLastLearnedPhrase()
-      return true
+    when (val phraseCommand = PhraseVoiceCommands.parse(text, phoneParser)) {
+      PhraseVoiceCommand.ForgetLast -> { forgetLastLearnedPhrase(); return true }
+      PhraseVoiceCommand.Show -> { openLearnedPhrases(onDispatched); return true }
+      is PhraseVoiceCommand.Teach, is PhraseVoiceCommand.CorrectLast -> {
+        if (active != null || confirmation != null || semanticDraft != null) {
+          retainDecisionRequest("Terminá o cancelá el pedido en curso antes de enseñarme una frase.")
+        } else manageLearnedPhrase(phraseCommand)
+        return true
+      }
+      null -> Unit
     }
     if (active != null) {
       if (!active.confirmed && normalized in listOf("si", "dale", "ejecutar", "confirmar", "confirmo", "ok")) { confirmFloatingAction(true); return true }
@@ -603,31 +614,91 @@ class MainViewModel @JvmOverloads constructor(
     return interpretWithGemini(text,local,null)
   }
 
-  private suspend fun forgetLastLearnedPhrase() {
+  private suspend fun forgetLastLearnedPhrase() = phraseManagement("No pude borrar la frase. Volvé a intentarlo.") { isCurrent ->
+    if (learnedPhrases.forgetLast(isCurrent)) PhraseReply.Done("Olvidé la última frase aprendida que usaste.")
+    else PhraseReply.Retain("Todavía no usaste ni aprendiste ninguna frase.")
+  }
+
+  /** Teaches or corrects a phrase. The action must be a request the local parser understands. */
+  private suspend fun manageLearnedPhrase(order: PhraseVoiceCommand) =
+    phraseManagement("No pude guardar la frase. Volvé a intentarlo.") { isCurrent ->
+      val target = when (order) {
+        is PhraseVoiceCommand.Teach -> order.target
+        is PhraseVoiceCommand.CorrectLast -> order.target
+        else -> return@phraseManagement PhraseReply.Retain("No entendí qué frase querés cambiar.")
+      }
+      val resolved = when (val check = PhraseTeaching.resolveTarget(target, phoneParser)) {
+        is PhraseTeaching.Target.Invalid -> return@phraseManagement PhraseReply.Retain(check.message)
+        is PhraseTeaching.Target.Valid -> check
+      }
+      val state = learnedPhrases.uiSettings.first()
+      val disabled = if (state.enabled) "" else " Activá «Aprender y usar frases» en IA → Frases aprendidas para usarla."
+      when (order) {
+        is PhraseVoiceCommand.Teach -> {
+          val phrase = PhraseTeaching.checkPhrase(order.phrase, resolved.command, state.entries.map { it.phrase }, parser = phoneParser)
+          if (phrase is PhraseTeaching.Phrase.Invalid) return@phraseManagement PhraseReply.Retain(phrase.message)
+          phrase as PhraseTeaching.Phrase.Valid
+          if (!isCurrent() || !learnedPhrases.teach(phrase.key, resolved.command, target))
+            return@phraseManagement PhraseReply.Retain("No pude guardar la frase. Volvé a intentarlo.")
+          PhraseReply.Done("Aprendí «${order.phrase}»: ${resolved.summary}." +
+            (if (phrase.replaces) " Reemplacé la acción anterior." else "") +
+            " Si no es así, decí «olvidá esta frase»." + disabled)
+        }
+        else -> {
+          val phrase = learnedPhrases.correctLast(resolved.command, target, isCurrent)
+            ?: return@phraseManagement PhraseReply.Retain("Todavía no usaste ninguna frase aprendida para corregir.")
+          PhraseReply.Done("Corregí «$phrase»: ahora ${resolved.summary}." + disabled)
+        }
+      }
+    }
+
+  private sealed interface PhraseReply {
+    data class Done(val status: String) : PhraseReply
+    data class Retain(val message: String) : PhraseReply
+  }
+
+  private suspend fun phraseManagement(failure: String, action: suspend (isCurrent: () -> Boolean) -> PhraseReply) {
     val generation = floatingGeneration
     val job = kotlinx.coroutines.currentCoroutineContext()[Job]
+    val isCurrent = { job?.isActive != false && generation == floatingGeneration }
     decidingRequest = true
     floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true)
     try {
-      val removed = learnedPhrases.forgetLast { job?.isActive != false }
-      if (generation == floatingGeneration && !floatingPaused) {
-        if (removed) {
+      val reply = action(isCurrent)
+      if (generation == floatingGeneration && !floatingPaused) when (reply) {
+        is PhraseReply.Done -> {
           pendingFloatingAudio?.file?.delete()
           pendingFloatingAudio = null
           pendingTranscript = null
-          floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "",
-            status = "Olvidé la última frase aprendida que usaste.", error = null)
-        } else retainDecisionRequest("Todavía no usaste ninguna frase aprendida.")
+          floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", status = reply.status, error = null)
+        }
+        is PhraseReply.Retain -> retainDecisionRequest(reply.message)
       }
     } catch (_: java.io.IOException) {
-      if (generation == floatingGeneration && !floatingPaused)
-        retainDecisionRequest("No pude borrar la frase. Volvé a intentarlo.")
+      if (generation == floatingGeneration && !floatingPaused) retainDecisionRequest(failure)
     } finally {
       if (generation == floatingGeneration) {
         decidingRequest = false
         floatingState.value = floatingState.value.copy(deciding = false)
       }
     }
+  }
+
+  private fun openLearnedPhrases(onDispatched: () -> Unit) {
+    val intent = Intent(getApplication(), com.example.speech.GroqSettingsActivity::class.java)
+      .putExtra(com.example.speech.GroqSettingsActivity.EXTRA_PROVIDER, com.example.speech.GroqSettingsActivity.SECTION_PHRASES)
+      .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+      getApplication<Application>().startActivity(intent)
+    } catch (_: RuntimeException) {
+      retainDecisionRequest("No pude abrir las frases aprendidas. Están en IA → Frases aprendidas.")
+      return
+    }
+    pendingFloatingAudio?.file?.delete()
+    pendingFloatingAudio = null
+    pendingTranscript = null
+    floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null, status = null)
+    onDispatched()
   }
 
   private fun openChatGptSearch(query: String, onDispatched: () -> Unit) {

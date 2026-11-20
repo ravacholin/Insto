@@ -990,13 +990,24 @@ Importar plantillas de rutinas revisadas desde JSON.
 
 ## Frases aprendidas
 
-Si Insto tuvo que interpretar un pedido de un solo paso con el modelo y
-confirmaste una ejecución exitosa, puede guardar la variante para la próxima
-vez. Se admiten linterna, volumen, modo silencio o vibración, apertura de
-cámara o app, controles multimedia y cronómetro. Una coincidencia usa la ruta
-local con todos sus controles. Las preguntas, las negaciones y las condiciones
-no coinciden. Los pedidos con borrador o texto compartido quedan fuera del
-aprendizaje.
+Una frase aprendida es un atajo: una frase tuya que Insto traduce a un comando
+del catálogo. Hay dos maneras de sumarlas.
 
-Administrá la lista en **IA → Frases aprendidas**. Decí o escribí
-«olvidá esta frase» para borrar la última entrada que usaste.
+- **Automática.** Si Insto tuvo que interpretar un pedido de un solo paso con
+  el modelo y confirmaste una ejecución exitosa, guarda la variante. Se admiten
+  linterna, volumen, modo silencio o vibración, apertura de cámara o app,
+  controles multimedia y cronómetro.
+- **Manual.** En **IA → Frases aprendidas → Agregar frase**, o con la voz:
+  «cuando diga luz, prendé la linterna» o «aprendé que modo estudio es ejecutá
+  la rutina Estudio». La acción se escribe como un pedido que Insto ya entiende
+  localmente. Además de lo anterior admite temporizadores, alarmas sin fecha,
+  rutinas, navegación, búsquedas de música y video, ajustes y No molestar.
+
+Las llamadas, los mensajes, los archivos y los cambios de calendario nunca se
+asocian a una frase. Una coincidencia usa la ruta local con todos sus
+controles. Las preguntas, las negaciones y las condiciones no coinciden. Los
+comandos del catálogo tienen prioridad, así que no se puede enseñar una frase
+que Insto ya entiende. Para corregir, decí «corregí esta frase: abrí YouTube»
+o «olvidá esta frase». Las dos órdenes actúan sobre la última frase usada o
+aprendida. La guía completa está en
+[Insto · frases aprendidas](releases/Insto-frases-aprendidas.md).
