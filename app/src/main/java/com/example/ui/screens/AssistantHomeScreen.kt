@@ -462,6 +462,8 @@ private fun AssistantSetupSheet(
           if (it == WhatsAppFlavor.AUTO) "Detectar automáticamente" else it.label
         })
         HorizontalDivider()
+        AutoSendDiagnostics(prefs.preferredFlavor)
+        HorizontalDivider()
         Text("Botón principal", style = MaterialTheme.typography.titleMedium)
         SettingsDescription("Tocá para abrir el chat. Mantené presionado para grabar y soltá para enviar.")
         SettingsChoices(

@@ -545,3 +545,11 @@ El usuario aprobó el PASO 0 y las cuatro propuestas: contraseña también en «
 - **`RequestSafetyPolicy`:** la medición mostró tres restricciones que pasaban el filtro y que un clasificador podía ejecutar («Ni se te ocurra…», «… salvo que…», «Dale, no, … no»). Se amplió el filtro, sin cambiar las rutas del corpus de 155.
 - **`IntentCoverageTest`** usa el `LearnedPhraseStore` real y por eso corre con Gradle. `scripts/test-phone-core.py` saltea las pruebas que importan `com.example.data`.
 - **`FloatingLocalLearningTest`:** «Música al 40» confirmada ahora resuelve «al 55 por ciento» sin proveedores. Ese es el comportamiento nuevo aprobado. La prueba de estructuras de tres ejemplos desactiva la generalización de cada frase para seguir cubriéndolas, y una prueba nueva cubre la generalización en el ViewModel.
+
+### Parte B
+
+- **Instantáneas:** `AccessibilityUiTree` copia cada nodo a un `UiNode` y lo recicla en el momento. Un recorrido acotado (800 nodos, profundidad 28) se comparte por chequeo. Cuando `findAccessibilityNodeInfosByViewId` no encuentra nada, `byId` filtra ese recorrido. En un dispositivo da el mismo resultado y permite probar el servicio con árboles sintéticos en Robolectric.
+- **Estrategia por posición:** no se implementó. En WhatsApp el campo de texto tiene a la derecha los íconos de adjuntar y cámara, así que esa estrategia resultaría ambigua o tocaría otro control. Quedan IDs y etiquetas exactas.
+- **Micrófono:** la descripción debe **empezar** con la etiqueta, porque WhatsApp suele agregar una indicación («…, mantené presionado»). Tampoco usa «contiene».
+- **Resultado `UNVERIFIED_CONTENT`:** se agregó para distinguir «no se pudo verificar el texto o la grabación» de «no apareció el control».
+- **Camino manual:** `MainViewModel.openFloatingInstinctManually`. Después de un toque incierto solo abre el chat y conserva el pedido en el panel.

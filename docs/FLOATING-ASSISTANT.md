@@ -431,3 +431,33 @@ documentación final de la entrega está en
 La suite Android integrada terminó sin fallos: 287 casos, 286 aprobados y una
 evaluación real opt-in omitida. El mismo job compiló el APK. Evidencia:
 https://github.com/ravacholin/Insto/actions/runs/44039148156
+
+## Auto-envío: estrategias, diagnóstico y métricas (1.12.0)
+
+**Cómo encuentra cada control.** `assist/WhatsAppSelectors.kt` define, para cada elemento, una lista ordenada de estrategias, de la más específica a la más general:
+
+| Elemento | Estrategias, en orden |
+| --- | --- |
+| Botón Enviar | IDs `send`, `send_button`, `send_btn`, `media_caption_send_btn`, después una etiqueta **exacta** (Send, Enviar, Invia, Envoyer, Senden) en un control tocable. |
+| Cuadro de texto | IDs `entry`, `message_input`, después el único campo editable. Prefiere el que ya contiene el texto esperado. |
+| Confirmación al compartir | Etiqueta exacta de confirmación (OK, Aceptar…), después etiqueta positiva (Enviar…), después IDs positivos de Android y WhatsApp. |
+| Micrófono de nota de voz | IDs `voice_note_btn`, `record_button`, después una descripción que **empieza** con «Mensaje de voz», «Voice message»… |
+| Cabecera del chat | IDs `conversation_contact_name`, `recipient_name`, `toolbar_title`, `action_bar_title`. |
+
+Si una estrategia encuentra más de un candidato distinto, la búsqueda se detiene y **no se toca nada**. Nunca baja a una estrategia más débil. Se eliminó la comparación por «contiene» del último recurso, que podía confundir «Enviar ubicación» con «Enviar». Los selectores solo encuentran los controles. La autorización sigue en `AutoSendGuard`, `ShareConfirmationPolicy`, `TextSendAttempt` y `ShareSendAttempt`, sin cambios. La selección de conversación no se automatiza: Insto abre el chat directamente y verifica la cabecera.
+
+**Esperas.** Un evento de accesibilidad del paquete armado adelanta el chequeo a unos 60 ms. El sondeo de 180 ms queda como respaldo, con los mismos plazos de 10 s para el armado y 3 s para la confirmación. Los eventos de otras apps se siguen ignorando.
+
+**Indicador del panel.** Con un contacto configurado, el panel muestra uno de tres estados:
+
+- **Auto-envío listo:** hubo un envío confirmado con la versión de WhatsApp instalada y el último intento no falló.
+- **Necesita revisión:** el servicio está habilitado pero no conectado, no hay WhatsApp, todavía no hay ningún envío confirmado, WhatsApp se actualizó desde el último envío confirmado o el último intento falló.
+- **Accesibilidad desactivada.**
+
+Si el estado no es «listo», el botón **«Abrir el chat y enviar a mano»** abre el chat con el texto o el audio preparado, sin armar el servicio. Si el último toque quedó sin confirmar, el botón pasa a ser **«Abrir el chat para revisar»**: solo abre el chat y conserva el pedido en el panel, para no enviar nada dos veces.
+
+**Métricas locales.** El archivo `noBackupFilesDir/autosend-metrics.json` guarda, con escritura atómica, enumeraciones cerradas: variante de WhatsApp, `versionCode`, tipo (texto, audio o archivo), estrategia (por ejemplo `send.id.send`), resultado y cantidad. Guarda como máximo 100 filas, más la última versión confirmada y el último intento. Nunca guarda mensajes, audios, nombres de archivo, transcripciones, teléfonos ni contactos. Se registra un solo resultado por solicitud: «confirmado», «sin confirmar» (hubo un toque) o el motivo por el que no se tocó. **Configuración → WhatsApp y notas de voz → Diagnóstico del auto-envío** muestra los contadores y permite **borrarlos**. Después de borrarlos, el indicador vuelve a «necesita revisión».
+
+**Recuperación.** Si no hubo toque, el aviso dice que no se envió nada y que el contenido quedó listo en WhatsApp. Si hubo un toque sin confirmación, pide revisar el chat antes de reenviar. Un toque incierto nunca se repite.
+
+Pruebas: `WhatsAppSelectorsTest` cubre 6 árboles sintéticos (3 de WhatsApp y 3 de Business), con un distractor y un caso ambiguo. Se suman `AutoSendMetricsTest` (privacidad y estados), `WhatsAppSelectorStrategyRegressionTest` (servicio integrado: un toque, ninguno ante la ambigüedad, adelanto por evento y métricas sin contenido) y `AutoSendHealthPanelTest`. Las regresiones anteriores pasan sin cambios. Falta probarlo con WhatsApp y WhatsApp Business reales en un teléfono.

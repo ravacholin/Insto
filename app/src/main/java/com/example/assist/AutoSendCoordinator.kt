@@ -58,6 +58,25 @@ object AutoSendCoordinator {
 
   @Volatile var lastKnownForegroundPackage: String? = null
 
+  /**
+   * Outcome bookkeeping of one automatic send, kept after [disarm] because confirmation arrives later. Holds no
+   * content: only the package, the kind and selector strategy ids. Exactly one outcome is recorded per request.
+   */
+  class Report(val request: Long, val packageName: String, val kind: AutoSendMetrics.Kind) {
+    @Volatile var strategy: String? = null
+    /** The last reason a check could not proceed, recorded if the request ends without a touch. */
+    @Volatile var failure: AutoSendMetrics.Outcome? = null
+    /** A send or confirmation gesture was dispatched: from then on the result can only be confirmed or uncertain. */
+    @Volatile var touched: Boolean = false
+    private val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+    fun finish(): Boolean = finished.compareAndSet(false, true)
+  }
+
+  @Volatile var report: Report? = null
+    private set
+
+  fun reportFor(request: Long): Report? = report?.takeIf { it.request == request }
+
   fun arm(
     targetPackage: String,
     mode: ArmedActionMode = ArmedActionMode.CLICK_SEND,
@@ -91,6 +110,14 @@ object AutoSendCoordinator {
     boomerangEnabled = boomerangReturn
     returnPackageName = if (boomerangReturn) returnPackage ?: lastKnownForegroundPackage else null
     armedUntilElapsedMs = SystemClock.elapsedRealtime() + durationMs
+    report = if (mode == ArmedActionMode.CLICK_SEND && (expectedText != null || expectedAudioFileName != null)) {
+      val kind = when {
+        expectedText != null -> AutoSendMetrics.Kind.TEXT
+        expectedAudioFileName?.startsWith("instinct_") == true -> AutoSendMetrics.Kind.AUDIO
+        else -> AutoSendMetrics.Kind.FILE
+      }
+      Report(requestId, targetPackage, kind)
+    } else null
   }
 
   fun markTextLaunchCommitted(request: Long) {

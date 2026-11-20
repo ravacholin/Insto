@@ -214,6 +214,7 @@ class AssistActivity : ComponentActivity() {
           onRetryWorkflow = viewModel::retryFloatingWorkflow,
           onCancelWorkflow = viewModel::cancelFloatingWorkflow,
           onInstinct = { viewModel.openFloatingInstinct { finish() } },
+          onManualSend = { viewModel.openFloatingInstinctManually { finish() } },
           onDismissOverlay = dismiss,
         )
       }

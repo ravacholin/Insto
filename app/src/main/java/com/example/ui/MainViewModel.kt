@@ -147,6 +147,8 @@ data class FloatingAssistantState(
   val workflowCanRetry: Boolean = false,
   val workflowActive: Boolean = false,
   val accessSettingsAction: String? = null,
+  /** Evidence about automatic WhatsApp sending, computed when the panel opens. Null without a contact. */
+  val autoSendHealth: com.example.assist.AutoSendHealth.Status? = null,
 )
 
 class MainViewModel @JvmOverloads constructor(
@@ -855,7 +857,10 @@ class MainViewModel @JvmOverloads constructor(
     floatingReturnPackage = com.example.assist.AutoSendCoordinator.lastKnownForegroundPackage
     floatingContact = prefs.pinnedContact
     // Loading routing preferences during a send must not erase the active text/recording state.
-    floatingState.value = floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct")
+    floatingState.value = floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct",
+      autoSendHealth = floatingContact?.let {
+        runCatching { com.example.assist.AutoSendHealthReader.read(getApplication(), prefs.preferredFlavor) }.getOrNull()
+      })
     if (activeWorkflow() != null) {
       syncWorkflow()
       floatingState.value = floatingState.value.copy(status = "Hay una secuencia pendiente. Revisá los pasos antes de continuar.")
@@ -1221,6 +1226,40 @@ class MainViewModel @JvmOverloads constructor(
     stopFloatingCapture(discard = true)
     pendingFloatingAudio?.file?.delete()
     pendingFloatingAudio = null
+    pendingTranscript = null
+    floatingState.value = state.copy(mode = FloatingMode.SENDING, error = null)
+    onDispatched()
+  }
+
+  /**
+   * The manual path when automatic sending needs review: opens the Instinct chat with the prepared text or audio and
+   * never arms the accessibility service. After an uncertain send it only opens the chat, so nothing is sent twice.
+   */
+  fun openFloatingInstinctManually(onDispatched: () -> Unit) {
+    val state = floatingState.value
+    if (state.mode == FloatingMode.SENDING) return
+    val app = getApplication<Application>()
+    val prefs = runBlockingPrefs(app)
+    val contact = prefs.pinnedContact ?: run {
+      floatingState.value = state.copy(error = "Configurá el contacto de Instinct para abrir WhatsApp.")
+      return
+    }
+    val audio = pendingFloatingAudio
+    val reviewOnly = state.autoSendHealth?.lastUncertain == true
+    val result = when {
+      reviewOnly || state.text.isBlank() && audio == null ->
+        WhatsAppDispatcher.openWhatsAppChat(app, contact.phoneNumber, prefs.preferredFlavor)
+      state.text.isBlank() && audio != null -> WhatsAppDispatcher.sendWhatsAppAudio(app, contact.phoneNumber, audio.file,
+        prefs.preferredFlavor, isAutoSendServiceEnabled = false, mimeType = audio.mimeType)
+      else -> WhatsAppDispatcher.openWhatsAppTextDraft(app, contact.phoneNumber, state.text, prefs.preferredFlavor)
+    }
+    if (result is DispatchResult.Error) {
+      floatingState.value = state.copy(error = result.message)
+      return
+    }
+    if (reviewOnly) { onDispatched(); return } // The prepared request stays here; the user decides after checking.
+    stopFloatingCapture(discard = true)
+    if (result is DispatchResult.AudioDispatched) pendingFloatingAudio = null // WhatsApp owns the shared file now.
     pendingTranscript = null
     floatingState.value = state.copy(mode = FloatingMode.SENDING, error = null)
     onDispatched()
