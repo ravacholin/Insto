@@ -42,7 +42,7 @@ class AutoSendHealthPanelTest {
 
   private fun writeMetrics(outcome: AutoSendMetrics.Outcome) {
     val snapshot = AutoSendMetrics.record(AutoSendMetrics.Snapshot(), AutoSendMetrics.Flavor.WHATSAPP, 262000,
-      AutoSendMetrics.Kind.TEXT, "send.id.send", outcome, 1)
+      AutoSendMetrics.Kind.TEXT, "send.id.send", outcome, System.currentTimeMillis())
     File(app.noBackupFilesDir, AutoSendMetricsStore.FILE_NAME).writeText(AutoSendMetrics.encode(snapshot))
   }
 
@@ -54,7 +54,10 @@ class AutoSendHealthPanelTest {
       val disconnect = ConnectedAccessibility.start(app)
       try {
         vm.prepareFloatingAssistant()
-        assertEquals("Enabled is not a guarantee", AutoSendHealth.State.NEEDS_REVIEW, vm.floatingAssistant.value.autoSendHealth?.state)
+        assertEquals(AutoSendHealth.State.READY, vm.floatingAssistant.value.autoSendHealth?.state)
+        writeMetrics(AutoSendMetrics.Outcome.NOT_FOUND)
+        vm.prepareFloatingAssistant()
+        assertEquals(AutoSendHealth.State.NEEDS_REVIEW, vm.floatingAssistant.value.autoSendHealth?.state)
         writeMetrics(AutoSendMetrics.Outcome.CONFIRMED)
         vm.prepareFloatingAssistant()
         assertEquals(AutoSendHealth.State.READY, vm.floatingAssistant.value.autoSendHealth?.state)

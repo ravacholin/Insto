@@ -21,15 +21,18 @@ class SmnWeatherServiceTest {
   private val rain = PhoneCommand.Platform(PlatformAction.WEATHER_RAIN)
 
   private fun service(clock: Clock, station: String = SmnWeatherService.DEFAULT_STATION,
-                      forecast: String = forecastJson, handler: (suspend (String) -> SmnHttpResponse)? = null): Pair<SmnWeatherService, FakeTransport> {
+                      forecast: String = forecastJson, fallback: Boolean = false,
+                      handler: (suspend (String) -> SmnHttpResponse)? = null): Pair<SmnWeatherService, FakeTransport> {
     val transport = FakeTransport { url, _ ->
       handler?.invoke(url) ?: when {
         url.startsWith(OPEN_DATA) -> ok(zip, "application/octet-stream")
         url.startsWith(PORTAL) -> html(portal(jwt("""{"exp":${clock.now / 1000 + 3600}}""")))
+        url.startsWith(OPEN_METEO) -> json(OPEN_METEO_SAMPLE)
         else -> json(forecast)
       }
     }
-    return SmnWeatherService(transport, clock::read, Dispatchers.Unconfined, station) to transport
+    return SmnWeatherService(transport, clock::read, Dispatchers.Unconfined, station,
+      fallback = if (fallback) OpenMeteoFallback(transport) else null) to transport
   }
 
   @Test fun temperaturaConSensacionTermica() = runBlocking {
@@ -62,7 +65,7 @@ class SmnWeatherServiceTest {
     repeat(2) {
       val reply = blocked.answer(temperature)
       assertFalse(reply.answered)
-      assertEquals("El SMN no permitió la consulta automática de la medición en este momento.", reply.text)
+      assertEquals(SmnWeatherText.temperatureFailure, reply.text)
     }
     assertEquals(1, transport.calls.size)
   }
@@ -145,13 +148,13 @@ class SmnWeatherServiceTest {
     val (blocked, blockedTransport) = service(Clock(smnTime(2026, 11, 20, 13))) { url ->
       if (url.startsWith(PORTAL)) html(CLOUDFLARE_BLOCK, 403) else json(forecastJson)
     }
-    repeat(2) { assertEquals("El SMN no permitió la consulta automática del pronóstico en este momento.", blocked.answer(rain).text) }
+    repeat(2) { assertEquals(SmnWeatherText.rainFailure, blocked.answer(rain).text) }
     assertEquals(1, blockedTransport.calls.size)
 
     val (failing, _) = service(Clock(smnTime(2026, 11, 20, 13))) { url ->
       if (url.startsWith(PORTAL)) throw SmnException(SmnErrorKind.TIMEOUT, "lento") else json(forecastJson)
     }
-    assertEquals("No pude consultar el pronóstico actualizado del SMN.", failing.answer(rain).text)
+    assertEquals(SmnWeatherText.rainFailure, failing.answer(rain).text)
   }
 
   @Test fun laVentanaTomaComoMaximoDosBloquesYDescartaLosTerminados() {
@@ -161,5 +164,31 @@ class SmnWeatherServiceTest {
     assertEquals(listOf(SmnPeriod.AFTERNOON, SmnPeriod.NIGHT), service.window(periods, at).map { it.period })
     assertEquals(listOf(SmnPeriod.NIGHT), service.window(periods, smnTime(2026, 11, 20, 18)).map { it.period })
     assertTrue(service.window(periods, smnTime(2026, 11, 22, 0)).isEmpty())
+  }
+
+  @Test fun conElSmnCaidoRespondeOpenMeteoYReintentaElSmnEnLaProximaConsulta() = runBlocking {
+    val clock = Clock(smnTime(2026, 11, 20, 15, 10))
+    val (service, transport) = service(clock, fallback = true) { url ->
+      if (url.startsWith(OPEN_METEO)) json(OPEN_METEO_SAMPLE) else html(SMN_OUTAGE_503, 503)
+    }
+    val reply = service.answer(temperature)
+    assertTrue(reply.answered)
+    assertEquals("Según Open-Meteo (el SMN no está respondiendo), en Buenos Aires hay 24,4 grados (dato de las 15:00). " +
+      "La sensación térmica es de 24,2.", reply.text)
+    assertEquals("Según Open-Meteo (el SMN no está respondiendo), la sensación térmica en Buenos Aires es de 24,2 grados (dato de las 15:00).",
+      service.answer(feelsLike).text)
+    assertEquals("An outage is not a block: no cooldown", 2, transport.count(OPEN_DATA))
+    assertEquals("Backup cached", 1, transport.count(OPEN_METEO))
+
+    val rainReply = service.answer(rain)
+    assertTrue(rainReply.answered)
+    assertEquals("Según Open-Meteo (el SMN no está respondiendo), en Buenos Aires entre las 15:00 y las 20:00 la probabilidad " +
+      "de lluvia va de un 46 a un 75 por ciento; la más alta es a las 17:00.", rainReply.text)
+    assertFalse(rainReply.text.contains("no permitió"))
+  }
+
+  @Test fun unaMedicionViejaDelSmnUsaElRespaldo() = runBlocking {
+    val (service, _) = service(Clock(smnTime(2026, 11, 20, 15, 30)), fallback = true)
+    assertTrue(service.answer(temperature).text.startsWith("Según Open-Meteo"))
   }
 }

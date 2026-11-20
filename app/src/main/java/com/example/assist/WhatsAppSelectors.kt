@@ -13,6 +13,8 @@ data class UiNode(
   val visible: Boolean = true,
   val enabled: Boolean = true,
   val bounds: Box = Box(0, 0, 0, 0),
+  /** An empty field that reports its placeholder («Mensaje») as text. */
+  val showingHint: Boolean = false,
 ) {
   data class Box(val left: Int, val top: Int, val right: Int, val bottom: Int) {
     val width: Int get() = right - left
@@ -97,6 +99,16 @@ object WhatsAppSelectors {
       *composerIds.map { id -> { choose("composer.id.$id", tree.byId("$pkg:id/$id")) } }.toTypedArray(),
       { choose("composer.editable", tree.walk().filter { it.editable }.toList()) },
     )
+  }
+
+  /**
+   * True when the composer no longer holds [sent]: empty, showing its placeholder, or with other text. WhatsApp
+   * empties the field right after a send; many Android versions then report the hint («Mensaje») as its text.
+   */
+  fun composerCleared(composer: Result, sent: String): Boolean {
+    val node = (composer as? Result.Found)?.node ?: return false
+    val text = node.text
+    return text.isNullOrEmpty() || node.showingHint || text.trim() != sent.trim()
   }
 
   /** The chat's voice-note microphone. Its description often continues with a hint, so the label must start with it. */

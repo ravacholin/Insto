@@ -261,7 +261,7 @@ fun AssistOverlayScreen(
         }
         if (state.needsGroqKey) TextButton(onClick = onConfigureGroq) { Text("Configurar mi clave de Groq") }
         if (state.error?.contains("contacto") == true) TextButton(onClick = onConfigureContact) { Text("Configurar contacto de Instinct") }
-          state.autoSendHealth?.let { health ->
+          state.autoSendHealth?.takeIf { it.state != com.example.assist.AutoSendHealth.State.READY }?.let { health ->
           Text("${health.state.title}. ${health.reason}", color = secondary, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.testTag("overlay_autosend_health"))
           if (health.state != com.example.assist.AutoSendHealth.State.READY) {

@@ -43,3 +43,13 @@ internal const val CLOUDFLARE_BLOCK =
 internal const val API = "https://ws1.smn.gob.ar/"
 internal const val PORTAL = "https://www.smn.gob.ar/"
 internal const val OPEN_DATA = "https://ssl.smn.gob.ar/"
+
+/** The SMN's real outage page (20/11/2026): Cloudflare injects a challenge-platform script, but it is not a block. */
+internal const val SMN_OUTAGE_503 = "<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.\n" +
+  "<script>window.__CF\$cv\$params={r:'a5d96a1ecbf2f5fc',i:60};(function(){var u='/cdn-cgi/challenge-platform/scripts/precursor/main.js?ray=a5d96a1ecbf2f5fc';})();</script></body></html>"
+
+internal const val OPEN_METEO = "https://api.open-meteo.com/"
+internal val OPEN_METEO_SAMPLE = """{"latitude":-34.6,"longitude":-58.38,"utc_offset_seconds":-10800,"timezone":"America/Argentina/Buenos_Aires",
+  "current":{"time":"2026-11-20T15:00","interval":900,"temperature_2m":24.4,"apparent_temperature":24.2},
+  "hourly":{"time":["2026-11-20T15:00","2026-11-20T16:00","2026-11-20T17:00","2026-11-20T18:00","2026-11-20T19:00","2026-11-20T20:00"],
+  "precipitation_probability":[63,71,75,73,62,46]}}"""

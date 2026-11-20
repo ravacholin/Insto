@@ -286,7 +286,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
           val tree = AccessibilityUiTree(root)
           if (matchesRecipient(tree, pkg, phone, name, true)) {
             val composer = WhatsAppSelectors.composer(tree, pkg, text)
-            cleared = composer is WhatsAppSelectors.Result.Found && composer.node.text.isNullOrEmpty()
+            cleared = WhatsAppSelectors.composerCleared(composer, text)
           }
         }
         if (cleared) {
@@ -536,7 +536,8 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
     if (!matchesRecipient(tree, pkg, phone, AutoSendCoordinator.recipientName, true)) return false
     val composer = WhatsAppSelectors.composer(tree, pkg, "")
     // An ambiguous Send still counts as present: the chat is not shown as submitted.
-    return composer is WhatsAppSelectors.Result.Found && composer.node.text.isNullOrEmpty() &&
+    return composer is WhatsAppSelectors.Result.Found &&
+      (composer.node.text.isNullOrEmpty() || composer.node.showingHint) &&
       WhatsAppSelectors.sendButton(tree, pkg) == WhatsAppSelectors.Result.NotFound &&
       WhatsAppSelectors.voiceMic(tree, pkg) is WhatsAppSelectors.Result.Found
   }
@@ -551,7 +552,8 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
           val tree = AccessibilityUiTree(root)
           if (matchesRecipient(tree, pkg, phone, name, true)) {
             val composer = WhatsAppSelectors.composer(tree, pkg, "")
-            submitted = composer is WhatsAppSelectors.Result.Found && composer.node.text.isNullOrEmpty() &&
+            submitted = (composer is WhatsAppSelectors.Result.Found &&
+              (composer.node.text.isNullOrEmpty() || composer.node.showingHint)) &&
               WhatsAppSelectors.sendButton(tree, pkg) == WhatsAppSelectors.Result.NotFound
           }
         }

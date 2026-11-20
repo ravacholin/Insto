@@ -8,7 +8,7 @@ import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 
 /** Typed SMN failures. Messages never contain tokens, bodies or user text. */
-enum class SmnErrorKind { NETWORK, TIMEOUT, BLOCKED, RATE_LIMITED, UNAUTHORIZED, NOT_JSON, MALFORMED, TOO_LARGE }
+enum class SmnErrorKind { NETWORK, TIMEOUT, BLOCKED, RATE_LIMITED, UNAVAILABLE, UNAUTHORIZED, NOT_JSON, MALFORMED, TOO_LARGE }
 
 class SmnException(val kind: SmnErrorKind, message: String, cause: Throwable? = null) : Exception(message, cause)
 
@@ -86,20 +86,29 @@ class SmnCooldown(private val clock: () -> Long, private val durationMillis: Lon
 internal object SmnResponses {
   private const val SNIFF = 64 * 1024
 
-  /** Cloudflare challenge or block page, regardless of status. */
+  /**
+   * Cloudflare challenge or block page, regardless of status. Cloudflare injects a `/cdn-cgi/challenge-platform/`
+   * script into ordinary error pages too (the SMN's own 503), so that path alone is not a challenge.
+   */
   fun isChallenge(response: SmnHttpResponse): Boolean {
     if (response.header("cf-mitigated")?.trim()?.equals("challenge", ignoreCase = true) == true) return true
     val type = response.header("content-type").orEmpty().lowercase(java.util.Locale.ROOT)
     val start = String(response.body, 0, minOf(response.body.size, SNIFF), Charsets.ISO_8859_1)
     if (!type.contains("html") && !start.trimStart().startsWith("<")) return false
-    return start.contains("Attention Required") || start.contains("cf-chl") || start.contains("challenge-platform")
+    return start.contains("Attention Required") || start.contains("cf-chl") || start.contains("_cf_chl_opt") ||
+      start.contains("Just a moment...")
   }
 
-  /** Throws for blocks and limits, and starts the host cooldown. Other statuses are left to the caller. */
+  /**
+   * Throws for blocks and limits, and starts the host cooldown. A plain 5xx means the SMN server is down
+   * («No server is available to handle this request»): it throws [SmnErrorKind.UNAVAILABLE] without a cooldown,
+   * so the next question tries again. Other statuses are left to the caller.
+   */
   fun rejectBlocked(host: String, response: SmnHttpResponse, cooldown: SmnCooldown) {
     val kind = when {
       isChallenge(response) || response.code == 403 -> SmnErrorKind.BLOCKED
-      response.code == 429 || response.code == 503 -> SmnErrorKind.RATE_LIMITED
+      response.code == 429 -> SmnErrorKind.RATE_LIMITED
+      response.code in 500..599 -> throw SmnException(SmnErrorKind.UNAVAILABLE, "El servidor del SMN no está disponible.")
       else -> return
     }
     cooldown.start(host, kind)

@@ -42,24 +42,26 @@ class AutoSendMetricsTest {
     }
   }
 
-  @Test fun healthNeverCallsAnEnabledServiceReadyWithoutAConfirmedSend() {
+  @Test fun healthIsReadyWhenEnabledAndOnlyRecentFailuresAskForReview() {
     val empty = AutoSendMetrics.Snapshot()
-    assertEquals(State.DISABLED, AutoSendHealth.evaluate(false, false, installed, empty).state)
-    assertEquals(State.NEEDS_REVIEW, AutoSendHealth.evaluate(true, false, installed, empty).state)
-    assertEquals(State.NEEDS_REVIEW, AutoSendHealth.evaluate(true, true, null, empty).state)
-    val fresh = AutoSendHealth.evaluate(true, true, installed, empty)
-    assertEquals(State.NEEDS_REVIEW, fresh.state)
-    assertTrue(fresh.reason, fresh.reason.contains("Todavía no hay"))
+    assertEquals(State.DISABLED, AutoSendHealth.evaluate(false, false, installed, empty, 10).state)
+    assertEquals(State.NEEDS_REVIEW, AutoSendHealth.evaluate(true, false, installed, empty, 10).state)
+    assertEquals(State.NEEDS_REVIEW, AutoSendHealth.evaluate(true, true, null, empty, 10).state)
+    // No confirmed history is not a problem: an enabled, connected service is ready.
+    assertEquals(State.READY, AutoSendHealth.evaluate(true, true, installed, empty, 10).state)
 
     val confirmed = AutoSendMetrics.record(empty, Flavor.WHATSAPP, 262000, Kind.TEXT, "send.id.send", Outcome.CONFIRMED, 1)
-    assertEquals(State.READY, AutoSendHealth.evaluate(true, true, installed, confirmed).state)
-    val updated = AutoSendHealth.evaluate(true, true, installed.copy(versionCode = 263000, versionName = "2.26.30"), confirmed)
-    assertEquals(State.NEEDS_REVIEW, updated.state)
-    assertTrue(updated.reason, updated.reason.contains("se actualizó"))
+    assertEquals(State.READY, AutoSendHealth.evaluate(true, true, installed, confirmed, 10).state)
+    // A WhatsApp update does not ask for review either.
+    assertEquals(State.READY,
+      AutoSendHealth.evaluate(true, true, installed.copy(versionCode = 263000, versionName = "2.26.30"), confirmed, 10).state)
     val failedAfter = AutoSendMetrics.record(confirmed, Flavor.WHATSAPP, 262000, Kind.AUDIO, "send.label", Outcome.NOT_FOUND, 2)
-    assertEquals(State.NEEDS_REVIEW, AutoSendHealth.evaluate(true, true, installed, failedAfter).state)
+    assertEquals(State.NEEDS_REVIEW, AutoSendHealth.evaluate(true, true, installed, failedAfter, 10).state)
+    // An old failure is no longer shown.
+    assertEquals(State.READY,
+      AutoSendHealth.evaluate(true, true, installed, failedAfter, 2 + AutoSendHealth.FAILURE_RELEVANCE_MILLIS).state)
     // A failure with the other flavor does not change this one.
     val otherFlavor = AutoSendMetrics.record(confirmed, Flavor.BUSINESS, 5, Kind.TEXT, null, Outcome.TIMEOUT, 3)
-    assertEquals(State.READY, AutoSendHealth.evaluate(true, true, installed, otherFlavor).state)
+    assertEquals(State.READY, AutoSendHealth.evaluate(true, true, installed, otherFlavor, 10).state)
   }
 }

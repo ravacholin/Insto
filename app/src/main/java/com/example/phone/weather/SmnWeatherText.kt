@@ -34,14 +34,32 @@ object SmnWeatherText {
   fun missingStation(station: String) = "El último archivo del SMN no incluye una medición para $station."
   fun futureObservation(station: String) =
     "La medición del SMN para $station tiene una hora posterior a la actual; no la informo como temperatura actual."
-  fun temperatureFailure(kind: SmnErrorKind) = when (kind) {
-    SmnErrorKind.BLOCKED, SmnErrorKind.RATE_LIMITED -> "El SMN no permitió la consulta automática de la medición en este momento."
-    else -> "No pude consultar la medición actual del SMN."
+  /** Only when the SMN and the backup source both failed. */
+  const val temperatureFailure = "Ni el SMN ni Open-Meteo respondieron ahora. Probá de nuevo en unos minutos."
+  const val rainFailure = temperatureFailure
+
+  private const val FALLBACK = "Según Open-Meteo (el SMN no está respondiendo)"
+
+  fun fallbackTemperature(weather: FallbackWeather, feelsLikeOnly: Boolean): String {
+    val at = clock(weather.observedAtMillis)
+    val feels = weather.feelsLikeCelsius
+    if (feelsLikeOnly && feels != null)
+      return "$FALLBACK, la sensación térmica en Buenos Aires es de ${number(feels)} grados (dato de las $at)."
+    val measured = "$FALLBACK, en Buenos Aires hay ${number(weather.temperatureCelsius)} grados (dato de las $at)."
+    return if (feels != null) "$measured La sensación térmica es de ${number(feels)}." else measured
   }
 
-  fun rainFailure(kind: SmnErrorKind) = when (kind) {
-    SmnErrorKind.BLOCKED, SmnErrorKind.RATE_LIMITED -> "El SMN no permitió la consulta automática del pronóstico en este momento."
-    else -> "No pude consultar el pronóstico actualizado del SMN."
+  fun fallbackRain(weather: FallbackWeather): String {
+    val hours = weather.rain
+    if (hours.isEmpty()) return "$FALLBACK, no hay probabilidad de lluvia publicada para Buenos Aires en las próximas horas."
+    val values = hours.map { it.second }
+    val min = values.min()
+    val max = values.max()
+    val span = "entre las ${clock(hours.first().first)} y las ${clock(hours.last().first)}"
+    if (max == 0) return "$FALLBACK, en Buenos Aires $span la probabilidad de lluvia es de un cero por ciento."
+    val peak = clock(hours.first { it.second == max }.first)
+    val range = if (min == max) "es de ${percent(max)} por ciento" else "va de ${percent(min)} a ${percent(max)} por ciento"
+    return "$FALLBACK, en Buenos Aires $span la probabilidad de lluvia $range; la más alta es a las $peak."
   }
   fun staleForecast(location: String) =
     "El pronóstico del SMN para $location no se actualizó en las últimas 24 horas; no lo informo."
