@@ -80,7 +80,9 @@ class LocalLearningRoutingTest {
     val explicit = interpret("Poné una alarma a las 9 de la noche") as InterpretationResult.Direct
     assertEquals(PhoneCommand.Alarm(21, 0), explicit.command)
     assertFalse(explicit.learned)
-    val manual = PhoneCommand.Torch(true)
+    // The taught action must represent the phrase's explicit time (SemanticCommandGuard). Its label tells it
+    // apart from the structure's reading, so the phrase's priority stays observable.
+    val manual = PhoneCommand.Alarm(6, 45, label = "gimnasio")
     val taught = interpret("tirame una alarma para las 6:45", coordinator(phrase = { manual })) as InterpretationResult.Direct
     assertEquals(manual, taught.command)
     assertEquals(null, taught.pattern)

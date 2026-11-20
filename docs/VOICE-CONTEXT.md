@@ -4,9 +4,9 @@ Insto 1.10.0 (código 17), integrado sobre main `196685e` / PR #16. Incluye la b
 
 ## Grabación
 
-El VAD de WebRTC cierra tras 900 ms de silencio si el tramo entre la primera y última voz dura menos de 4 s; 1600 ms si dura entre 4 y 12 s; 2400 ms desde 12 s. Cada cuadro de voz reinicia el silencio. La escucha inicial conserva 4 s; el botón de envío permite cerrar antes. Se mantienen la grabación original, reintento sin repetir transcripción y cancelación de resultados obsoletos.
+Desde la versión siguiente a 1.12.0 la política de fin de habla es adaptativa y está documentada, con sus mediciones, en [VOICE-CAPTURE.md](VOICE-CAPTURE.md). En resumen: la grabación empieza con 160 ms de voz confirmada (no con un cuadro suelto), conserva 500 ms previos, y cierra tras 1100 ms de silencio si el tramo dura menos de 4 s, 1600 ms entre 4 y 12 s y 2400 ms desde 12 s; si la persona ya hizo una pausa de 600 ms o más y siguió hablando, la siguiente pausa tolera esa duración más 400 ms, hasta 2 s. La escucha inicial conserva 4 s; el botón de envío permite cerrar antes. Se mantienen la grabación original, reintento sin repetir transcripción y cancelación de resultados obsoletos.
 
-Es una heurística de duración, no una clasificación semántica de orden/dictado. Una pausa larga al comienzo de un dictado todavía puede cerrarlo; hay que validar los umbrales con hablantes y ruido reales antes de fijarlos para producción.
+Sigue siendo una heurística acústica, no una clasificación semántica de orden/dictado. Una vacilación de 900 ms o más en medio de una orden breve todavía puede cerrarla; hay que validar los umbrales con hablantes y ruido reales en teléfonos.
 
 ### Transcribir mientras hablás
 

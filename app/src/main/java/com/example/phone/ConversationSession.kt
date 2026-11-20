@@ -277,10 +277,13 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       val syntax = maskQuotes(input)
       val separators = Regex("\\s*[,;]\\s*|\\s+(?:y después|y despues|y luego|después|despues|luego|y)\\s+", RegexOption.IGNORE_CASE)
       // 'y' within quantities, titles and a time is not a separator unless followed by a command-like verb.
-      val verbs = Regex("^(?:pone|poneme|pon|baja|subi|abri|prende|enciende|encende|apaga|inicia|pausa|continua|reinicia|lleva|llevame|llama|agenda|busca|reproduci|compra|envia|borra|activa|desactiva|silencia|mostra|cancela)\\b")
+      val verbs = Regex("^(?:pone|poneme|pon|baja|subi|abri|prende|enciende|encende|apaga|inicia|pausa|continua|reinicia|lleva|llevame|llama|agenda|busca|reproduci|compra|envia|borra|activa|desactiva|silencia|mostra|cancela)(?:le|les|me|lo|la|los|las)?\\b")
+      // «Por favor, prendé…» and «Che, bajá…»: a leading courtesy or interjection is not a step of its own.
+      val courtesy = Regex("^(?:(?:por favor|porfa|por fa|che|dale|bueno|a ver|ok|okey|eh)(?: |$))+$")
       val boundaries = separators.findAll(input).filter { m ->
         ';' in m.value || verbs.containsMatchIn(PhoneCommandParser.normalize(input.substring(m.range.last + 1)))
-      }.filter { m -> syntax.getOrNull(m.range.first) != '_' }.toList()
+      }.filter { m -> syntax.getOrNull(m.range.first) != '_' }
+        .filterNot { m -> courtesy.matches(PhoneCommandParser.normalize(input.substring(0, m.range.first))) }.toList()
       if (boundaries.isEmpty()) return listOf(input)
       val result = mutableListOf<String>()
       var start = 0

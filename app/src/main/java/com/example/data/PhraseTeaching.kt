@@ -9,6 +9,7 @@ import com.example.phone.PhoneCommand
 import com.example.phone.PhoneCommandCodec
 import com.example.phone.PhoneCommandParser
 import com.example.phone.PhoneRoute
+import com.example.phone.SemanticCommandGuard
 import com.example.phone.StructuredCommandExtractor
 
 /**
@@ -86,6 +87,13 @@ object PhraseTeaching {
     }
     if (parser.chatGptSearchQuery(text) != null)
       return Phrase.Invalid("Insto manda «$text» a una búsqueda. Elegí una frase que no empiece como una búsqueda.")
+    when (val meaning = SemanticCommandGuard.check(text, listOf(command), java.util.Calendar.getInstance(), grounded = false)) {
+      SemanticCommandGuard.Verdict.Accepted -> Unit
+      is SemanticCommandGuard.Verdict.Rejected -> return Phrase.Invalid(
+        "«$text» incluye datos que la acción elegida no conserva. ${meaning.reason.substringBefore(" No se ejecut")}")
+      is SemanticCommandGuard.Verdict.NeedsClarification -> return Phrase.Invalid(
+        "«$text» tiene una hora ambigua. Indicá el período, por ejemplo «de la mañana», o una hora como 17:30.")
+    }
     if (!reachesLookup(text, command, parser)) return Phrase.Invalid(
       "Insto interpreta «$text» como una consulta para Instinct. Elegí una frase más corta y directa.",
     )

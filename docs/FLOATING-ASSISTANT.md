@@ -14,7 +14,7 @@ El [catálogo de intents](LOCAL-INTENTS.md) detalla parámetros, permisos y lím
 
 ## Teléfono e Instinct: una sola entrada
 
-El floating distingue automáticamente pedidos del teléfono y consultas generales, por texto o por una sola grabación. Se mantienen AudioRecord, WebRTC VAD, 300 ms de preroll y AAC-LC mono de 16 kHz en M4A. Tras tres segundos de silencio, o al tocar LISTO, finaliza esa grabación y envía una copia a Groq (`whisper-large-v3-turbo`, `language=es`). La transcripción se usa internamente para interpretar el pedido. Las acciones locales se ejecutan en Android; las consultas generales se envían a Instinct usando **el M4A original**, no texto. No hay selector de destino ni otro modo de micrófono. Los adjuntos siguen dirigidos a Instinct.
+El floating distingue automáticamente pedidos del teléfono y consultas generales, por texto o por una sola grabación. Se mantienen AudioRecord, WebRTC VAD, preroll (500 ms desde la calibración de [VOICE-CAPTURE.md](VOICE-CAPTURE.md)) y AAC-LC mono de 16 kHz en M4A. Tras tres segundos de silencio, o al tocar LISTO, finaliza esa grabación y envía una copia a Groq (`whisper-large-v3-turbo`, `language=es`). La transcripción se usa internamente para interpretar el pedido. Las acciones locales se ejecutan en Android; las consultas generales se envían a Instinct usando **el M4A original**, no texto. No hay selector de destino ni otro modo de micrófono. Los adjuntos siguen dirigidos a Instinct.
 
 ### Configuración personal de Groq
 
