@@ -8,9 +8,19 @@ Servicio Meteorológico Nacional (SMN):
 | `weather_temperature` | `PlatformAction.WEATHER_TEMPERATURE` (con `argument = "feels_like"` si se pregunta por la sensación térmica) | Datos abiertos «Estado del tiempo presente» (`tiepre`) |
 | `weather_rain` | `PlatformAction.WEATHER_RAIN` | API `ws1` del SMN, pronóstico por localidad |
 
-No intervienen Gemini Decisions, Groq ni Instinct. No se usa OpenWeather, Open-Meteo, Google
-Weather ni ningún otro tercero, servidor propio, clave de API, cuenta, GPS ni permiso de
-ubicación. La respuesta es texto en la superficie del asistente flotante: no se abre el
+No intervienen Gemini Decisions, Groq ni Instinct. No se usa clave de API, cuenta, GPS ni
+permiso de ubicación.
+
+**Respaldo:** si el SMN no responde (caído, bloqueado, sin medición vigente o pronóstico
+viejo), Insto consulta Open-Meteo (`api.open-meteo.com`, gratis y sin clave) con coordenadas
+fijas de Capital Federal y lo dice en la respuesta: «Según Open-Meteo (el SMN no está
+respondiendo), en Buenos Aires hay 24,4 grados (dato de las 15:00)…». Solo si fallan los dos
+aparece «Ni el SMN ni Open-Meteo respondieron ahora. Probá de nuevo en unos minutos.»
+
+**Caída del SMN (20/11/2026):** `ssl.smn.gob.ar` devolvió HTTP 503 «No server is available to
+handle this request». Cloudflare inyecta en esa página un script `/cdn-cgi/challenge-platform/`,
+que antes se interpretaba como bloqueo y activaba 30 minutos de espera. Ahora un 5xx sin desafío
+real es `UNAVAILABLE`: no hay espera y la próxima consulta vuelve a intentar con el SMN. La respuesta es texto en la superficie del asistente flotante: no se abre el
 navegador, no se envía nada a WhatsApp y no hay lectura en voz alta (Insto no tiene TTS).
 
 ## Estado de verificación (20/11/2026)

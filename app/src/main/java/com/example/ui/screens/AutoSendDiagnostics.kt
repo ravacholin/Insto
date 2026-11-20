@@ -53,7 +53,7 @@ fun AutoSendDiagnostics(flavor: WhatsAppFlavor) {
   if (confirmClear) AlertDialog(
     onDismissRequest = { confirmClear = false },
     title = { Text("¿Borrar las métricas del auto-envío?") },
-    text = { Text("El indicador va a mostrar «necesita revisión» hasta el próximo envío confirmado.") },
+    text = { Text("Se borran los contadores de envíos automáticos. El envío sigue funcionando igual.") },
     confirmButton = {
       TextButton(onClick = { AutoSendMetricsStore(context).clear(); confirmClear = false; revision++ }) {
         Text("Borrar", color = MaterialTheme.colorScheme.error)

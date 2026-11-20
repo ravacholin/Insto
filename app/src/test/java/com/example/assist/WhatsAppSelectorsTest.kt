@@ -2,6 +2,7 @@ package com.example.assist
 
 import com.example.assist.WhatsAppSelectorFixtures.Expectation
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -52,5 +53,16 @@ class WhatsAppSelectorsTest {
     }))
     assertEquals(WhatsAppSelectors.Result.Ambiguous("composer.id.entry"), WhatsAppSelectors.composer(tree(null, null), "com.whatsapp", "hola"))
     assertTrue(WhatsAppSelectors.composer(tree(null, "hola"), "com.whatsapp", "hola") is WhatsAppSelectors.Result.Found)
+  }
+
+  @Test fun theComposerCountsAsClearedWhenItShowsItsPlaceholder() {
+    fun found(node: UiNode) = WhatsAppSelectors.Result.Found(node, "composer.editable")
+    val sent = "hola Instinct"
+    assertFalse(WhatsAppSelectors.composerCleared(found(UiNode(text = sent, editable = true)), sent))
+    assertTrue(WhatsAppSelectors.composerCleared(found(UiNode(text = null, editable = true)), sent))
+    assertTrue("Android reports the hint as text", WhatsAppSelectors.composerCleared(
+      found(UiNode(text = "Mensaje", editable = true, showingHint = true)), sent))
+    assertTrue(WhatsAppSelectors.composerCleared(found(UiNode(text = "Mensaje", editable = true)), sent))
+    assertFalse(WhatsAppSelectors.composerCleared(WhatsAppSelectors.Result.NotFound, sent))
   }
 }

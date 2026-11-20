@@ -78,14 +78,20 @@ class SmnForecastClientTest {
     assertEquals(0, transport.count(API))
   }
 
-  @Test fun un429Y503SonLimitesDeFrecuencia() = runBlocking {
-    for (code in listOf(429, 503)) {
-      val transport = FakeTransport { url, _ -> if (url.startsWith(PORTAL)) html(portal(jwt())) else json("{}", code) }
-      val (client, _) = client(transport)
-      assertEquals(SmnErrorKind.RATE_LIMITED, failure(client))
-      assertEquals(SmnErrorKind.RATE_LIMITED, failure(client))
-      assertEquals(1, transport.count(API))
-    }
+  @Test fun un429EsLimiteDeFrecuencia() = runBlocking {
+    val transport = FakeTransport { url, _ -> if (url.startsWith(PORTAL)) html(portal(jwt())) else json("{}", 429) }
+    val (client, _) = client(transport)
+    assertEquals(SmnErrorKind.RATE_LIMITED, failure(client))
+    assertEquals(SmnErrorKind.RATE_LIMITED, failure(client))
+    assertEquals(1, transport.count(API))
+  }
+
+  @Test fun un503EsServidorCaidoYSeReintentaEnLaProximaConsulta() = runBlocking {
+    val transport = FakeTransport { url, _ -> if (url.startsWith(PORTAL)) html(portal(jwt())) else html("<html>503</html>", 503) }
+    val (client, _) = client(transport)
+    assertEquals(SmnErrorKind.UNAVAILABLE, failure(client))
+    assertEquals(SmnErrorKind.UNAVAILABLE, failure(client))
+    assertEquals("No cooldown for a server outage", 2, transport.count(API))
   }
 
   @Test fun noJsonMalformadoDemasiadoGrandeTimeoutYRed() = runBlocking {

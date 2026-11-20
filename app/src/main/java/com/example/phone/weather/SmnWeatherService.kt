@@ -32,6 +32,8 @@ class SmnWeatherService(
   val stationName: String = DEFAULT_STATION,
   /** `smn_id_interno` of «Capital Federal» in the SMN locality list. */
   val locationId: Int = DEFAULT_LOCATION_ID,
+  /** Answers when the SMN is down or has no current data; null disables it. */
+  private val fallback: WeatherFallback? = OpenMeteoFallback(transport),
 ) : WeatherQueries {
   private val cooldown = SmnCooldown(clock)
   private val openData = SmnOpenDataClient(transport, cooldown)
@@ -51,17 +53,17 @@ class SmnWeatherService(
     val rows = try {
       cached("tiepre", ::observationExpiry) { openData.observations() }
     } catch (error: SmnException) {
-      return SmnWeatherReply(SmnWeatherText.temperatureFailure(error.kind), answered = false)
+      return backupTemperature(feelsLikeOnly) ?: SmnWeatherReply(SmnWeatherText.temperatureFailure, answered = false)
     }
     val wanted = fold(stationName)
     val row = rows.firstOrNull { fold(it.stationName) == wanted }
-      ?: return SmnWeatherReply(SmnWeatherText.missingStation(stationName), answered = false)
+      ?: return backupTemperature(feelsLikeOnly) ?: SmnWeatherReply(SmnWeatherText.missingStation(stationName), answered = false)
     val now = clock()
     return when {
-      row.observedAtMillis > now + FUTURE_TOLERANCE_MILLIS ->
-        SmnWeatherReply(SmnWeatherText.futureObservation(row.stationName), answered = false)
-      now - row.observedAtMillis > MAX_OBSERVATION_AGE_MILLIS ->
-        SmnWeatherReply(SmnWeatherText.staleObservation(row.stationName), answered = true)
+      row.observedAtMillis > now + FUTURE_TOLERANCE_MILLIS -> backupTemperature(feelsLikeOnly)
+        ?: SmnWeatherReply(SmnWeatherText.futureObservation(row.stationName), answered = false)
+      now - row.observedAtMillis > MAX_OBSERVATION_AGE_MILLIS -> backupTemperature(feelsLikeOnly)
+        ?: SmnWeatherReply(SmnWeatherText.staleObservation(row.stationName), answered = true)
       else -> SmnWeatherReply(SmnWeatherText.temperature(row, feelsLikeOnly), answered = true)
     }
   }
@@ -70,13 +72,30 @@ class SmnWeatherService(
     val forecast = try {
       cached("forecast:$locationId", { it + FORECAST_TTL_MILLIS }) { forecasts.forecast(locationId) }
     } catch (error: SmnException) {
-      return SmnWeatherReply(SmnWeatherText.rainFailure(error.kind), answered = false)
+      return backupRain() ?: SmnWeatherReply(SmnWeatherText.rainFailure, answered = false)
     }
     val now = clock()
     val location = forecast.locationName ?: "la localidad $locationId del SMN"
     if (now - forecast.updatedAtMillis > MAX_FORECAST_AGE_MILLIS)
-      return SmnWeatherReply(SmnWeatherText.staleForecast(location), answered = false)
+      return backupRain() ?: SmnWeatherReply(SmnWeatherText.staleForecast(location), answered = false)
     return SmnWeatherReply(SmnWeatherText.rain(location, window(forecast.periods, now), now), answered = true)
+  }
+
+  private suspend fun backup(): FallbackWeather? {
+    val source = fallback ?: return null
+    return try {
+      cached("fallback", { it + FALLBACK_TTL_MILLIS }) { source.weather() }
+    } catch (_: SmnException) { null }
+  }
+
+  private suspend fun backupTemperature(feelsLikeOnly: Boolean): SmnWeatherReply? = backup()
+    ?.takeIf { clock() - it.observedAtMillis <= MAX_OBSERVATION_AGE_MILLIS }
+    ?.let { SmnWeatherReply(SmnWeatherText.fallbackTemperature(it, feelsLikeOnly), answered = true) }
+
+  private suspend fun backupRain(): SmnWeatherReply? = backup()?.let { weather ->
+    val now = clock()
+    val upcoming = weather.copy(rain = weather.rain.filter { it.first + 3_600_000L > now && it.first < now + RAIN_WINDOW_MILLIS })
+    SmnWeatherReply(SmnWeatherText.fallbackRain(upcoming), answered = true)
   }
 
   /** Published blocks overlapping [now, now + 6 h), in order, at most two. Finished blocks are dropped. */
@@ -120,6 +139,7 @@ class SmnWeatherService(
     const val DEFAULT_LOCATION_ID = 4864
     internal const val OBSERVATION_TTL_MILLIS = 5 * 60_000L
     internal const val FORECAST_TTL_MILLIS = 15 * 60_000L
+    internal const val FALLBACK_TTL_MILLIS = 10 * 60_000L
     internal const val MAX_OBSERVATION_AGE_MILLIS = 3 * 60 * 60_000L
     internal const val MAX_FORECAST_AGE_MILLIS = 24 * 60 * 60_000L
     internal const val RAIN_WINDOW_MILLIS = 6 * 60 * 60_000L

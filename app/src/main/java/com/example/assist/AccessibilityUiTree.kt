@@ -52,6 +52,7 @@ class AccessibilityUiTree(private val root: AccessibilityNodeInfo) : UiTree {
         editable = node.isEditable,
         visible = node.isVisibleToUser,
         enabled = node.isEnabled,
+        showingHint = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && node.isShowingHintText,
         bounds = UiNode.Box(rect.left, rect.top, rect.right, rect.bottom),
       )
     }
