@@ -1,10 +1,9 @@
 package com.example.phone
 
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.withTimeout
+import okhttp3.Interceptor
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -16,7 +15,8 @@ fun interface StructuredCommandExtractor {
 /** generateContent proposes data; every result is validated and reviewed before effects. */
 class StructuredCommandClient(
   private val key: () -> String?,
-  private val connectionFactory: ((URL) -> HttpURLConnection)? = null,
+  /** Test seam replacing the network; production uses the shared transport. */
+  private val transport: Interceptor? = null,
   private val timeoutMillis: Long = 8_000,
 ) : StructuredCommandExtractor {
   override suspend fun extract(text: String): List<PhoneCommand> = when (val result = interpret(InterpretationRequest(text))) {
@@ -57,8 +57,7 @@ class StructuredCommandClient(
     modelRejected: ((String) -> Boolean)? = null,
   ): String {
     val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
-    val legacy = connectionFactory?.let { factory -> { factory(URL(url)) } }
-    return GeminiTransport.post(key, payload, url, legacy, remainingMillis, modelRejected = modelRejected)
+    return GeminiTransport.post(key, payload, url, transport, remainingMillis, modelRejected = modelRejected)
   }
 
   companion object {

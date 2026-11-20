@@ -68,6 +68,7 @@ object SemanticCommandGuard {
       if (subjectHead.containsMatchIn(stepSyntax) && candidates.any(::isDeviceEffect))
         return Verdict.Rejected("La acción del teléfono aparece como tema de una búsqueda o un mensaje, no como orden. No se ejecutó.")
       direction(stepSyntax, candidates)?.let { return Verdict.Rejected(it) }
+      foreignTarget(stepSyntax, candidates)?.let { return Verdict.Rejected(it) }
     }
 
     for (duration in durations(syntax)) {
@@ -286,8 +287,12 @@ object SemanticCommandGuard {
   private fun direction(step: String, commands: List<PhoneCommand>): String? {
     val off = Regex("\\b(?:apag|desactiv)[a-z]*\\b").containsMatchIn(step)
     val on = Regex("\\b(?:prend|encend|enciend|activ)[a-z]*\\b").containsMatchIn(step)
+    // «Dejá de iluminar» stops the light even without «apagá».
+    val stop = Regex("\\bdeja(?:me)? de\\b").containsMatchIn(step)
     for (command in commands) when (command) {
-      is PhoneCommand.Torch -> if ("linterna" in step && (off && !on && command.enabled || on && !off && !command.enabled))
+      is PhoneCommand.Torch -> if (stop && !on && command.enabled && torchTarget.containsMatchIn(step))
+        return "La interpretación invirtió la acción sobre la linterna. No se ejecutó."
+      else if ("linterna" in step && (off && !on && command.enabled || on && !off && !command.enabled))
         return "La interpretación invirtió la acción sobre la linterna. No se ejecutó."
       is PhoneCommand.Volume -> if (Regex("\\b(?:volumen|sonido)\\b").containsMatchIn(step)) {
         val down = Regex("\\b(?:baj|reduc)[a-z]*\\b").containsMatchIn(step)
@@ -298,6 +303,27 @@ object SemanticCommandGuard {
       is PhoneCommand.Platform -> if ("no molestar" in step && (
           command.action == PlatformAction.DND_ON && off && !on || command.action == PlatformAction.DND_OFF && on && !off))
         return "La interpretación invirtió el modo No molestar. No se ejecutó."
+      else -> Unit
+    }
+    return null
+  }
+
+  private val torchTarget = Regex("\\b(?:linterna|luz|luces|ilumin[a-z]*|flash|oscur[a-z]*)\\b")
+  private val volumeTarget = Regex("\\b(?:volumen|sonido|musica|audio|parlante|fuerte|bajito|baj[a-z]*|sub[a-z]*)\\b")
+  private val otherDevice = Regex("\\b(?:wifi|wi fi|bluetooth|datos moviles|modo avion|brillo|alarmas?|timers?|temporizador(?:es)?|cronometro|no molestar|camara|linterna|volumen|sonido)\\b")
+
+  /**
+   * A torch or volume proposal from a step that explicitly names another device, and not its own, is a different
+   * action: «apagá el wifi» is never the torch. Paraphrases that name no device («necesito luz») are unaffected.
+   */
+  private fun foreignTarget(step: String, commands: List<PhoneCommand>): String? {
+    val named = otherDevice.findAll(step).map { it.value }.toSet()
+    if (named.isEmpty()) return null
+    for (command in commands) when (command) {
+      is PhoneCommand.Torch -> if (!torchTarget.containsMatchIn(step) && named.any { it != "linterna" })
+        return "La interpretación eligió la linterna, pero el pedido nombra otro dispositivo. No se ejecutó."
+      is PhoneCommand.Volume -> if (!volumeTarget.containsMatchIn(step) && named.none { it == "volumen" || it == "sonido" })
+        return "La interpretación eligió el volumen, pero el pedido nombra otro dispositivo. No se ejecutó."
       else -> Unit
     }
     return null

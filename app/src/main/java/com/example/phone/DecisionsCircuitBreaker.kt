@@ -40,6 +40,9 @@ class DecisionsCircuitBreaker(
     }
   }
 
+  /** Decisions failed recently: the next interpretation is likely to need the fallback provider. */
+  @Synchronized internal fun degraded(): Boolean = failures > 0 || retryAt != null
+
   @Synchronized internal fun abandon(attempt: Attempt) {
     if (attempt.epoch == epoch && attempt.probe) probing = false
   }

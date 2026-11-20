@@ -15,3 +15,19 @@ publica como `android-unit-test-coverage` cuando se pudo generar.
    **test** del workflow **Android tests**, con GitHub Actions como origen.
 4. Guardá la regla. En un PR hacia `main`, verificá que el check figure como
    requerido en la sección de merge.
+
+## Verificación local sin el workflow
+
+Con el Android SDK (`platforms;android-36.1`, `build-tools;36.0.0`) en `local.properties`, la misma clave de firma
+debug efímera que crea el workflow y Java 21:
+
+```sh
+./gradlew testDebugUnitTest assembleDebug lintDebug
+python3 scripts/test-phone-core.py   # pruebas JVM sin Android, incluidas red y sesiones puras
+```
+
+La compilación release necesita la clave de distribución. Para verificarla sin ella, sin tocar la configuración,
+alcanza con una clave efímera indicada por las variables que ya lee el build (`KEYSTORE_PATH`, `STORE_PASSWORD`,
+`KEY_PASSWORD`); el APK resultante no es distribuible. Ver
+[`architecture/reliability-refactor.md`](architecture/reliability-refactor.md) para las pruebas nuevas y las que
+requieren un dispositivo.

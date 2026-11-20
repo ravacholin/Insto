@@ -22,8 +22,8 @@ ARTIFACTS = {
     "coroutines": "org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.10.2/kotlinx-coroutines-core-jvm-1.10.2.jar",
     "coroutines-test": "org/jetbrains/kotlinx/kotlinx-coroutines-test-jvm/1.10.2/kotlinx-coroutines-test-jvm-1.10.2.jar",
     "annotations": "org/jetbrains/annotations/13.0/annotations-13.0.jar",
-    "okhttp": "com/squareup/okhttp3/okhttp/4.10.0/okhttp-4.10.0.jar",
-    "okio": "com/squareup/okio/okio-jvm/3.0.0/okio-jvm-3.0.0.jar",
+    "okhttp": "com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.jar",
+    "okio": "com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar",
     "json": "org/json/json/20240303/json-20240303.jar",
     "junit": "junit/junit/4.13.2/junit-4.13.2.jar",
     "hamcrest": "org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar",
@@ -68,15 +68,20 @@ def main():
         "data/AssistantModels.kt", "backup/BackupCrypto.kt", "backup/BackupFormat.kt",
         "backup/ConfigurationBackupManager.kt", "backup/BackupSections.kt",
         "whatsapp/PhoneNumberUtils.kt", "speech/AudioTranscriber.kt",
-        "speech/GroqTranscriber.kt", "speech/VocabularyHints.kt")]
+        "speech/GroqTranscriber.kt", "speech/VocabularyHints.kt",
+        "session/SessionLifecycle.kt", "session/ActionExecutionLedger.kt")]
     tests = [ROOT / "app/src/test/java/com/example/audio" / name for name in (
         "VoiceSessionPolicyTest.kt", "VoiceCaptureTraceTest.kt")]
     tests += [ROOT / "app/src/test/java/com/example/context/SharedTextContextTest.kt"]
+    # Session identity and state machine; the ledger test also uses Android-backed auto-send types (Gradle only).
+    tests += [ROOT / "app/src/test/java/com/example/session/SessionLifecycleTest.kt"]
     tests += [ROOT / "app/src/test/java/com/example" / name for name in (
         "AutoSendGuardTest.kt", "ShareConfirmationPolicyTest.kt",
         "speech/GroqTranscriberTest.kt", "speech/VocabularyHintsTest.kt")]
     tests += [ROOT / "app/src/test/java/com/example/assist" / name for name in (
         "WhatsAppSelectorFixtures.kt", "WhatsAppSelectorsTest.kt", "AutoSendMetricsTest.kt")]
+    # Shared HTTP test double: replaces the network, keeps the transport policies.
+    tests += [ROOT / "app/src/test/java/com/example/phone/FakeHttp.kt"]
     tests += sorted((ROOT / "app/src/test/java/com/example/backup").glob("*Test.kt"))
     tests += sorted((ROOT / "app/src/test/java/com/example/phone/weather").glob("*.kt"))
     for path in sorted((ROOT / "app/src/test/java/com/example/phone").glob("*Test.kt")):

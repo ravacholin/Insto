@@ -149,7 +149,8 @@ object RequestSafetyPolicy {
     if (WeatherIntentParser.isQuery(text)) return null
     val s = PhoneCommandParser.normalize(withoutQuotedText(text))
     if (text.trimStart().firstOrNull() in listOf('"', '“', '«') ||
-      Regex("^(?:supone|imagina|dijo|dice|escribio|cito)\\b").containsMatchIn(s))
+      // Rioplatense forms too: «suponete que…», «imaginate…», «supongamos…».
+      Regex("^(?:supone(?:te)?|supongamos|imagina(?:te)?|imaginemos|dijo|dice|escribio|cito)\\b").containsMatchIn(s))
       return "El pedido parece una cita o una hipótesis. Indicá qué querés hacer ahora."
     val command = PhoneCommandParser.canonicalRequest(s)
     // «Dale, no, …» and «che, ni se te ocurra …» are negations after an interjection.
