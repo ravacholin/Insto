@@ -99,6 +99,7 @@ fun LearnedPhrasesContent(store: LearnedPhraseStore, onMessage: (String) -> Unit
     HowItWorks("Aprende solo", "Cuando Insto necesita el modelo para entender un pedido simple, lo confirmás y sale bien, guarda esa frase. La próxima vez la resuelve en el teléfono, sin red.")
     HowItWorks("Le enseñás vos", "Tocá «Agregar frase», escribí lo que vas a decir y elegí la acción de la lista: linterna, volumen, una app, una rutina, un temporizador y más.")
     HowItWorks("Para editar", "Tocá cualquier frase de la lista para cambiar el texto o la acción. Las que aprendió sola también se pueden editar.")
+    HowItWorks("Estructuras", "Si confirmás o usás varias veces la misma forma con valores distintos, como «tirame una alarma para las 8», «… las 9» y «… las 7:30», Insto aprende la estructura y resuelve un valor nuevo sin red. Solo para alarmas, temporizadores y volumen.")
     HowItWorks("También con la voz", "«Cuando diga luz, prendé la linterna» · «Corregí esta frase: abrí YouTube» · «Olvidá esta frase»")
     SettingsDescription("Los comandos que Insto ya reconoce tienen prioridad. Las llamadas, los mensajes, los archivos y los cambios de calendario no se asocian a frases. Cada acción pasa por los permisos y confirmaciones de siempre.")
   }
@@ -140,13 +141,15 @@ fun LearnedPhrasesContent(store: LearnedPhraseStore, onMessage: (String) -> Unit
     }
   }
 
+  PatternsSection(settings, store, scope, onMessage)
+
   SettingsSection("Copia de seguridad") {
     SettingsDescription("Las frases no se incluyen en la copia de Android. Guardalas en un archivo para pasarlas a otro teléfono. Al importar, las frases del archivo reemplazan a las iguales.")
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       OutlinedButton(onClick = { exporter.launch("insto-frases.json") }, enabled = !settings?.entries.isNullOrEmpty()) { Text("Exportar") }
       OutlinedButton(onClick = { importer.launch(arrayOf("application/json", "text/plain")) }, enabled = settings != null) { Text("Importar") }
     }
-    if (!settings?.entries.isNullOrEmpty()) {
+    if (!settings?.entries.isNullOrEmpty() || !settings?.patterns.isNullOrEmpty()) {
       TextButton(onClick = { confirmDeleteAll = true }) { Text("Borrar todas", color = MaterialTheme.colorScheme.error) }
     }
   }
@@ -154,7 +157,7 @@ fun LearnedPhrasesContent(store: LearnedPhraseStore, onMessage: (String) -> Unit
   if (confirmDeleteAll) AlertDialog(
     onDismissRequest = { confirmDeleteAll = false },
     title = { Text("¿Borrar todas las frases?") },
-    text = { Text("Se borran las aprendidas y las que agregaste. No se puede deshacer.") },
+    text = { Text("Se borran las aprendidas, las que agregaste y las estructuras aprendidas. No se puede deshacer.") },
     confirmButton = {
       TextButton(onClick = {
         confirmDeleteAll = false
@@ -179,6 +182,47 @@ fun LearnedPhrasesContent(store: LearnedPhraseStore, onMessage: (String) -> Unit
         }
       },
     )
+  }
+}
+
+/** Learned structures: shown, switched off or deleted. They are never edited as text. */
+@Composable
+private fun PatternsSection(
+  settings: LearnedPhraseStore.Settings?,
+  store: LearnedPhraseStore,
+  scope: kotlinx.coroutines.CoroutineScope,
+  onMessage: (String) -> Unit,
+) {
+  val all = settings?.patterns.orEmpty()
+  val active = all.filter { it.active }
+  SettingsSection("Estructuras aprendidas") {
+    if (active.isEmpty()) SettingsDescription("Todavía no hay estructuras. Se aprenden con al menos ${com.example.phone.PhrasePatterns.MIN_EXAMPLES} valores distintos de la misma forma.")
+    for (pattern in active) {
+      HorizontalDivider()
+      Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          Text("«${pattern.template}»", style = MaterialTheme.typography.bodyLarge)
+          Text(pattern.action.label, style = MaterialTheme.typography.bodyMedium)
+          val uses = when (pattern.uses) { 0L -> "sin usar"; 1L -> "1 uso"; else -> "${pattern.uses} usos" }
+          Text("Ejemplos: ${pattern.examples.joinToString(", ")} · $uses", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = pattern.enabled, onCheckedChange = { value ->
+          scope.launch {
+            try { store.setPatternEnabled(pattern.template, value) } catch (_: IOException) { onMessage("No pude cambiar la estructura.") }
+          }
+        })
+        TextButton(onClick = {
+          scope.launch {
+            try { store.deletePattern(pattern.template); onMessage("Borré «${pattern.template}».") }
+            catch (_: IOException) { onMessage("No pude borrar la estructura.") }
+          }
+        }) { Text("Borrar", color = MaterialTheme.colorScheme.error) }
+      }
+    }
+    val learning = all.size - active.size
+    if (learning > 0) SettingsDescription(if (learning == 1) "1 estructura más está reuniendo ejemplos." else "$learning estructuras más están reuniendo ejemplos.")
   }
 }
 

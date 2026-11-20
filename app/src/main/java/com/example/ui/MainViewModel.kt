@@ -161,6 +161,8 @@ class MainViewModel @JvmOverloads constructor(
   private val monotonicClock: () -> Long = android.os.SystemClock::elapsedRealtime,
   groqFallback: StructuredCommandExtractor? = null,
   private val learnedPhrases: LearnedPhraseStore = LearnedPhraseStore(application),
+  /** Process-wide and in memory only: the panel closes after each handoff, the next order may refer to it. */
+  private val operationalContext: com.example.phone.OperationalContext = com.example.phone.OperationalContext.shared,
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
@@ -185,12 +187,15 @@ class MainViewModel @JvmOverloads constructor(
 
   fun resumeFloatingAssistant() { floatingPaused = false }
   private val phoneParser = PhoneCommandParser()
-  private val phoneExecutor = PhoneActionExecutor(application)
+  private val phoneExecutor = PhoneActionExecutor(application, preferredMediaPackage = operationalContext::preferredMediaPackage)
   private val conversation = ConversationSession()
   private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).read() })
   private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor,
-    verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter, lookupLearnedPhrase = learnedPhrases::lookup)
+    verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter, lookupLearnedPhrase = learnedPhrases::lookup,
+    lookupLearnedPattern = learnedPhrases::lookupPattern, operationalContext = operationalContext)
   private var learningPreview: InterpretationRequest? = null
+  /** A model interpretation executed without confirmation: an example for learned structures once it succeeds. */
+  private var patternExample: Pair<InterpretationRequest, PhoneCommand>? = null
   private var learnedCommandConfirmation = false
   private var semanticDraft: DraftPlan? = null
   private data class QueryPreview(val text: String, val generation: Long)
@@ -252,6 +257,9 @@ class MainViewModel @JvmOverloads constructor(
 
   fun cancelFloatingWorkflow() {
     learningPreview = null
+    patternExample = null
+    // Cancelling ends the operational session: the next order cannot lean on what came before.
+    operationalContext.clear()
     val hadWorkflow = activeWorkflow() != null
     floatingGeneration++; floatingJob?.cancel()
     cancelClockAutomation?.invoke(); cancelClockAutomation = null
@@ -469,6 +477,14 @@ class MainViewModel @JvmOverloads constructor(
       syncWorkflow(); return
     }
     if (learning != null && result.stopwatchAutomation == null) learnedPhrases.saveConfirmed(learning, command, result)
+    patternExample?.let { (request, proposed) ->
+      // A pending confirmation keeps the example until the same command is executed.
+      if (proposed == command && result.confirmation == null) {
+        patternExample = null
+        if (!inWorkflow) learnedPhrases.savePatternExample(request, command, result)
+      }
+    }
+    operationalContext.record(command, result)
     confirmation = result.confirmation
     if (result.needsCamera) cameraCommand = command
     if (result.needsContacts) contactsCommand = command
@@ -601,11 +617,13 @@ class MainViewModel @JvmOverloads constructor(
       }
     }
     learningPreview = null
+    patternExample = null
     // A new request has one classification gateway. Continuations above retain their selected intent.
     semanticDraft = null; conversation.clear(); clarification = null; clarificationRequest = null
     confirmation=null; cameraCommand=null; contactsCommand=null; notificationsCommand=null; appChoiceCommand=null; calendarQuery=null
     workflow.invalidatePreview(); syncWorkflow()
     floatingState.value = floatingState.value.copy(needsConfirmation=false,appOptions=emptyList(),contactOptions=emptyList(),needsCamera=false,needsContacts=false,needsNotifications=false,needsCalendarRead=false)
+    operationalContext.beginTurn(local)
     if (searchQuery != null) {
       openChatGptSearch(searchQuery, onDispatched)
       return true
@@ -744,14 +762,17 @@ class MainViewModel @JvmOverloads constructor(
       else {
         val proposed = when (result) {
           is InterpretationResult.Plan -> result.commands.singleOrNull()
-          is InterpretationResult.Direct -> result.command.takeIf { !result.learned && local !is PhoneRoute.Local }
+          is InterpretationResult.Direct -> result.command.takeIf { !result.learned && !result.contextual && local !is PhoneRoute.Local }
           else -> null
         }
         val canLearn = proposed != null && LearnedPhraseStore.allows(proposed) &&
           LearnedPhraseStore.key(request) != null
         if (result is InterpretationResult.Direct && result.learned) {
-          learnedPhrases.saveUse(request, result.command)
+          result.pattern?.let(learnedPhrases::savePatternUse) ?: learnedPhrases.saveUse(request, result.command)
         }
+        patternExample = (result as? InterpretationResult.Direct)?.takeIf {
+          !it.learned && !it.contextual && local !is PhoneRoute.Local && com.example.phone.PhrasePatterns.actionFor(it.command) != null
+        }?.let { request to it.command }
         val handled = applyInterpretation(result, text)
         learnedCommandConfirmation = result is InterpretationResult.Direct && result.learned && confirmation != null
         learningPreview = request.takeIf { canLearn && (confirmation != null ||
@@ -793,8 +814,10 @@ class MainViewModel @JvmOverloads constructor(
       }
       is InterpretationResult.Clarification -> {
         clarification = result.context
-        if (clarificationRequest == null) clarificationRequest = text to java.util.Calendar.getInstance()
-        conversation.accept(text)
+        // A learned structure or a contextual reading clarifies the request the local grammar understood.
+        val source = result.source ?: text
+        if (clarificationRequest == null) clarificationRequest = source to java.util.Calendar.getInstance()
+        conversation.accept(source)
         retainLocalAudio = true
         floatingState.value = floatingState.value.copy(mode=FloatingMode.IDLE,text="",status=result.prompt,error=null)
       }
@@ -1034,8 +1057,14 @@ class MainViewModel @JvmOverloads constructor(
     }
   }
 
-  fun dismissFloatingAssistant() {
+  /**
+   * [endOperationalContext] is true when the user closes the assistant. The panel also closes itself after a
+   * handoff (the ViewModel is cleared), and then the brief context remains for the next order until it expires.
+   */
+  fun dismissFloatingAssistant(endOperationalContext: Boolean = true) {
+    if (endOperationalContext) operationalContext.clear()
     learningPreview = null
+    patternExample = null
     cancelClockAutomation?.invoke()
     cancelClockAutomation = null
     floatingGeneration++
@@ -1822,7 +1851,7 @@ class MainViewModel @JvmOverloads constructor(
     stopDispatchJob?.cancel()
     amplitudeJob?.cancel()
     recorder.release()
-    dismissFloatingAssistant()
+    dismissFloatingAssistant(endOperationalContext = false)
     super.onCleared()
   }
 
