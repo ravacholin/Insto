@@ -30,7 +30,7 @@ class PhraseTeachingTest {
     }
   }
 
-  /** The examples in docs/releases/Insto-frases-aprendidas.md must work as written. */
+  /** Typical shortcuts people teach must be accepted. */
   @Test fun losEjemplosDeLaGuiaSePuedenGuardar() = runTest {
     for ((phrase, target) in listOf("luz" to "prendé la linterna", "modo estudio" to "ejecutá la rutina Estudio",
       "música" to "abrí Spotify", "té" to "poné un timer de cuatro minutos", "a casa" to "llevame a casa",

@@ -99,6 +99,7 @@ fun AssistantHomeScreen(
   onCancelRecording: () -> Unit,
   onRequestAudioPermission: () -> Unit,
   onOpenProviderSettings: () -> Unit,
+  onOpenLearnedPhrases: () -> Unit = {},
   onSelectOrbHoldBehavior: (OrbHoldBehavior) -> Unit,
   onSelectWhatsAppFlavor: (WhatsAppFlavor) -> Unit,
   onSelectVolumeKeyTrigger: (VolumeKeyTrigger) -> Unit,
@@ -286,6 +287,7 @@ fun AssistantHomeScreen(
       uiState = uiState,
       onDismiss = { showSetupSheet = false },
       onOpenProviderSettings = onOpenProviderSettings,
+      onOpenLearnedPhrases = onOpenLearnedPhrases,
       onSelectOrbHoldBehavior = onSelectOrbHoldBehavior,
       onSelectWhatsAppFlavor = onSelectWhatsAppFlavor,
       onSelectVolumeKeyTrigger = onSelectVolumeKeyTrigger,
@@ -370,6 +372,7 @@ private fun AssistantSetupSheet(
   uiState: PingAssistUiState,
   onDismiss: () -> Unit,
   onOpenProviderSettings: () -> Unit,
+  onOpenLearnedPhrases: () -> Unit = {},
   onSelectOrbHoldBehavior: (OrbHoldBehavior) -> Unit,
   onSelectWhatsAppFlavor: (WhatsAppFlavor) -> Unit,
   onSelectVolumeKeyTrigger: (VolumeKeyTrigger) -> Unit,
@@ -495,8 +498,13 @@ private fun AssistantSetupSheet(
         }
       }
 
+      SettingsCategory("Frases aprendidas", expandedCategory == "phrases", { toggleCategory("phrases") }) {
+        SettingsDescription("Atajos con tus palabras: elegí qué hace Insto cuando decís una frase. Podés agregarlas, editarlas y borrarlas.")
+        OutlinedButton(onClick = onOpenLearnedPhrases) { Text("Editar frases") }
+      }
+
       SettingsCategory("Reconocimiento e interpretación", expandedCategory == "providers", { toggleCategory("providers") }) {
-        SettingsDescription("Configurá Groq para transcribir audio, Gemini para interpretar pedidos y las frases que aprende PingAssist.")
+        SettingsDescription("Configurá Groq para transcribir audio y Gemini para interpretar pedidos.")
         OutlinedButton(onClick = onOpenProviderSettings) { Text("Abrir ajustes de voz e IA") }
       }
 
