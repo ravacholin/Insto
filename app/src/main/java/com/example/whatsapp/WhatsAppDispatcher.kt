@@ -10,6 +10,7 @@ import androidx.core.content.FileProvider
 import com.example.assist.ArmedActionMode
 import com.example.assist.AutoSendCoordinator
 import com.example.assist.PingAutoSendAccessibilityService
+import com.example.assist.finishUnsent
 import com.example.data.WhatsAppFlavor
 import java.io.File
 
@@ -47,9 +48,13 @@ object WhatsAppDispatcher {
     val request = AutoSendCoordinator.requestId
     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
       if (AutoSendCoordinator.requestId == request && AutoSendCoordinator.isArmedFor(pkg)) {
+        val touched = AutoSendCoordinator.reportFor(request)?.touched == true
+        AutoSendCoordinator.finishUnsent(context, request)
         AutoSendCoordinator.disarm()
-        android.widget.Toast.makeText(context,
-          AutoSendCoordinator.textWaitReason + " No se ha confirmado el envío.",
+        // Before any touch the content is still in WhatsApp; after one, it may have been sent: never repeat it.
+        val advice = if (touched) " No se confirmó el envío: revisá el chat antes de volver a enviarlo."
+          else " No se envió nada: el contenido quedó listo en WhatsApp para que toques Enviar."
+        android.widget.Toast.makeText(context, AutoSendCoordinator.textWaitReason + advice,
           android.widget.Toast.LENGTH_LONG).show()
       }
     }, 9_000L)

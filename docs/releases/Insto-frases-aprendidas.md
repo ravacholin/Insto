@@ -21,6 +21,47 @@ cronómetro requiere un resultado confirmado por el ejecutor.
 
 El aprendizaje automático nunca pisa una frase que agregaste vos.
 
+## Frases con un valor y formas parecidas (1.12.0)
+
+Una frase que contiene un valor sirve también con otros valores. Si Insto
+aprendió «bajá la música al 30», entonces «bajá la música al 50» pone el volumen
+en 50 sin consultar a Gemini. En la lista aparece como «Bajá la música al
+{número}».
+
+| Valor | Se muestra como | Para qué acciones |
+| --- | --- | --- |
+| Porcentaje de volumen | `{número}` | Fijar el volumen (0 a 100). |
+| Duración | `{duración}` | Temporizador sin nombre, solo en frases que agregaste vos. |
+| Hora | `{hora}` | Alarma sin fecha ni repetición, solo en frases que agregaste vos. |
+| App | `{app}` | Abrir una app. El nombre tiene que coincidir con una sola app instalada. |
+
+El valor nuevo se interpreta igual que en el pedido completo, con los mismos
+límites. «Al 150», una hora sin «de la mañana» o «de la tarde», un nombre que
+coincide con dos apps o un valor con palabras de más no se ejecutan: Insto sigue
+el camino de siempre. Las búsquedas, la navegación y las rutinas no se
+generalizan, porque su texto es libre. El interruptor «Usar también con otros
+valores», en el editor de cada frase, desactiva la generalización sin borrar la
+frase.
+
+También se reconocen formas parecidas de la misma frase:
+
+- voseo, tuteo e infinitivo del mismo verbo: «prendé», «prende», «prender»,
+  «prendeme»;
+- muletillas: «che», «dale», «bueno», «a ver» al principio, y «porfa» o «por
+  favor» en cualquier lugar;
+- una sola palabra de cinco letras o más con una letra de diferencia, como
+  «músca» por «música». Nunca se aplica a verbos, números ni negaciones.
+
+No se mezclan sinónimos: «prendé» y «encendé» siguen siendo frases distintas. Si
+dos frases guardadas quedan iguales al compararlas así, o un pedido coincide con
+dos acciones distintas, Insto no ejecuta ninguna y sigue el camino de siempre.
+Las negaciones y las condiciones nunca coinciden: tampoco «Dale, no, luz del
+pasillo no», «Ni se te ocurra…» o «… salvo que…».
+
+Una frase que agregaste vos tiene prioridad sobre una aprendida sola, y una
+frase exacta tiene prioridad sobre una con valor. El aprendizaje automático
+tampoco guarda una frase que, comparada así, coincide con una tuya.
+
 ## Cómo agregar y editar frases
 
 Todo se hace desde **Configuración → Frases aprendidas → Editar frases**, sin
@@ -81,7 +122,7 @@ aprendidas solas que hace más tiempo que no se usan.
 El registro queda fuera del respaldo y de la transferencia de datos de
 Android. **Exportar** guarda un archivo JSON y **Importar** lo vuelve a cargar
 en este u otro teléfono. El archivo se valida completo antes de cambiar nada.
-Las frases importadas reemplazan a las que tengan el mismo texto.
+Las frases importadas reemplazan a las que tengan el mismo texto. Para guardar frases, estructuras y el resto de la configuración en un solo archivo cifrado, usá **Configuración → Copia de seguridad y restauración** ([detalles](Insto-1.12.0-backup.md)). Esa copia nunca reemplaza una frase que agregaste vos al fusionar.
 
 Si apagás «Aprender y usar frases», las frases se conservan pero no se usan ni
 se aprenden nuevas.

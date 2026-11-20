@@ -38,7 +38,7 @@ object PhrasePatterns {
     "con", "mi", "tu", "se", "le", "porfa", "favor",
   )
   // A second time, date, repetition or label next to the slot would be silently dropped by the pattern.
-  private val forbiddenLiteral = Regex(
+  internal val forbiddenLiteral = Regex(
     "\\b(?:hoy|manana|pasado|ayer|todos|todas|cada|dias?|semana|lunes|martes|miercoles|jueves|viernes|sabados?|domingos?|" +
       "llamad[ao]|nombre|etiqueta|minutos?|segundos?|horas?|por ciento|durante|hasta|desde|dentro)\\b|[0-9%:]",
   )
@@ -92,7 +92,7 @@ object PhrasePatterns {
     return Observation(prefix, suffix, action, value, tokens.subList(start, end).joinToString(" "))
   }
 
-  private fun literalAllowed(literal: List<String>): Boolean =
+  internal fun literalAllowed(literal: List<String>): Boolean =
     literal.size >= 2 && literal.any { it.length >= 4 && it !in stopWords } &&
       !forbiddenLiteral.containsMatchIn(literal.joinToString(" ")) &&
       literal.none { it !in setOf("un", "una") && PhoneCommandParser.number(it) != null }

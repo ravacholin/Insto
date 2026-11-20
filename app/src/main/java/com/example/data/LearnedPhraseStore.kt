@@ -10,6 +10,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.phone.ConversationSession
 import com.example.phone.InterpretationRequest
+import com.example.phone.LearnedPhraseIndex
+import com.example.phone.PhraseCanonicalizer
 import com.example.phone.PhoneActionOutcome
 import com.example.phone.PhoneActionResult
 import com.example.phone.PhoneCommand
@@ -37,6 +39,8 @@ class LearnedPhraseStore internal constructor(
   private val isLaunchable: (String) -> Boolean,
   private val clock: () -> Long = System::currentTimeMillis,
   private val updates: CoroutineScope = storageScope,
+  /** The one launchable app whose label is exactly the given normalized text, or null. Used by «{app}» templates. */
+  private val resolveApp: (String) -> PhoneCommand.OpenApp? = { null },
 ) {
   constructor(context: Context) : this(
     context.applicationContext.learnedPhraseDataStore,
@@ -49,6 +53,7 @@ class LearnedPhraseStore internal constructor(
           (activity.permission.isNullOrEmpty() || context.checkSelfPermission(activity.permission) == PackageManager.PERMISSION_GRANTED)
       }.getOrDefault(false)
     },
+    resolveApp = { name -> uniqueLauncherApp(context.applicationContext, name) },
   )
 
   /** AUTOMATIC: learned after a confirmed model proposal. MANUAL: taught or corrected by the user. */
@@ -62,6 +67,10 @@ class LearnedPhraseStore internal constructor(
     val source: Source = Source.AUTOMATIC,
     /** The request the user wrote for a manual entry, kept to edit it later. */
     val target: String? = null,
+    /** The phrase as written, with accents and capitals, only to show it. Older entries have none. */
+    val display: String? = null,
+    /** When false, a phrase with a value («al 30») is used only with that exact value. */
+    val generalize: Boolean = true,
   )
   /**
    * A structure generalized from executed model interpretations. [values] are the distinct canonical parameters
@@ -98,12 +107,32 @@ class LearnedPhraseStore internal constructor(
    */
   private class PatternCache(val raw: String?, val entries: List<PatternEntry>) {
     val index: PhrasePatterns.Index by lazy { PhrasePatterns.Index(entries.map { it.pattern }) }
+    private val canonicalPatterns by lazy { entries.map { canonicalPattern(it.pattern) } }
+    val canonicalIndex: PhrasePatterns.Index by lazy { PhrasePatterns.Index(canonicalPatterns) }
+    /** Canonical template → stored template, to record uses and switch the structure off by its real name. */
+    val original: Map<String, String> by lazy {
+      entries.zip(canonicalPatterns).groupBy({ it.second.template }, { it.first.template })
+        .filterValues { it.distinct().size == 1 }.mapValues { it.value.first() }
+    }
   }
   @Volatile private var patternCache = PatternCache(null, emptyList())
 
+  /** Canonical forms and templates of the stored phrases, built once per stored value like [PatternCache]. */
+  private class PhraseCache(val raw: String?, val index: LearnedPhraseIndex)
+  @Volatile private var phraseCache = PhraseCache(null, LearnedPhraseIndex(emptyList()))
+
+  private fun phraseIndex(prefs: Preferences): LearnedPhraseIndex {
+    val raw = prefs[data]
+    val cached = phraseCache
+    if (cached.raw === raw || cached.raw == raw) return cached.index
+    return PhraseCache(raw, indexOf(entries(prefs))).also { phraseCache = it }.index
+  }
+
   init {
     // Decode and validate stored structures once, on the storage dispatcher, before the first request needs them.
-    updates.launch { try { patternState(store.data.first()).index } catch (_: IOException) { } }
+    updates.launch {
+      try { store.data.first().let { patternState(it).index; phraseIndex(it) } } catch (_: IOException) { }
+    }
   }
   val uiSettings = settings.catch { error ->
     if (error is IOException) emit(Settings(enabled = false)) else throw error
@@ -111,11 +140,10 @@ class LearnedPhraseStore internal constructor(
 
   suspend fun lookup(request: InterpretationRequest): PhoneCommand? {
     val phrase = key(request) ?: return null
-    val entry = try {
-      val state = settings.first()
-      if (!state.enabled) return null
-      state.entries.firstOrNull { it.phrase == phrase }
-    } catch (_: IOException) { return null } ?: return null
+    val prefs = try { store.data.first() } catch (_: IOException) { return null }
+    if (prefs[enabled] == false) return null
+    val entry = entries(prefs).firstOrNull { it.phrase == phrase }
+      ?: return lookupSimilar(prefs, phrase, request)
     val command = entry.command
     if (!allows(entry)) return null
     // A taught app name is resolved by the executor like the local request it came from.
@@ -130,6 +158,20 @@ class LearnedPhraseStore internal constructor(
   }
 
   /**
+   * The same phrase in canonical form, with one tolerated transcription difference, or a template with a new value.
+   * Never deletes anything: an app that is no longer launchable just does not match.
+   */
+  private suspend fun lookupSimilar(prefs: Preferences, phrase: String, request: InterpretationRequest): PhoneCommand? {
+    val index = phraseIndex(prefs)
+    if (index.size == 0) return null
+    // Cheap: compiled once per stored value. The package manager is queried only when an «{app}» template matches.
+    val match = index.match(phrase, resolveApp) { request.now.clone() as java.util.Calendar } ?: return null
+    val packageName = (match.command as? PhoneCommand.OpenApp)?.packageName
+    if (packageName != null && !isLaunchable(packageName)) return null
+    return match.command
+  }
+
+  /**
    * Matches a learned structure. Runs after exact phrases and only for requests the local grammar did not resolve.
    * The same safety key as phrases applies: questions, negations, conditions, quotes and joined actions never match.
    */
@@ -137,7 +179,17 @@ class LearnedPhraseStore internal constructor(
     val phrase = key(request) ?: return null
     val prefs = try { store.data.first() } catch (_: IOException) { return null }
     if (prefs[enabled] == false) return null
-    return patternState(prefs).index.match(phrase) { request.now.clone() as java.util.Calendar }
+    val state = patternState(prefs)
+    val now = { request.now.clone() as java.util.Calendar }
+    state.index.match(phrase, now)?.let { return it }
+    // «Che, tirame una alarma para las 8 porfa» compares in canonical form; the use is recorded on the original.
+    val canonical = PhraseCanonicalizer.canonical(phrase)
+    if (canonical == phrase) return null
+    return when (val match = state.canonicalIndex.match(canonical, now)) {
+      is PhrasePatterns.Match.Command -> match.copy(template = state.original[match.template] ?: return null)
+      is PhrasePatterns.Match.Clarify -> match.copy(template = state.original[match.template] ?: return null)
+      null -> null
+    }
   }
 
   private fun patternState(prefs: Preferences): PatternCache {
@@ -233,9 +285,10 @@ class LearnedPhraseStore internal constructor(
       if (prefs[enabled] == false) return@edit
       val current = entries(prefs)
       val existing = current.firstOrNull { it.phrase == phrase }
-      // What the user taught explicitly is never replaced by a model proposal.
-      if (existing?.source == Source.MANUAL) return@edit
-      write(prefs, listOf(Entry(phrase, saved, clock(), (existing?.uses ?: 0) + 1)) + current.filterNot { it.phrase == phrase })
+      // What the user taught explicitly is never replaced by a model proposal, not even in another spelling.
+      if (existing?.source == Source.MANUAL || phraseIndex(prefs).hasManual(phrase)) return@edit
+      write(prefs, listOf(Entry(phrase, saved, clock(), (existing?.uses ?: 0) + 1, display = displayOf(request.text),
+        generalize = existing?.generalize ?: true)) + current.filterNot { it.phrase == phrase })
       // «Olvidá esta frase» also undoes what was just learned.
       prefs[lastUsed] = phrase
     }
@@ -246,9 +299,12 @@ class LearnedPhraseStore internal constructor(
     store.edit { prefs ->
       if (prefs[enabled] == false) return@edit
       val current = entries(prefs)
-      val entry = current.firstOrNull { it.phrase == phrase && it.command == command } ?: return@edit
+      // A similar phrase or a template counts as a use of the phrase it came from.
+      val source = current.firstOrNull { it.phrase == phrase && it.command == command }?.phrase
+        ?: phraseIndex(prefs).match(phrase, resolveApp)?.takeIf { it.command == command }?.source?.phrase
+      val entry = current.firstOrNull { it.phrase == source } ?: return@edit
       write(prefs, listOf(entry.copy(date = clock(), uses = entry.uses + 1)) + current.filterNot { it == entry })
-      prefs[lastUsed] = phrase
+      prefs[lastUsed] = entry.phrase
     }
   }
 
@@ -269,12 +325,22 @@ class LearnedPhraseStore internal constructor(
    * Saves a phrase the user taught. [phrase] must be a key accepted by [key]; callers validate it with
    * [PhraseTeaching]. Editing passes the previous phrase in [replacing]. Returns false when the store refused it.
    */
-  suspend fun teach(phrase: String, command: PhoneCommand, target: String? = null, replacing: String? = null): Boolean {
+  suspend fun teach(
+    phrase: String,
+    command: PhoneCommand,
+    target: String? = null,
+    replacing: String? = null,
+    display: String? = null,
+    generalize: Boolean? = null,
+  ): Boolean {
     if (!allowsManual(command) || key(InterpretationRequest(phrase)) != phrase) return false
     store.edit { prefs ->
       val current = entries(prefs)
       val previous = current.firstOrNull { it.phrase == (replacing ?: phrase) } ?: current.firstOrNull { it.phrase == phrase }
-      val entry = Entry(phrase, command, clock(), previous?.uses ?: 0, Source.MANUAL, target?.trim()?.takeIf(String::isNotEmpty))
+      val written = displayOf(display)?.takeIf { key(InterpretationRequest(it)) == phrase }
+        ?: previous?.display?.takeIf { previous.phrase == phrase }
+      val entry = Entry(phrase, command, clock(), previous?.uses ?: 0, Source.MANUAL, target?.trim()?.takeIf(String::isNotEmpty),
+        written, generalize ?: previous?.generalize ?: true)
       write(prefs, listOf(entry) + current.filterNot { it.phrase == phrase || it.phrase == replacing })
       prefs[lastUsed] = phrase
     }
@@ -311,6 +377,47 @@ class LearnedPhraseStore internal constructor(
     return imported.size
   }
 
+  /** Turns the use with other values on or off. The phrase keeps working with its own value. */
+  suspend fun setGeneralize(phrase: String, value: Boolean) {
+    store.edit { prefs ->
+      write(prefs, entries(prefs).map { if (it.phrase == phrase) it.copy(generalize = value) else it })
+    }
+  }
+
+  /** «Bajá la música al {número}» for a phrase that also works with other values, or null. */
+  fun template(entry: Entry): String? =
+    LearnedPhraseIndex.templateOf(entry.toIndexItem())?.let { LearnedPhraseIndex.describe(it, entry.display) }
+
+  /** The template the phrase would have with generalization turned on, to offer the switch. */
+  fun canGeneralize(entry: Entry): Boolean = LearnedPhraseIndex.templateOf(entry.toIndexItem().copy(generalize = true)) != null
+
+  /** Everything a configuration backup carries: the switch, phrases with their metadata and structures. */
+  data class BackupData(val enabled: Boolean?, val entries: List<Entry>, val patterns: List<PatternEntry>)
+
+  suspend fun backupData(): BackupData {
+    val prefs = store.data.first()
+    return BackupData(prefs[enabled], entries(prefs), patterns(prefs))
+  }
+
+  /** Replaces phrases, structures and the switch with [data]. A null switch removes it (the default is on). */
+  suspend fun replaceBackupData(data: BackupData) {
+    store.edit { prefs ->
+      if (data.enabled == null) prefs.remove(enabled) else prefs[enabled] = data.enabled
+      write(prefs, data.entries)
+      if (data.patterns.isEmpty()) prefs.remove(patternData) else writePatterns(prefs, data.patterns)
+      prefs.remove(lastUsed)
+    }
+  }
+
+  /** Adds what is missing with [mergeEntries] and [mergePatterns]. The local switch wins when it was set. */
+  suspend fun mergeBackupData(data: BackupData) {
+    store.edit { prefs ->
+      if (prefs[enabled] == null && data.enabled != null) prefs[enabled] = data.enabled
+      write(prefs, mergeEntries(entries(prefs), data.entries))
+      writePatterns(prefs, mergePatterns(patterns(prefs), data.patterns))
+    }
+  }
+
   suspend fun delete(phrase: String) {
     store.edit { prefs ->
       if (prefs[lastUsed] == phrase) prefs.remove(lastUsed)
@@ -337,7 +444,8 @@ class LearnedPhraseStore internal constructor(
           else decoded
         val source = if (obj.optString("source") == "manual") Source.MANUAL else Source.AUTOMATIC
         Entry(obj.getString("phrase"), command, obj.getLong("date"), obj.getLong("uses"), source,
-          obj.optString("target").takeIf { source == Source.MANUAL && it.isNotBlank() })
+          obj.optString("target").takeIf { source == Source.MANUAL && it.isNotBlank() },
+          displayOf(obj.optString("display")), obj.optBoolean("generalize", true))
       }.getOrNull()
     }
   }
@@ -362,6 +470,29 @@ class LearnedPhraseStore internal constructor(
 
   companion object {
     const val LIMIT = 200
+    private const val DISPLAY_LIMIT = 200
+
+    internal fun displayOf(text: String?): String? =
+      text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() && it.length <= DISPLAY_LIMIT }
+
+    private fun Entry.toIndexItem() = LearnedPhraseIndex.Item(phrase, command, source == Source.MANUAL, generalize)
+
+    /** Only entries the lookup accepts take part in canonical and template matches. */
+    internal fun indexOf(entries: List<Entry>) = LearnedPhraseIndex(entries.filter { allows(it) }.map { it.toIndexItem() })
+
+    private fun canonicalPattern(pattern: PhrasePatterns.Pattern): PhrasePatterns.Pattern {
+      fun part(text: String) = PhraseCanonicalizer.canonicalTokens(PhraseCanonicalizer.tokens(text)).joinToString(" ")
+      val prefix = part(pattern.prefix).let { if (it.isEmpty()) "" else "$it " }
+      val suffix = part(pattern.suffix).let { if (it.isEmpty()) "" else " $it" }
+      return pattern.copy(prefix = prefix, suffix = suffix)
+    }
+
+    /** Exactly one launchable app with that label; two apps with the same name are ambiguous. */
+    private fun uniqueLauncherApp(context: Context, name: String): PhoneCommand.OpenApp? {
+      val apps = runCatching { com.example.phone.launcherApps(context) }.getOrDefault(emptyList())
+        .filter { PhoneCommandParser.normalize(it.label) == name }
+      return apps.singleOrNull()?.let { PhoneCommand.OpenApp(name, it.packageName) }
+    }
     private const val EXPORT_LIMIT = 262_144
     private val storageScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val enabled = booleanPreferencesKey("enabled")
@@ -385,6 +516,62 @@ class LearnedPhraseStore internal constructor(
         it.isNotBlank() && it.length <= 2000 &&
           !conditionalOrNegative.containsMatchIn(it) && !questionHead.containsMatchIn(it)
       }
+    }
+
+    /**
+     * Merge rules of a restore: a phrase taught here is never replaced; a taught phrase from the backup replaces one
+     * learned automatically here; between two automatic ones the most recent wins. New phrases are added.
+     */
+    internal fun mergeEntries(local: List<Entry>, incoming: List<Entry>): List<Entry> {
+      val byPhrase = incoming.associateBy { it.phrase }
+      val kept = local.map { here ->
+        val other = byPhrase[here.phrase] ?: return@map here
+        when {
+          here.source == Source.MANUAL -> here
+          other.source == Source.MANUAL -> other
+          other.date > here.date -> other
+          else -> here
+        }
+      }
+      val known = local.map { it.phrase }.toSet()
+      return trim(kept + incoming.filter { it.phrase !in known })
+    }
+
+    /** Structures with the same template join their values; the local on/off switch is kept. */
+    internal fun mergePatterns(local: List<PatternEntry>, incoming: List<PatternEntry>): List<PatternEntry> {
+      val byTemplate = incoming.associateBy { it.template }
+      val merged = local.map { here ->
+        val other = byTemplate[here.template] ?: return@map here
+        here.copy(
+          values = (here.values + other.values).distinct().takeLast(MAX_PATTERN_VALUES),
+          examples = (here.examples + other.examples).distinct().takeLast(MAX_PATTERN_VALUES),
+          date = maxOf(here.date, other.date), uses = maxOf(here.uses, other.uses),
+        )
+      }
+      val known = local.map { it.template }.toSet()
+      return trimPatterns(merged + incoming.filter { it.template !in known })
+    }
+
+    /** The phrases category of a configuration backup. */
+    internal fun encodeBackup(data: BackupData): JSONObject = JSONObject().put("v", 1)
+      .put("phrases", encode(data.entries))
+      .put("patterns", JSONObject(encodePatterns(data.patterns)))
+      .apply { data.enabled?.let { put("enabled", it) } }
+
+    /**
+     * Validates the phrases category completely with the same rules as an export file. Damaged structures are an
+     * error here, not silently dropped: a restore must not lose what the file promised.
+     */
+    internal fun decodeBackup(json: JSONObject): BackupData {
+      val phrases = json.optJSONArray("phrases") ?: JSONArray()
+      val entries = decodeExport(JSONObject().put("format", "insto-learned-phrases").put("version", 1).put("phrases", phrases).toString())
+      val patternsJson = json.optJSONObject("patterns")
+      val declared = patternsJson?.optJSONArray("patterns")?.length() ?: 0
+      require(declared <= PATTERN_LIMIT) { "El archivo tiene más de $PATTERN_LIMIT estructuras." }
+      val patterns = decodePatterns(patternsJson?.toString())
+      require(patterns.size == declared) { "Hay estructuras aprendidas dañadas o repetidas." }
+      val enabled = if (json.has("enabled")) json.get("enabled").also { require(it is Boolean) { "El interruptor de frases no es válido." } } as Boolean else null
+      return BackupData(enabled, entries, patterns)
     }
 
     /** Keeps [LIMIT] entries. Automatic ones are dropped first, starting with the least recent. */
@@ -461,6 +648,8 @@ class LearnedPhraseStore internal constructor(
           (it.command as? PhoneCommand.OpenApp)?.packageName?.let { pkg -> put("package", pkg) }
           if (it.source == Source.MANUAL) put("source", "manual")
           it.target?.let { target -> put("target", target) }
+          it.display?.let { display -> put("display", display) }
+          if (!it.generalize) put("generalize", false)
         }
     })
 
@@ -482,7 +671,8 @@ class LearnedPhraseStore internal constructor(
             else decoded
           val source = if (obj.optString("source") == "manual") Source.MANUAL else Source.AUTOMATIC
           Entry(obj.getString("phrase"), command, obj.optLong("date"), obj.optLong("uses").coerceAtLeast(0), source,
-            obj.optString("target").takeIf { source == Source.MANUAL && it.isNotBlank() })
+            obj.optString("target").takeIf { source == Source.MANUAL && it.isNotBlank() },
+            displayOf(obj.optString("display")), obj.optBoolean("generalize", true))
         }.getOrNull()
         require(entry != null && key(InterpretationRequest(entry.phrase)) == entry.phrase && allows(entry)) {
           "La frase ${i + 1} no es válida."

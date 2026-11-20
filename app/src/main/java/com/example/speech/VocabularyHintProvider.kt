@@ -26,6 +26,13 @@ internal class VocabularyHintProvider(
 
   fun cached(): String? = cachedPrompt
 
+  /** Forces the next [refresh] to rebuild, after routines, places or phrases changed outside the preferences. */
+  fun invalidate() {
+    refreshJob?.cancel()
+    lastOptions = null
+    cachedPrompt = null
+  }
+
   // Called on the main thread. Only the completed snapshot is read by the upload worker.
   fun refresh(scope: CoroutineScope, prefs: AssistantPreferences) {
     val includeContacts = prefs.groqVocabularyEnabled && prefs.groqPinnedContactHintsEnabled

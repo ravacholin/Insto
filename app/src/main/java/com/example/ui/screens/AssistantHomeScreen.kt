@@ -100,6 +100,7 @@ fun AssistantHomeScreen(
   onRequestAudioPermission: () -> Unit,
   onOpenProviderSettings: () -> Unit,
   onOpenLearnedPhrases: () -> Unit = {},
+  onConfigurationImported: () -> Unit = {},
   onSelectOrbHoldBehavior: (OrbHoldBehavior) -> Unit,
   onSelectWhatsAppFlavor: (WhatsAppFlavor) -> Unit,
   onSelectVolumeKeyTrigger: (VolumeKeyTrigger) -> Unit,
@@ -288,6 +289,7 @@ fun AssistantHomeScreen(
       onDismiss = { showSetupSheet = false },
       onOpenProviderSettings = onOpenProviderSettings,
       onOpenLearnedPhrases = onOpenLearnedPhrases,
+      onConfigurationImported = onConfigurationImported,
       onSelectOrbHoldBehavior = onSelectOrbHoldBehavior,
       onSelectWhatsAppFlavor = onSelectWhatsAppFlavor,
       onSelectVolumeKeyTrigger = onSelectVolumeKeyTrigger,
@@ -373,6 +375,7 @@ private fun AssistantSetupSheet(
   onDismiss: () -> Unit,
   onOpenProviderSettings: () -> Unit,
   onOpenLearnedPhrases: () -> Unit = {},
+  onConfigurationImported: () -> Unit = {},
   onSelectOrbHoldBehavior: (OrbHoldBehavior) -> Unit,
   onSelectWhatsAppFlavor: (WhatsAppFlavor) -> Unit,
   onSelectVolumeKeyTrigger: (VolumeKeyTrigger) -> Unit,
@@ -462,6 +465,8 @@ private fun AssistantSetupSheet(
           if (it == WhatsAppFlavor.AUTO) "Detectar automáticamente" else it.label
         })
         HorizontalDivider()
+        AutoSendDiagnostics(prefs.preferredFlavor)
+        HorizontalDivider()
         Text("Botón principal", style = MaterialTheme.typography.titleMedium)
         SettingsDescription("Tocá para abrir el chat. Mantené presionado para grabar y soltá para enviar.")
         SettingsChoices(
@@ -506,6 +511,10 @@ private fun AssistantSetupSheet(
       SettingsCategory("Reconocimiento e interpretación", expandedCategory == "providers", { toggleCategory("providers") }) {
         SettingsDescription("Configurá Groq para transcribir audio y Gemini para interpretar pedidos.")
         OutlinedButton(onClick = onOpenProviderSettings) { Text("Abrir ajustes de voz e IA") }
+      }
+
+      SettingsCategory("Copia de seguridad y restauración", expandedCategory == "backup", { toggleCategory("backup") }) {
+        BackupRestoreSettings(onImported = onConfigurationImported)
       }
 
       if (prefs.recentLogs.isNotEmpty()) {

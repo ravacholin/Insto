@@ -74,6 +74,9 @@ class FloatingLocalLearningTest {
         vm.confirmFloatingAction(true)
         runCurrent()
         assertNotNull(vm.consumePhoneActionCompletion())
+        advanceUntilIdle()
+        // Since 1.12 a confirmed phrase also works with other values; switched off here to exercise structures.
+        store.setGeneralize(requireNotNull(LearnedPhraseStore.key(InterpretationRequest(text))), false)
       }
       assertEquals(3, groq)
       assertEquals("musica al {porcentaje}", store.uiSettings.first().activePatterns.single().template)
@@ -89,6 +92,37 @@ class FloatingLocalLearningTest {
 
       // A negated or compound request with the same shape is not resolved by the structure.
       send(vm, "Música al 25 y prendé la linterna")
+      assertNull(vm.consumePhoneActionCompletion())
+    } finally {
+      vm.dismissFloatingAssistant()
+      Dispatchers.resetMain()
+    }
+  }
+
+  @Test fun unaConfirmacionAlcanzaParaUsarLaFraseConOtroValorSinProveedores() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val store = LearnedPhraseStore(PhraseTestDataStore(), { false }, updates = this)
+    val vm = viewModel(store) { text ->
+      listOf(PhoneCommand.Volume(VolumeOp.SET, Regex("[0-9]+").find(text)!!.value.toInt()))
+    }
+    try {
+      send(vm, "Música al 40")
+      assertTrue(vm.floatingAssistant.value.needsConfirmation)
+      vm.confirmFloatingAction(true)
+      runCurrent()
+      assertNotNull(vm.consumePhoneActionCompletion())
+      advanceUntilIdle()
+      val providerCalls = groq to decisions
+      send(vm, "Che, música al 55 por ciento")
+      assertEquals("Volumen multimedia ajustado.", vm.consumePhoneActionCompletion())
+      assertFalse(vm.floatingAssistant.value.needsConfirmation)
+      assertEquals(providerCalls, groq to decisions)
+      advanceUntilIdle()
+      // The use is recorded on the phrase it came from; no new phrase is learned from a local match.
+      assertEquals(listOf("musica al 40"), store.uiSettings.first().entries.map { it.phrase })
+      assertEquals(2L, store.uiSettings.first().entries.single().uses)
+      // A negation with the same shape still never executes.
+      send(vm, "No, música al 25 no")
       assertNull(vm.consumePhoneActionCompletion())
     } finally {
       vm.dismissFloatingAssistant()

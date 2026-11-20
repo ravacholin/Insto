@@ -69,6 +69,7 @@ fun AssistOverlayScreen(
   onRetryWorkflow: () -> Unit = {},
   onCancelWorkflow: () -> Unit = {},
   onInstinct: () -> Unit = {},
+  onManualSend: () -> Unit = {},
 ) {
   var showExamples by remember { mutableStateOf(false) }
   val context = LocalContext.current
@@ -260,6 +261,16 @@ fun AssistOverlayScreen(
         }
         if (state.needsGroqKey) TextButton(onClick = onConfigureGroq) { Text("Configurar mi clave de Groq") }
         if (state.error?.contains("contacto") == true) TextButton(onClick = onConfigureContact) { Text("Configurar contacto de Instinct") }
+          state.autoSendHealth?.let { health ->
+          Text("${health.state.title}. ${health.reason}", color = secondary, style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.testTag("overlay_autosend_health"))
+          if (health.state != com.example.assist.AutoSendHealth.State.READY) {
+            TextButton(onClick = onManualSend, enabled = !busy && !recording && !listening,
+              modifier = Modifier.testTag("overlay_manual_send")) {
+              Text(if (health.lastUncertain) "Abrir el chat para revisar" else "Abrir el chat y enviar a mano", color = accent)
+            }
+          }
+        }
           if (state.needsWhatsAppAccessibility) {
           Text("Para enviar sin volver a tocar WhatsApp, activá el servicio de Accesibilidad de PingAssist.",
             color = secondary, style = MaterialTheme.typography.labelSmall)

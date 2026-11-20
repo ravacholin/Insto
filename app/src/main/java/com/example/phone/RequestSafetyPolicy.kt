@@ -14,6 +14,7 @@ object RequestSafetyPolicy {
   private val fixedModifiers = Regex("\\b(?:durante|dentro de|a partir de|hasta|por ciento|por (?:un|una|[0-9]+))\\b|%")
   private val duration = Regex("\\b(?:por|en) [a-z0-9 ]{1,40} (?:segundos?|minutos?|horas?)\\b")
   private val scheduledTime = Regex("\\ba las? ([a-z0-9]+)")
+  private val leadingInterjection = Regex("^(?:(?:che|dale|bueno|a ver|eh|ok|okey)\\s+)+")
 
   internal fun isDoNotDisturbRequest(syntax: String): Boolean =
     syntax == "no molestar" || syntax.startsWith("no molestar durante ") ||
@@ -84,8 +85,11 @@ object RequestSafetyPolicy {
       Regex("^(?:supone|imagina|dijo|dice|escribio|cito)\\b").containsMatchIn(s))
       return "El pedido parece una cita o una hipótesis. Indicá qué querés hacer ahora."
     val command = PhoneCommandParser.canonicalRequest(s)
-    if ((!isDoNotDisturbRequest(command) && Regex("^(?:no|nunca)\\b").containsMatchIn(command)) ||
-      Regex("\\b(?:cuando|hasta que|a menos que|siempre que|en caso de que|con tal de que)\\b|(?:^|\\s)si\\s+(?!confirmo\\b)").containsMatchIn(s))
+    // «Dale, no, …» and «che, ni se te ocurra …» are negations after an interjection.
+    val head = command.replace(leadingInterjection, "")
+    if ((!isDoNotDisturbRequest(head) && Regex("^(?:no|nunca|ni|jamas|tampoco)\\b").containsMatchIn(head)) ||
+      Regex("\\b(?:cuando|hasta que|a menos que|siempre que|en caso de que|con tal de que|salvo que|salvo si|excepto que|excepto si|a no ser que|sin que)\\b|(?:^|\\s)si\\s+(?!confirmo\\b)").containsMatchIn(s) ||
+      Regex("\\s(?:no|nunca)$").containsMatchIn(s))
       return "El pedido contiene una negación o condición. No se ejecutó ni se envió; indicá qué querés hacer ahora."
     if (Regex("\\b(?:sin peajes|evitando peajes|sin autopistas|evitando autopistas|pasando por|con una parada)\\b").containsMatchIn(s))
       return "Esa restricción de ruta no está disponible. No se omitió ni se ejecutó el pedido."
