@@ -22,6 +22,9 @@ object RequestSafetyPolicy {
 
   internal fun withoutQuotedText(text: String): String = text.replace(quotes, " ")
 
+  /** Literal payloads written between quotes, without the quotes. */
+  internal fun quotedTexts(text: String): List<String> = quotes.findAll(text).map { it.value.substring(1, it.value.length - 1) }.toList()
+
   internal fun hasJoinedActions(folded: String): Boolean {
     val syntax = withoutQuotedText(folded)
     return separators.findAll(syntax).any { separator ->

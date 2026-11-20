@@ -22,10 +22,20 @@ class GeminiCoordinator(
   /** Brief operational context. Never added to provider input. */
   private val operationalContext: OperationalContext? = null,
 ) {
+  /**
+   * Every interpretation, whatever produced it, passes the final [SemanticCommandGuard] here, once, before the
+   * caller can preview or execute it. Confirmed plans run exactly the commands that passed this check.
+   */
   suspend fun interpret(
     request: InterpretationRequest,
     local: PhoneRoute,
     stage: (String) -> Unit = {},
+  ): InterpretationResult = SemanticCommandGuard.review(request, interpretUnchecked(request, local, stage))
+
+  private suspend fun interpretUnchecked(
+    request: InterpretationRequest,
+    local: PhoneRoute,
+    stage: (String) -> Unit,
   ): InterpretationResult {
     RequestSafetyPolicy.rejection(request.text)?.let { return InterpretationResult.Rejected(it) }
     val canDeferToInstinct = canDeferToInstinct(request, local)
