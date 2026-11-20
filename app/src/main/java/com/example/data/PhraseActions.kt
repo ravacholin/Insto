@@ -74,6 +74,8 @@ object PhraseActions {
     },
     platform("battery", "Teléfono", "Decir el nivel de batería", PlatformAction.BATTERY),
     platform("notifications", "Teléfono", "Leer las notificaciones", PlatformAction.NOTIFICATION_LIST),
+    platform("weather_temperature", "Clima (SMN)", "Decir la temperatura actual", PlatformAction.WEATHER_TEMPERATURE),
+    platform("weather_rain", "Clima (SMN)", "Decir la probabilidad de lluvia", PlatformAction.WEATHER_RAIN),
   )
 
   val groups: List<Pair<String, List<Option>>> = options.groupBy { it.group }.toList()

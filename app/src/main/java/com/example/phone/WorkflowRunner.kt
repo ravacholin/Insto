@@ -17,6 +17,8 @@ class WorkflowRunner(initial: WorkflowSnapshot? = null, private val save: (Workf
   private fun update(value: WorkflowSnapshot?) { save(value); snapshot = value }
   fun prepare(commands: List<PhoneCommand>) {
     require(commands.size in 1..10)
+    // SMN queries are asynchronous answers, not steps with an Android result.
+    require(commands.none(::isWeatherQuery)) { "Las consultas al SMN no forman parte de secuencias" }
     update(WorkflowSnapshot(steps = commands.map { WorkflowStep(it) }))
   }
   fun invalidatePreview() {if(snapshot?.confirmed == false) clear()}
@@ -76,5 +78,10 @@ class WorkflowRunner(initial: WorkflowSnapshot? = null, private val save: (Workf
   private fun replace(step: WorkflowStep, advance: Boolean = false) {
     val s = snapshot ?: return
     update(s.copy(steps = s.steps.mapIndexed { i, old -> if (i == s.cursor) step else old }, cursor = s.cursor + if (advance) 1 else 0))
+  }
+
+  companion object {
+    fun isWeatherQuery(command: PhoneCommand): Boolean = command is PhoneCommand.Platform &&
+      command.action in setOf(PlatformAction.WEATHER_TEMPERATURE, PlatformAction.WEATHER_RAIN)
   }
 }

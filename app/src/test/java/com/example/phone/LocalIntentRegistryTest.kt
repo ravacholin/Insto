@@ -12,7 +12,8 @@ class LocalIntentRegistryTest {
       assertTrue(it.id, it.description.isNotBlank() && it.examples.size >= 2)
       assertTrue(it.id, it.mechanism.isNotBlank() && it.expectedResult.isNotBlank())
       val required = it.decisionParameters.joinToString()
-      assertEquals(it.id, required, registry.choices.getValue(it.id).substringAfter(" Obligatorios: ", "").removeSuffix("."))
+      if (it.decisions) assertEquals(it.id, required, registry.choices.getValue(it.id).substringAfter(" Obligatorios: ", "").removeSuffix("."))
+      else assertFalse("Local-only intent offered to Decisions: ${it.id}", registry.choices.containsKey(it.id))
       assertEquals(it.parameters.size, it.parameters.map { p -> p.name }.distinct().size)
     }
   }

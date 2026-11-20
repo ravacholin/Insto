@@ -1,0 +1,56 @@
+{
+  "updated": "2026-11-20T09:00:00-03:00",
+  "location": {
+    "id": 4864,
+    "name": "Capital Federal",
+    "department": "CABA",
+    "province": "CABA",
+    "type": "",
+    "coord": {"lon": -58.4258, "lat": -34.6217},
+    "distance": 0
+  },
+  "type": "location",
+  "forecast": [
+    {
+      "date": "2026-11-20",
+      "temp_min": null,
+      "temp_max": 30,
+      "early_morning": null,
+      "morning": {
+        "humidity": 60, "rain_prob_range": [0, 0], "gust_range": null, "temperature": 24,
+        "visibility": null, "weather": {"description": "Algo nublado", "id": 13}, "rain06h": 0,
+        "wind": {"direction": "Oeste", "deg": 270, "speed_range": [13, 22]}, "river": null, "border": null
+      },
+      "afternoon": {
+        "humidity": 55, "rain_prob_range": [40, 70], "gust_range": [42, 50], "temperature": 29,
+        "visibility": null, "weather": {"description": "Tormentas aisladas", "id": 51}, "rain06h": 2.5,
+        "wind": {"direction": "Norte", "deg": 0, "speed_range": [23, 31]}, "river": null, "border": null
+      },
+      "night": {
+        "humidity": 75, "rain_prob_range": [10, 40], "gust_range": null, "temperature": 22,
+        "visibility": null, "weather": {"description": "Nublado", "id": 19}, "rain06h": 0.4,
+        "wind": {"direction": "Sur", "deg": 180, "speed_range": [13, 22]}, "river": null, "border": null
+      }
+    },
+    {
+      "date": "2026-11-21",
+      "temp_min": 18,
+      "temp_max": 26,
+      "early_morning": {
+        "humidity": 85, "rain_prob_range": [0, 10], "gust_range": null, "temperature": 19,
+        "visibility": null, "weather": {"description": "Nublado", "id": 19}, "rain06h": 0,
+        "wind": {"direction": "Sur", "deg": 180, "speed_range": [7, 12]}, "river": null, "border": null
+      },
+      "morning": {
+        "humidity": 70, "rain06h": 3.1, "temperature": 21,
+        "weather": {"description": "Lluvias", "id": 71},
+        "wind": {"direction": "Sudeste", "deg": 135, "speed_range": [13, 22]}
+      },
+      "afternoon": null,
+      "night": {
+        "humidity": 60, "rain_prob_range": null, "temperature": 20,
+        "weather": {"description": "Despejado", "id": 3}, "rain06h": 0
+      }
+    }
+  ]
+}

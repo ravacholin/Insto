@@ -2,7 +2,7 @@ package com.example.phone
 
 enum class IntentCategory {
   CLOCK, CALENDAR, CALLS, MESSAGING, APPLICATIONS, ANDROID, MEDIA,
-  NAVIGATION, CONTACTS, FILES, CAMERA_RECORDING, NOTIFICATIONS, DEVICE, AUTOMATION
+  NAVIGATION, CONTACTS, FILES, CAMERA_RECORDING, NOTIFICATIONS, DEVICE, AUTOMATION, WEATHER
 }
 
 data class IntentParameter(val name: String, val type: String, val required: Boolean, val description: String)
@@ -26,6 +26,8 @@ data class LocalIntentDefinition(
   val localSyntax: Regex? = null,
   val decisionDescription: String = description,
   val decisionParameters: List<String> = parameters.filter { it.required }.map { it.name },
+  /** False for local-only intents that Gemini Decisions must never select (for example SMN queries). */
+  val decisions: Boolean = true,
 )
 
 class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
@@ -53,7 +55,7 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
       require(it.fixed != null || it.parameterContext != null || it.unavailable != null || it.parseParameters != null)
     }
   }
-  val choices: Map<String, String> = byId.mapValues { (_, definition) ->
+  val choices: Map<String, String> = byId.filterValues { it.decisions }.mapValues { (_, definition) ->
     val required = definition.decisionParameters.joinToString()
     if (required.isEmpty()) definition.decisionDescription else "${definition.decisionDescription} Obligatorios: $required."
   } + mapOf(

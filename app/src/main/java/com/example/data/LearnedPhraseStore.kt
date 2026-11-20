@@ -705,7 +705,8 @@ class LearnedPhraseStore internal constructor(
         PlatformAction.ALARM_SNOOZE, PlatformAction.TIMER_DISMISS, PlatformAction.CALENDAR_AGENDA,
         PlatformAction.DIALER_OPEN, PlatformAction.FILES_BROWSE, PlatformAction.RECORDER_OPEN,
         PlatformAction.DISPLAY_SETTINGS, PlatformAction.ACCESSIBILITY_SETTINGS, PlatformAction.NOTIFICATION_LIST,
-        PlatformAction.BRIGHTNESS -> command.argument == null && command.content == null
+        PlatformAction.BRIGHTNESS, PlatformAction.WEATHER_TEMPERATURE, PlatformAction.WEATHER_RAIN ->
+          command.argument == null && command.content == null
         else -> false
       }
       else -> false

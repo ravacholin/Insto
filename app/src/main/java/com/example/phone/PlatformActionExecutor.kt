@@ -42,6 +42,8 @@ internal class PlatformActionExecutor(private val context: Context) {
         val routines=ConfiguredRoutineStore(java.io.File(context.noBackupFilesDir,"configured-routines.json")).read()
         PhoneActionResult(if(routines.isEmpty()) "No hay rutinas configuradas. Podés importar plantillas revisadas desde un archivo JSON." else routines.joinToString("\n") {it.name})
       }
+      // Network queries never run synchronously here; the floating assistant answers them.
+      PlatformAction.WEATHER_TEMPERATURE,PlatformAction.WEATHER_RAIN -> rejected("Las consultas al SMN se responden desde el asistente flotante, de a una.")
       PlatformAction.ROUTINE_RUN -> rejected("La rutina debe revisarse en el asistente antes de ejecutar sus pasos.")
       PlatformAction.BATTERY -> {
         val percent=context.getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)

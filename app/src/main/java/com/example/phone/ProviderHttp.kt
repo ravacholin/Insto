@@ -41,11 +41,18 @@ internal object ProviderHttp {
       total += System.nanoTime() - tls
     }
     override fun connectionAcquired(call: Call, connection: Connection) {
-      val provider = if (call.request().url.host == "api.groq.com") GeminiTransport.Provider.GROQ else GeminiTransport.Provider.GEMINI
+      // Solo los proveedores de interpretación alimentan sus métricas; otro host no se etiqueta como Gemini.
+      val provider = providerFor(call.request().url.host) ?: return
       val millis = total / 1_000_000
       GeminiDiagnostics.connection(provider, millis)
       connectionLogger?.invoke("${provider.label}_connection_ms=$millis")
     }
+  }
+
+  internal fun providerFor(host: String): GeminiTransport.Provider? = when (host) {
+    "api.groq.com" -> GeminiTransport.Provider.GROQ
+    "generativelanguage.googleapis.com" -> GeminiTransport.Provider.GEMINI
+    else -> null
   }
 
   private val networkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -74,6 +81,45 @@ internal object ProviderHttp {
       configured.proceed(request)
     }
     .build()
+
+  /**
+   * Same pool, dispatcher, redirect policy and timeouts as [client], without the provider timing listener:
+   * data requests (SMN) never reach Gemini/Groq diagnostics.
+   */
+  private val dataClient: OkHttpClient by lazy { client.newBuilder().eventListener(EventListener.NONE).build() }
+
+  /** Response of a bounded GET. Header names are lower case; only the first value of each is kept. */
+  class BoundedResponse(val code: Int, val headers: Map<String, String>, val body: ByteArray)
+
+  class ResponseTooLarge : java.io.IOException("Respuesta demasiado grande")
+
+  /**
+   * Bounded GET without following redirects. The body is read up to [maxBytes]; a larger declared or actual body
+   * throws [ResponseTooLarge]. Cancelling the caller cancels the call.
+   */
+  suspend fun get(
+    url: String,
+    headers: Map<String, String>,
+    connectMillis: Int,
+    readMillis: Int,
+    maxBytes: Int,
+  ): BoundedResponse {
+    val request = Request.Builder().url(url).get()
+      .tag(Timeouts::class.java, Timeouts(connectMillis, readMillis))
+      .apply { headers.forEach { (name, value) -> header(name, value) } }
+      .build()
+    val call = dataClient.newCall(request)
+    call.timeout().timeout((connectMillis + readMillis).toLong(), TimeUnit.MILLISECONDS)
+    return cancellable(call::cancel) {
+      call.execute().use { response ->
+        val declared = response.body?.contentLength() ?: -1L
+        if (declared > maxBytes) throw ResponseTooLarge()
+        val body = response.body?.byteStream()?.use { it.readBounded(maxBytes) { ResponseTooLarge() } } ?: byteArrayOf()
+        val names = response.headers.names().associate { name -> name.lowercase(java.util.Locale.ROOT) to response.headers[name].orEmpty() }
+        BoundedResponse(response.code, names, body)
+      }
+    }
+  }
 
   suspend fun warm(geminiEnabled: Boolean) = coroutineScope {
     for (host in listOfNotNull("api.groq.com", "generativelanguage.googleapis.com".takeIf { geminiEnabled })) {
