@@ -220,7 +220,13 @@ object SemanticCommandGuard {
     is PhoneCommand.MapSearch -> listOf(command.query)
     is PhoneCommand.Navigate -> listOf(command.destination)
     is PhoneCommand.OpenApp -> listOf(command.name)
-    is PhoneCommand.Platform -> if (command.action in messageActions) listOfNotNull(command.content) else emptyList()
+    is PhoneCommand.Platform -> when {
+      command.action !in messageActions -> emptyList()
+      // A recipient by name must be the one the user said, never one the provider proposed.
+      command.action == PlatformAction.MESSAGE_SEND && command.argument?.let(PhoneNumbers::canonical) == null ->
+        listOfNotNull(command.argument, command.content)
+      else -> listOfNotNull(command.content)
+    }
     else -> emptyList()
   }
 

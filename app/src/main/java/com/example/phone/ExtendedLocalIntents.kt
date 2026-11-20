@@ -26,13 +26,13 @@ internal object ExtendedLocalIntents {
         PhoneNumbers.canonical(r.capture(m,1))?.let {PhoneCommand.Platform(PlatformAction.CALL_DIRECT,it)}
       }
     }
-    parsed("message_send",IntentCategory.MESSAGING,"Enviar texto por la integración de WhatsApp a un número explícito, tras revisar destinatario y contenido",listOf("mandá por WhatsApp a +541112345678 que diga Estoy llegando","enviá por WhatsApp a +541112345678 que diga Hola José"),PlatformAction.MESSAGE_SEND,
-      listOf(parameter("number"),parameter("body")),listOf("WhatsApp instalado y accesibilidad conectada/autorizada"),"WhatsAppDispatcher con guardas de destinatario y texto existentes",
-      "Solicitud de envío entregada a WhatsApp; la automatización verifica destinatario y cuerpo. Sin otro destinatario por defecto.",
-      "Indicá número y texto: mandá por WhatsApp a +541112345678 que diga Estoy llegando.",
-        decisionDescription = "Enviar un mensaje de WhatsApp al número indicado, en vez de preparar un borrador de SMS.") {r ->
-      Regex("^(?:manda|envia) (?:por |un (?:mensaje por )?)?whatsapp (?:al?|para) ([+0-9 ()-]+) (?:que diga|con el texto|diciendo) (.+)$").matchEntire(r.text)?.let {m ->
-        PhoneNumbers.canonical(r.capture(m,1))?.takeIf {it.count(Char::isDigit)>=7}?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_SEND,it,content=r.capture(m,2))}
+    parsed("message_send",IntentCategory.MESSAGING,"Enviar texto por la integración de WhatsApp a un número explícito o a un contacto por su nombre, tras revisar destinatario y contenido",listOf("mandá por WhatsApp a +541112345678 que diga Estoy llegando","enviá un mensaje de WhatsApp a Ana que diga Hola"),PlatformAction.MESSAGE_SEND,
+      listOf(parameter("recipient"),parameter("body")),listOf("WhatsApp instalado y accesibilidad conectada/autorizada","android.permission.READ_CONTACTS para destinatarios por nombre"),"WhatsAppDispatcher con guardas de destinatario y texto existentes",
+      "Solicitud de envío entregada a WhatsApp; la automatización verifica destinatario y cuerpo. Un nombre se resuelve en la agenda y se confirma antes de enviar. Sin otro destinatario por defecto.",
+      "Indicá destinatario y texto: mandá por WhatsApp a Ana que diga Estoy llegando.",
+        decisionDescription = "Enviar un mensaje de WhatsApp al número o contacto indicado por su nombre, en vez de preparar un borrador de SMS.") {r ->
+      whatsappMessage.matchEntire(r.text)?.takeIf {it.groups[1]!=null || it.groups[3]!=null}?.let {m ->
+        whatsappRecipient(r.capture(m,2))?.let {PhoneCommand.Platform(PlatformAction.MESSAGE_SEND,it,content=r.capture(m,4))}
       }
     }
     for((id,op,verb) in listOf(
@@ -144,4 +144,18 @@ internal object ExtendedLocalIntents {
     }
   }
   private fun literalTarget(text:String)=text.isNotBlank() && text.length<=2000 && !Regex("\\b(?:y (?:abri|llama|manda|elimina|borra)|si|cuando|despues|luego)\\b").containsMatchIn(PhoneCommandParser.normalize(text))
+
+  private const val WHATSAPP = "(?:whatsapp|whats app|wasap|wsp)"
+  /** Channel before the recipient («un mensaje de WhatsApp a…») or after it («a Ana por WhatsApp…»); one is required. */
+  private val whatsappMessage = Regex("^(?:manda|envia) (?:(?:un )?(?:mensaje )?(?:(?:por|de|en) )?($WHATSAPP) |un mensaje )?" +
+    "(?:al?|para) (.+?)(?: (?:por|en) ($WHATSAPP))?:? (?:que diga|con el texto|diciendo):? (.+)$")
+  private val recipientName = Regex("^\\p{L}[\\p{L}' .-]{0,59}$")
+  private val severalRecipients = Regex("\\b(?:y|e|o|todos|todas)\\b")
+
+  /** A canonical number, or a single contact name resolved in Android's contacts before confirmation. */
+  internal fun whatsappRecipient(value: String): String? {
+    val target = value.trim().trim('"', '“', '”', '«', '»').trim()
+    if (target.any(Char::isDigit) || target.startsWith("+")) return PhoneNumbers.canonical(target)?.takeIf {it.count(Char::isDigit)>=7}
+    return target.takeIf {recipientName.matches(it) && !severalRecipients.containsMatchIn(PhoneCommandParser.normalize(it))}
+  }
 }

@@ -24,7 +24,11 @@ internal class PlatformActionExecutor(private val context: Context) {
     return when(command.action) {
       PlatformAction.CALL_DIRECT -> localActivity(command,CallActionActivity::class.java)
       PlatformAction.MESSAGE_SEND -> {
-        if(!confirmed) PhoneActionResult("Enviar por WhatsApp a ${command.argument}:\n${command.content}",confirmation=command,outcome=PhoneActionOutcome.NEEDS_INPUT)
+        if(PhoneNumbers.canonical(command.argument!!)==null) {
+          // Never send to a name: it becomes a number the user confirms, or nothing is sent.
+          if(confirmed) rejected("Elegí el contacto antes de enviar. No se envió ningún mensaje.") else whatsappContact(command)
+        }
+        else if(!confirmed) PhoneActionResult("Enviar por WhatsApp a ${command.argument}:\n${command.content}",confirmation=command,outcome=PhoneActionOutcome.NEEDS_INPUT)
         else {
           val prefs=kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {com.example.data.AssistantPreferencesRepository(context).getCurrentPreferences()}
           val result=com.example.whatsapp.WhatsAppDispatcher.sendWhatsAppText(context,command.argument!!,command.content!!,prefs.preferredFlavor,
@@ -196,6 +200,19 @@ internal class PlatformActionExecutor(private val context: Context) {
     Intent(context,type).putExtra(LocalActionActivity.EXTRA_COMMAND,PhoneCommandCodec.encode(command).toString()),
     "Pedido abierto en Insto para resolver permisos, seleccionar el recurso y revisar la operación. El resultado se informa allí.")
 
+  private fun whatsappContact(command:PhoneCommand.Platform):PhoneActionResult {
+    val name=command.argument!!
+    if(context.checkSelfPermission(Manifest.permission.READ_CONTACTS)!=PackageManager.PERMISSION_GRANTED)
+      return PhoneActionResult("Permití el acceso a tus contactos para buscar a $name, o indicá el número.",needsContacts=true,outcome=PhoneActionOutcome.NEEDS_INPUT)
+    val (candidates,truncated)=context.findPhoneContacts(name)
+    return when(val selection=ContactSelection.resolve(name,candidates,truncated)) {
+      is ContactResolution.Number -> PhoneActionResult("Enviar por WhatsApp a $name (${selection.value}):\n${command.content}",
+        confirmation=command.copy(argument=selection.value),outcome=PhoneActionOutcome.NEEDS_INPUT)
+      is ContactResolution.Choose -> PhoneActionResult("Elegí el contacto y número al que querés mandar el WhatsApp.",contactOptions=selection.options,outcome=PhoneActionOutcome.NEEDS_INPUT)
+      ContactResolution.Refine -> rejected("Hay muchas coincidencias para $name. Indicá un nombre más completo o el número.")
+      ContactResolution.Missing -> rejected("No encontré un número para $name en tus contactos. Podés indicar el número directamente.")
+    }
+  }
   private fun access(message:String,action:String)=PhoneActionResult(message,accessSettingsAction=action,outcome=PhoneActionOutcome.NEEDS_INPUT)
   private fun rejected(message:String)=PhoneActionResult(message,outcome=PhoneActionOutcome.REJECTED)
   private fun handoff(intent:Intent,message:String):PhoneActionResult {

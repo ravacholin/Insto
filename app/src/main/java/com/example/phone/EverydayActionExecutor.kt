@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.provider.ContactsContract.CommonDataKinds.Phone
 
 internal class EverydayActionExecutor(private val context: Context) {
   fun execute(command: PhoneCommand): PhoneActionResult {
@@ -35,7 +34,7 @@ internal class EverydayActionExecutor(private val context: Context) {
             return PhoneActionResult("Permití el acceso a tus contactos para buscar ese nombre, o indicá el número.",
               needsContacts = true, outcome = PhoneActionOutcome.NEEDS_INPUT)
           }
-          val (candidates, truncated) = findContacts(command.target)
+          val (candidates, truncated) = context.findPhoneContacts(command.target)
           when (val selection = ContactSelection.resolve(command.target, candidates, truncated)) {
             is ContactResolution.Number -> command.copy(target = selection.value)
             is ContactResolution.Choose -> return PhoneActionResult("Elegí el contacto y número que querés llamar.", contactOptions = selection.options, outcome = PhoneActionOutcome.NEEDS_INPUT)
@@ -94,21 +93,5 @@ internal class EverydayActionExecutor(private val context: Context) {
       else -> "Búsqueda abierta en Maps."
     }
     return PhoneActionResult(message, outcome = PhoneActionOutcome.HANDOFF)
-  }
-
-  private fun findContacts(name: String): Pair<List<ContactOption>, Boolean> {
-    val uri = Uri.withAppendedPath(Phone.CONTENT_FILTER_URI, Uri.encode(name))
-    return context.contentResolver.query(uri, arrayOf(Phone.DISPLAY_NAME, Phone.NUMBER), null, null, Phone.DISPLAY_NAME + " ASC")?.use { cursor ->
-      val values = buildList {
-        var scanned = 0
-        while (scanned < 100 && cursor.moveToNext()) {
-          scanned++
-          val label = cursor.getString(0)
-          val number = cursor.getString(1)
-          if (!label.isNullOrBlank() && !number.isNullOrBlank()) add(ContactOption(label, number))
-        }
-      }
-      values to cursor.moveToNext()
-    } ?: (emptyList<ContactOption>() to false)
   }
 }
