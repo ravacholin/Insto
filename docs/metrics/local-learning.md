@@ -38,6 +38,7 @@ Notas:
 - La diferencia entre la base y «antes» es una frase local agregada: «Bajá un poco el volumen».
 - «Comandos distintos del esperado» del modo «antes» corresponden a lo que un proveedor puede proponer sin contexto. Por ejemplo, música sin la app que el usuario acaba de abrir, o «Volvé a abrirla» sin paquete. Además, una hora ambigua no se aclaró. El proveedor simulado devuelve el comando correcto sin referencia contextual. En la base solo se contaron rutas y llamadas.
 - La latencia «después» cubre más pedidos resueltos en el teléfono. Una estructura o una referencia contextual cuestan entre 0,25 y 0,53 ms (p50 por pedido), porque el parser se ejecuta dos veces y se aplican las reglas de seguridad. Los mismos pedidos iban antes a Gemini o Groq. Esa latencia de red no se midió aquí.
+- Las latencias corresponden a una ejecución aislada del test. Si corre junto con toda la suite, la máquina tiene más carga: en una corrida completa, «antes» dio 134/333 µs y «después» 338/931 µs. Hay que tomarlas como orden de magnitud.
 - La primera versión decodificaba las estructuras en cada consulta y costaba alrededor de 2 ms por pedido. La caché por versión almacenada lo corrigió antes de entregar.
 
 ### Reproducir
