@@ -156,6 +156,10 @@ class MainActivity : ComponentActivity() {
           onOpenProviderSettings = {
             startActivity(Intent(this@MainActivity, GroqSettingsActivity::class.java))
           },
+          onOpenLearnedPhrases = {
+            startActivity(Intent(this@MainActivity, GroqSettingsActivity::class.java)
+              .putExtra(GroqSettingsActivity.EXTRA_PROVIDER, GroqSettingsActivity.SECTION_PHRASES))
+          },
           onSelectOrbHoldBehavior = { viewModel.setOrbHoldBehavior(it) },
           onSelectWhatsAppFlavor = { viewModel.setPreferredFlavor(it) },
           onSelectVolumeKeyTrigger = { viewModel.setVolumeKeyTrigger(it) },

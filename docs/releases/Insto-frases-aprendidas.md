@@ -2,8 +2,8 @@
 
 Una frase aprendida es un atajo: una frase tuya que Insto traduce a un comando
 que ya sabe ejecutar. Todo queda en el teléfono. Se administra en
-**IA → Frases aprendidas**, que también podés abrir diciendo «mostrame las
-frases aprendidas».
+**Configuración → Frases aprendidas**, que también podés abrir diciendo
+«mostrame las frases aprendidas».
 
 ## Cómo aprende solo
 
@@ -21,26 +21,31 @@ cronómetro requiere un resultado confirmado por el ejecutor.
 
 El aprendizaje automático nunca pisa una frase que agregaste vos.
 
-## Cómo agregar frases
+## Cómo agregar y editar frases
 
-En **Agregar frase** completás dos campos:
+Todo se hace desde **Configuración → Frases aprendidas → Editar frases**, sin
+escribir comandos:
 
-| Cuando diga | Insto hace |
-| --- | --- |
-| luz | prendé la linterna |
-| modo estudio | ejecutá la rutina Estudio |
-| música | abrí Spotify |
-| té | poné un timer de cuatro minutos |
-| a casa | llevame a casa |
+1. Tocá **Agregar frase**.
+2. En «Cuando diga» escribí la frase, por ejemplo «luz».
+3. Tocá **Elegir acción** y elegí de la lista: encender la linterna, subir o
+   fijar el volumen, modo silencio, No molestar, pausar la música, abrir una
+   app instalada, ejecutar una rutina, poner un temporizador, ir a un lugar y
+   más. Si la acción necesita un dato, como el porcentaje o los minutos, te lo
+   pide.
+4. Tocá **Guardar**. Si la frase no sirve, el diálogo explica por qué.
 
-La acción se escribe como se la pedirías a Insto. Mientras escribís, el
-diálogo muestra qué va a hacer o por qué no se puede guardar. Con la voz o el
-teclado del asistente:
+Para editar, tocá cualquier frase de la lista. Podés cambiar el texto, la
+acción o las dos. Las frases que Insto aprendió solo se editan igual.
+
+Quien prefiera escribir la acción puede elegir **Escribir un pedido
+(avanzado)** al final de la lista. Ahí va un pedido que Insto ya entiende, como
+«prendé la linterna». También se puede enseñar con la voz o el teclado del
+asistente:
 
 - «Cuando diga luz, prendé la linterna». Hace falta una pausa o coma entre la
   frase y la acción.
 - «Aprendé que modo cine es poné el volumen al 20».
-- «Acordate que música significa abrí Spotify».
 
 Las frases manuales admiten, además de lo que se aprende solo, temporizadores,
 alarmas sin fecha, rutinas configuradas, navegación y búsquedas en el mapa,
@@ -62,8 +67,7 @@ No se pueden guardar:
   cambia la acción de la última frase usada o aprendida.
 - «Olvidá esta frase» la borra. Sirve también justo después de que Insto
   aprendió algo que no querías.
-- En la lista, **Editar** cambia la frase, la acción o las dos. Si dejás vacía
-  la acción, se conserva la actual.
+- En la lista, tocá la frase para cambiar el texto o la acción.
 
 Una frase corregida o editada pasa a figurar como «La agregaste vos».
 
