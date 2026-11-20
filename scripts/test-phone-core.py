@@ -55,7 +55,8 @@ def main():
              "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "ProviderHttp", "GeminiTransport", "CapabilityCatalog",
              "DecisionsPolicy", "DecisionsCircuitBreaker", "Interpretation", "CommandDraft", "RequestSafetyPolicy", "GeminiCoordinator", "GeminiDiagnostics",
              "LocalIntentRegistry", "LocalIntentPhrases", "ExtendedLocalIntents", "NativeActionParameters",
-             "DocumentNamePolicy", "ConfiguredRoutineStore", "PhrasePatterns", "OperationalContext"]
+             "DocumentNamePolicy", "ConfiguredRoutineStore", "PhrasePatterns", "OperationalContext",
+             "PhraseCanonicalizer", "LearnedPhraseIndex"]
     sources = [str(source / (name + ".kt")) for name in names if (source / (name + ".kt")).exists()]
     sources += [str(ROOT / "app/src/main/java/com/example/audio/VoiceSessionPolicy.kt")]
     sources += [str(ROOT / "app/src/main/java/com/example/context/SharedTextContext.kt")]
@@ -70,7 +71,9 @@ def main():
         "speech/GroqTranscriberTest.kt", "speech/VocabularyHintsTest.kt")]
     for path in sorted((ROOT / "app/src/test/java/com/example/phone").glob("*Test.kt")):
         text = path.read_text()
-        if any(token in text for token in ("import android.", "import androidx.", "org.robolectric", "com.example.testsupport")):
+        # Tests that use Android-backed stores (DataStore) run with Gradle.
+        if any(token in text for token in ("import android.", "import androidx.", "org.robolectric", "com.example.testsupport",
+                                           "import com.example.data.")):
             continue
         tests.append(path)
     with tempfile.TemporaryDirectory(prefix="insto-core-") as directory:

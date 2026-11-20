@@ -130,6 +130,7 @@ fun LearnedPhrasesContent(store: LearnedPhraseStore, onMessage: (String) -> Unit
       HorizontalDivider()
       PhraseRow(
         entry,
+        template = remember(entry) { store.template(entry) },
         onEdit = { editing = PhraseEditor(entry.phrase, entry) },
         onDelete = {
           scope.launch {
@@ -172,9 +173,11 @@ fun LearnedPhrasesContent(store: LearnedPhraseStore, onMessage: (String) -> Unit
       editor = editor,
       existing = settings?.entries.orEmpty().map { it.phrase },
       onDismiss = { editing = null },
-      onSave = { key, command, target ->
+      onSave = { key, command, target, written, generalize ->
         scope.launch {
-          val saved = try { store.teach(key, command, target, replacing = editor.original?.phrase) } catch (_: IOException) { false }
+          val saved = try {
+            store.teach(key, command, target, replacing = editor.original?.phrase, display = written, generalize = generalize)
+          } catch (_: IOException) { false }
           if (saved) {
             editing = null
             onMessage(if (editor.original == null) "Frase agregada." else "Frase actualizada.")
@@ -240,11 +243,16 @@ private fun HowItWorks(title: String, body: String) {
 }
 
 @Composable
-private fun PhraseRow(entry: LearnedPhraseStore.Entry, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun PhraseRow(entry: LearnedPhraseStore.Entry, template: String?, onEdit: () -> Unit, onDelete: () -> Unit) {
   Row(Modifier.fillMaxWidth().clickable(onClickLabel = "Editar", onClick = onEdit).padding(vertical = 4.dp),
     horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Text("«${entry.phrase}»", style = MaterialTheme.typography.bodyLarge)
+      val written = entry.display ?: entry.phrase
+      if (template != null) {
+        Text("«$template»", style = MaterialTheme.typography.bodyLarge)
+        Text("Ejemplo: «$written» · también funciona con otros valores", style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant)
+      } else Text("«$written»", style = MaterialTheme.typography.bodyLarge)
       Text(PhoneCommandCodec.summary(entry.command), style = MaterialTheme.typography.bodyMedium)
       val origin = if (entry.source == LearnedPhraseStore.Source.MANUAL) "La agregaste vos" else "Aprendida sola"
       val uses = when (entry.uses) { 0L -> "sin usar"; 1L -> "1 uso"; else -> "${entry.uses} usos" }
@@ -266,9 +274,10 @@ private fun PhraseEditorDialog(
   editor: PhraseEditor,
   existing: List<String>,
   onDismiss: () -> Unit,
-  onSave: (key: String, command: PhoneCommand, target: String?) -> Unit,
+  onSave: (key: String, command: PhoneCommand, target: String?, written: String, generalize: Boolean) -> Unit,
 ) {
-  var phrase by rememberSaveable { mutableStateOf(editor.phrase) }
+  var phrase by rememberSaveable { mutableStateOf(editor.original?.display ?: editor.phrase) }
+  var generalize by rememberSaveable { mutableStateOf(editor.original?.generalize ?: true) }
   var command by remember { mutableStateOf(editor.original?.command) }
   var target by remember { mutableStateOf(editor.original?.target) }
   var picking by remember { mutableStateOf(false) }
@@ -308,11 +317,25 @@ private fun PhraseEditorDialog(
           is PhraseTeaching.Phrase.Valid -> if (state.replaces) SettingsDescription("Ya existe esa frase. Se reemplaza su acción.")
           null -> if (phrase.isNotBlank() && command != null) SettingsDescription("Revisando…")
         }
+        val valid = check as? PhraseTeaching.Phrase.Valid
+        val chosen = command
+        val template = if (valid != null && chosen != null) remember(valid.key, chosen) {
+          com.example.phone.LearnedPhraseIndex.templateOf(com.example.phone.LearnedPhraseIndex.Item(valid.key, chosen, true))
+        } else null
+        if (template != null) {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f)) {
+              Text("Usar también con otros valores", style = MaterialTheme.typography.bodyMedium)
+              SettingsDescription("«${com.example.phone.LearnedPhraseIndex.describe(template, phrase)}»")
+            }
+            androidx.compose.material3.Switch(checked = generalize, onCheckedChange = { generalize = it })
+          }
+        }
       }
     },
     confirmButton = {
       val valid = check as? PhraseTeaching.Phrase.Valid
-      TextButton(enabled = valid != null && command != null, onClick = { onSave(valid!!.key, command!!, target) }) { Text("Guardar") }
+      TextButton(enabled = valid != null && command != null, onClick = { onSave(valid!!.key, command!!, target, phrase, generalize) }) { Text("Guardar") }
     },
     dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
   )

@@ -530,3 +530,18 @@ Los de la consigna, sin cambios: las claves se recuperan sin volver a ingresarla
 2. **Indicador de salud sin historial:** ¿«Necesita revisión» hasta el primer envío confirmado con la versión instalada? Propuesta: sí, para no confundir un servicio habilitado con una garantía de envío.
 3. **Generalización desde una sola frase:** ¿activa por defecto, con el interruptor por frase? Propuesta: sí. Es lo que pide el ejemplo «al 30 → al 50».
 4. **Versión:** 1.12.0 / `versionCode 21`, con el cambio de versión y las notas de entrega en un commit final después de C.
+
+---
+
+## Aprobación y ajustes durante la implementación
+
+El usuario aprobó el PASO 0 y las cuatro propuestas: contraseña también en «Exportar sin claves», «Necesita revisión» sin historial, generalización activa por defecto y versión 1.12.0 / 21 en un commit final.
+
+### Parte A
+
+- **Ambigüedad entre niveles:** cuando un nivel es ambiguo, la búsqueda **se detiene** y sigue el flujo normal. No baja a un nivel más débil. Es más conservador que «pasar al siguiente» de A2.
+- **Componentes:** `phone/PhraseCanonicalizer.kt` y `phone/LearnedPhraseIndex.kt` son puros y se prueban en la JVM. El almacén cachea el índice por valor almacenado, igual que `PatternCache`. La búsqueda corre en el hilo del llamador, como `isLaunchable`. El PackageManager solo se consulta cuando coincide una plantilla `{app}`.
+- **Hora ambigua en una plantilla de frase:** «… a las 7» no ejecuta y sigue el flujo normal. A diferencia de las estructuras, no pregunta mañana o tarde.
+- **`RequestSafetyPolicy`:** la medición mostró tres restricciones que pasaban el filtro y que un clasificador podía ejecutar («Ni se te ocurra…», «… salvo que…», «Dale, no, … no»). Se amplió el filtro, sin cambiar las rutas del corpus de 155.
+- **`IntentCoverageTest`** usa el `LearnedPhraseStore` real y por eso corre con Gradle. `scripts/test-phone-core.py` saltea las pruebas que importan `com.example.data`.
+- **`FloatingLocalLearningTest`:** «Música al 40» confirmada ahora resuelve «al 55 por ciento» sin proveedores. Ese es el comportamiento nuevo aprobado. La prueba de estructuras de tres ejemplos desactiva la generalización de cada frase para seguir cubriéndolas, y una prueba nueva cubre la generalización en el ViewModel.

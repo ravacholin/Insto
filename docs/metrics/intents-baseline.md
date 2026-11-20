@@ -26,5 +26,35 @@ Comandos de reproducción de la medición
 ```sh
 ./gradlew :app:testDebugUnitTest --tests com.example.phone.IntentCoverageTest --info
 # Alternativa JVM del repositorio
-python scripts/test-phone-core.py com.example.phone.IntentCoverageTest
+# (hasta 1.11.1) python scripts/test-phone-core.py com.example.phone.IntentCoverageTest
 ```
+
+## Frases aprendidas con parámetros y formas parecidas (1.12.0)
+
+Medido el 2026-11-20 con `IntentCoverageTest.learnedPhrasesKeepRestrictionsAndAmbiguitiesOutOfLocalActions`. Usa un `LearnedPhraseStore` real sobre `PhraseTestDataStore`, con 12 frases sembradas (7 manuales y 5 aprendidas solas) y 38 pedidos en cinco grupos: expresiones rioplatenses (7), frases con un valor nuevo (8), variantes de forma o de transcripción (7), ambigüedades (8) y negaciones y restricciones (8). El clasificador y el extractor son simulados y devuelven la acción plausible, incluso para negaciones, para medir qué detiene el teléfono por sí mismo. «Antes» es el mismo arnés sobre `ee724f3`, en un worktree; ahí el almacén no tiene `resolveApp`, porque no existía.
+
+| Métrica (38 pedidos con frases aprendidas) | Antes (`ee724f3`) | Después |
+| --- | ---: | ---: |
+| Resoluciones locales sin Gemini | 1/38 (2,63 %) | 21/38 (55,26 %) |
+| Llamadas a Decisions por pedido | 34/38 (0,8947) | 10/38 (0,2632) |
+| Falsos positivos en restricciones | 3 | 0 |
+| Acciones locales indebidas | 0 | 0 |
+| Derivaciones incorrectas a Instinct | 0 | 0 |
+
+El corpus de 155 pedidos con una instalación limpia no cambia: 120/155 (77,42 %) local, 11 llamadas a Decisions (0,0710), 0 falsos positivos y 0 derivaciones incorrectas a Instinct.
+
+Notas:
+
+- Los tres falsos positivos de «antes» no eran frases aprendidas. «Ni se te ocurra prender la luz del pasillo», «Luz del pasillo salvo que esté durmiendo» y «Dale, no, luz del pasillo no» pasaban la política de seguridad y el clasificador simulado los ejecutaba. `RequestSafetyPolicy.rejection` ahora reconoce «ni», «jamás» y «tampoco» al comienzo, también después de «che», «dale», «bueno» o «a ver»; las condiciones «salvo que», «excepto que», «a no ser que» y «sin que»; y un «no» final.
+- «El fideo en media hora» sigue yendo a Decisions: `CommandDuration` no interpreta «media hora» como duración de temporizador. La plantilla tampoco la acepta, porque valida igual que el comando nativo.
+- «Prendeme modo fiesta» coincide con dos frases manuales de acción distinta. El índice no elige y el pedido sigue el flujo normal.
+- Los ambiguos y negativos que llegan a Decisions terminan en aclaración, rechazo o una acción propuesta por el proveedor, nunca en una acción local.
+
+Reproducir:
+
+```sh
+./gradlew :app:testDebugUnitTest --tests com.example.phone.IntentCoverageTest
+# Las líneas LEARNED_METRICS y METRICS quedan en app/build/test-results/testDebugUnitTest/TEST-com.example.phone.IntentCoverageTest.xml
+```
+
+`IntentCoverageTest` usa el almacén de frases (DataStore), así que ahora corre con Gradle. `scripts/test-phone-core.py` saltea las pruebas que importan `com.example.data`.

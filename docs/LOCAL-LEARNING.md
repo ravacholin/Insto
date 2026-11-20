@@ -9,8 +9,8 @@ Dos mejoras de la interpretación local. Su objetivo es resolver más órdenes e
 1. **Validación y seguridad.** `RequestSafetyPolicy.rejection` rechaza citas, hipótesis, negaciones y condiciones antes de cualquier otra etapa. La clave de frases aprendidas (`LearnedPhraseStore.key`) también descarta preguntas, órdenes compuestas, borradores y texto compartido.
 2. **Cancelaciones, confirmaciones y borradores.** Se resuelven antes de clasificar el pedido, igual que hasta ahora: «cancelar», «dale», elegir una opción, continuar una secuencia, aclarar una hora o completar un borrador. Estas respuestas no cuentan como turnos del contexto.
 3. **Reconocimiento local explícito** (`PhoneCommandParser`). Una orden explícita bien parseada se ejecuta tal cual. La única excepción es un pedido de música que no nombró aplicación: el contexto puede completarla. Una aplicación nombrada siempre prevalece.
-4. **Frases aprendidas exactas**, manuales o automáticas.
-5. **Estructuras aprendidas** con un parámetro tipado.
+4. **Frases aprendidas**, manuales o automáticas. Primero la frase exacta. Desde 1.12.0 también la misma frase en forma canónica (voseo, tuteo, infinitivo y muletillas) o con una letra de diferencia, y después las frases con un valor nuevo («bajá la música al {número}»): primero las manuales y después las automáticas. Ver [frases aprendidas](releases/Insto-frases-aprendidas.md).
+5. **Estructuras aprendidas** con un parámetro tipado. Si no coincide la forma exacta, se compara también en forma canónica.
 6. **Contexto operativo**, solo para referencias claramente definidas.
 7. **Gemini Decisions, extracción y respaldo de Groq.** No cambian y nunca reciben el contexto.
 8. **Ejecución Android** con los permisos, confirmaciones y reintentos de siempre.

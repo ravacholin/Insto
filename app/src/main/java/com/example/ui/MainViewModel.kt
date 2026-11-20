@@ -656,7 +656,7 @@ class MainViewModel @JvmOverloads constructor(
           val phrase = PhraseTeaching.checkPhrase(order.phrase, resolved.command, state.entries.map { it.phrase }, parser = phoneParser)
           if (phrase is PhraseTeaching.Phrase.Invalid) return@phraseManagement PhraseReply.Retain(phrase.message)
           phrase as PhraseTeaching.Phrase.Valid
-          if (!isCurrent() || !learnedPhrases.teach(phrase.key, resolved.command, target))
+          if (!isCurrent() || !learnedPhrases.teach(phrase.key, resolved.command, target, display = order.phrase))
             return@phraseManagement PhraseReply.Retain("No pude guardar la frase. Volvé a intentarlo.")
           PhraseReply.Done("Aprendí «${order.phrase}»: ${resolved.summary}." +
             (if (phrase.replaces) " Reemplacé la acción anterior." else "") +
