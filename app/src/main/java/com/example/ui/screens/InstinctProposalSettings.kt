@@ -198,7 +198,7 @@ private fun InstinctAutonomySection(revision: Int, onChange: () -> Unit) {
   }
 }
 
-/** Orders Instinct scheduled for later, with their time and a button to cancel each one. */
+/** Orders Instinct scheduled for later, with their trigger or recurrence and a button to cancel each one. */
 @Composable
 private fun InstinctScheduledList(revision: Int, onChange: () -> Unit) {
   val context = LocalContext.current
@@ -206,12 +206,11 @@ private fun InstinctScheduledList(revision: Int, onChange: () -> Unit) {
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_scheduled")) {
     Text("Órdenes programadas por Instinct", style = MaterialTheme.typography.bodyLarge)
     if (pending.isEmpty()) SettingsDescription("No hay órdenes programadas.")
-    val zone = java.util.Calendar.getInstance()
-    pending.forEach { order ->
-      SettingsDescription("${com.example.phone.InstinctDeferral.clock(order.fireAt, zone)}" +
-        (order.condition?.let { " ${it.label}" } ?: "") + ": ${order.inner}")
-      TextButton(onClick = { com.example.phone.InstinctScheduler.cancel(context, order.id); onChange() },
-        modifier = Modifier.testTag("instinct_scheduled_cancel")) { Text("Cancelar esta orden") }
+    // One row per order, a recurrence once (its next occurrence): the trigger or recurrence in words, and its id.
+    pending.distinctBy { it.series }.forEach { order ->
+      SettingsDescription(com.example.phone.InstinctScheduler.line(order))
+      TextButton(onClick = { com.example.phone.InstinctScheduler.cancelShort(context, order.shortId); onChange() },
+        modifier = Modifier.testTag("instinct_scheduled_cancel")) { Text(if (order.recurring) "Cancelar la recurrente" else "Cancelar esta orden") }
     }
   }
 }

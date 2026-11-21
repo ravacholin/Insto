@@ -18,7 +18,8 @@ class InstinctAutonomyTest {
   @Test fun `every allowed example has a category, and a deferred order uses its inner one`() {
     val parser = PhoneCommandParser()
     for (example in InstinctProposalValidator.examples) {
-      val valid = InstinctProposalValidator.check(example, parser) as ProposalCheck.Valid
+      val valid = InstinctProposalValidator.check(example, parser,
+        java.util.Calendar.getInstance().apply { set(2026, java.util.Calendar.NOVEMBER, 21, 10, 0, 0) }) as ProposalCheck.Valid
       assertNotNull(example, InstinctCategory.of(valid.command))
     }
     val deferred = InstinctProposalValidator.check("a las 22:00: poner el volumen al 10 por ciento", parser) as ProposalCheck.Valid

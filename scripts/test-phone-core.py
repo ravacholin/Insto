@@ -60,7 +60,7 @@ def main():
              "PhraseCanonicalizer", "LearnedPhraseIndex", "WeatherIntentParser", "SemanticCommandGuard", "InstinctProposals",
              "InstinctReplies", "InstinctRoutines", "InstinctProtocolCatalog",
              "InstinctSchedule", "InstinctUndo", "InstinctLog", "InstinctAutonomy", "InstinctState", "InstinctMailbox",
-             "InstinctDoorbell"]
+             "InstinctDoorbell", "InstinctTriggers"]
     sources = [str(source / (name + ".kt")) for name in names if (source / (name + ".kt")).exists()]
     # SMN weather clients: pure JVM (OkHttp, org.json, coroutines), no Android types.
     sources += [str(path) for path in sorted((source / "weather").glob("*.kt"))]

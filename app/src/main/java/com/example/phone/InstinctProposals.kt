@@ -33,15 +33,20 @@ sealed interface ProposalCheck {
   data class Valid(override val order: String, val command: PhoneCommand, val deferred: Deferred? = null) : ProposalCheck
   data class Invalid(override val order: String, val reason: Reason) : ProposalCheck
   /** A read-only question about the protocol itself: it never does anything on the phone. */
-  data class Query(override val order: String, val kind: QueryKind) : ProposalCheck
+  data class Query(override val order: String, val kind: QueryKind, val argument: String? = null) : ProposalCheck
   /** «avisarme <texto>» (1.16.0): a local notice for the person, allowed only from the signed mailbox. */
   data class Notice(override val order: String, val text: String) : ProposalCheck
   enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN }
-  /** [readOnly] queries change nothing; «cancelar programadas» only cancels Insto's own pending orders. */
-  enum class QueryKind(val phrase: String, val readOnly: Boolean = true) {
+  /**
+   * [readOnly] queries change nothing on the phone; «cancelar programadas» and «cancelar programada <id>» only
+   * cancel Insto's own pending orders. None consumes the brake. [form] is how the catalog shows it.
+   */
+  enum class QueryKind(val phrase: String, val readOnly: Boolean = true, val form: String = phrase) {
     CATALOG("ver catálogo"), SCHEDULED("ver programadas"), CANCEL_SCHEDULED("cancelar programadas", readOnly = false),
     /** Publishes the phone's state in the log now (1.16.0). Changes nothing on the phone. */
-    STATE("ver estado")
+    STATE("ver estado"),
+    /** One scheduled order, or a whole recurrence, by the short id of «ver programadas» (1.17.0). */
+    CANCEL_ONE("cancelar programada", form = "cancelar programada <id>"),
   }
 }
 
@@ -52,6 +57,7 @@ sealed interface ProposalCheck {
  * [PhoneRoute.Local] is discarded.
  */
 object InstinctProposalValidator {
+  private val cancelOne = Regex("^cancelar programada ([0-9a-f]{${InstinctTriggers.SHORT_ID_LENGTH}})$")
   private val silenceActions = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
     PlatformAction.DND_ON, PlatformAction.DND_OFF)
 
@@ -66,8 +72,9 @@ object InstinctProposalValidator {
     if (order.isBlank()) return ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY)
     // Read-only questions about the protocol: exact phrases, before the grammar.
     val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
-    ProposalCheck.QueryKind.entries.firstOrNull { PhoneCommandParser.normalize(it.phrase) == folded }
+    ProposalCheck.QueryKind.entries.firstOrNull { it != ProposalCheck.QueryKind.CANCEL_ONE && PhoneCommandParser.normalize(it.phrase) == folded }
       ?.let { return ProposalCheck.Query(order, it) }
+    cancelOne.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.CANCEL_ONE, it.groupValues[1]) }
     // A notice for the person: fixed form, plain text. Where it may come from is decided by the caller.
     InstinctNotice.text(order)?.let { text ->
       return if (InstinctNotice.valid(text)) ProposalCheck.Notice(order, text) else ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY)
@@ -140,6 +147,17 @@ object InstinctProposalValidator {
     "a las 06:30 si no llueve: poner música de Soda Stereo",
     "a las 07:00 si hace menos de 10 grados: poner un temporizador de 10 minutos",
     "a las 14:00 si hace más de 30 grados: activar no molestar",
+    // Triggers by state (1.17.0): once each, at most 12 hours (24 with «hasta las HH:MM»).
+    "al terminar el evento: desactivar no molestar",
+    "al empezar el próximo evento: activar no molestar",
+    "al conectar auriculares hasta las 20:00: abrir spotify",
+    "al desconectar auriculares: pausar la música",
+    "al desbloquear: mostrar las alarmas",
+    // Recurring orders (1.17.0): «hasta el DD/MM» is required, at most 30 days. The tests check them on 21/11.
+    "todos los días a las 07:30 hasta el 15/12: poner el volumen al 20 por ciento",
+    "los días hábiles a las 08:00 hasta el 15/12: activar no molestar",
+    "los fines de semana a las 10:00 hasta el 13/12: poner música de Soda Stereo",
+    "todos los días a las 06:30 si llueve hasta el 15/12: poner una alarma a las 06:45",
   )
 
   /**

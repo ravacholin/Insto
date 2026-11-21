@@ -8,7 +8,7 @@ Desde 1.15.0, los acuses pueden ir a una **bitácora** en Google Sheets en lugar
 
 Desde 1.16.0, qué hace Instinct solo se elige **por tipo de acción** ([Autonomía por acción](#autonomía-por-acción-1160)), con horas de silencio y un ajuste automático cuando deshacés mucho. Con la bitácora configurada, Insto además publica el **estado del teléfono** para que Instinct decida con contexto ([Estado del teléfono](#estado-del-teléfono-1160)), y las órdenes pueden llegar también por un **buzón firmado** en la misma planilla, sin escribir en el chat ([Buzón firmado](#buzón-firmado-1160)).
 
-Desde 1.17.0, un **timbre** push con ntfy hace que una orden del buzón se tome en segundos ([Timbre](#timbre-1170)).
+Desde 1.17.0, un **timbre** push con ntfy hace que una orden del buzón se tome en segundos ([Timbre](#timbre-1170)), y las órdenes pueden quedar **armadas** para que el teléfono las dispare solo: al terminar o empezar un evento, al conectar o desconectar auriculares, al desbloquear ([Disparadores por estado](#disparadores-por-estado-1170)) o todos los días, los días hábiles o los fines de semana hasta una fecha ([Órdenes recurrentes](#órdenes-recurrentes-1170)). Protocolo Insto v5.
 
 La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. En **Autonomía** elegís, por categoría, si Instinct lo hace solo, espera tu confirmación o nunca. Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
 
@@ -21,7 +21,7 @@ La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct 
 - La línea tiene que *empezar* con `#insto`, en minúsculas (se ignoran los espacios iniciales). Un `#insto` en medio de una oración es texto común.
 - Se leen como máximo **3 líneas por mensaje**; las demás se ignoran. El resto del mensaje no se interpreta.
 - No hay JSON ni parámetros libres: la línea pasa por el mismo parser que un pedido escrito. No usa Gemini, Groq, frases aprendidas, estructuras aprendidas ni el contexto operativo. **Solo la gramática explícita.**
-- Hay tres formas extra, todas fijas: el envoltorio de una **orden diferida** (`a las HH:MM: …`, `en N minutos: …`, ver [Órdenes diferidas](#órdenes-diferidas-1140)), su única **condición de clima** y las **consultas** `ver catálogo`, `ver programadas` y `cancelar programadas`.
+- Hay formas extra, todas fijas: el envoltorio de una **orden diferida** (`a las HH:MM: …`, `en N minutos: …`, ver [Órdenes diferidas](#órdenes-diferidas-1140)), su única **condición de clima**, los **disparadores** y las **recurrentes** (1.17.0) y las **consultas** `ver catálogo`, `ver programadas`, `cancelar programadas` y `cancelar programada <id>`.
 - Si una línea no se resuelve como un único `PhoneRoute.Local` permitido (o una de esas formas), se descarta y aparece un aviso discreto: «Instinct propuso algo que no entiendo». Eso incluye las aclaraciones (por ejemplo, «a las 7» sin mañana ni tarde), varios pasos, condiciones fuera del envoltorio, negaciones y preguntas.
 
 ## Acciones permitidas (lista blanca)
@@ -40,7 +40,9 @@ La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct 
 | `CalendarEvent` | `#insto agendar reunión mañana a las 17:00 durante una hora` | Sí (el calendario muestra el evento para guardarlo) |
 | `ROUTINE_RUN` de una rutina **habilitada para Instinct** (1.14.0) | `#insto ejecutar la rutina Estudio` | Según sus pasos |
 | Cualquiera de las anteriores, **diferida** (1.14.0) | `#insto a las 22:00: poner el volumen al 10 por ciento` · `#insto a las 06:30 si llueve: poner una alarma a las 06:45` | Según la orden |
-| Consultas (1.14.0) | `#insto ver catálogo` · `#insto ver programadas` · `#insto cancelar programadas` | No: no hacen nada en el teléfono |
+| Cualquiera de las anteriores, con un **disparador** (1.17.0) | `#insto al conectar auriculares hasta las 20:00: abrir spotify` · `#insto al terminar el evento: desactivar no molestar` | Según la orden |
+| Cualquiera de las anteriores, **recurrente** (1.17.0) | `#insto los días hábiles a las 08:00 hasta el 15/12: activar no molestar` | Según la orden |
+| Consultas (1.14.0) | `#insto ver catálogo` · `#insto ver programadas` · `#insto cancelar programadas` · `#insto cancelar programada <id>` (1.17.0) | No: no hacen nada en el teléfono |
 | `ver estado` (1.16.0) | `#insto ver estado` | No: publica el [estado](#estado-del-teléfono-1160) en la bitácora y no consume el freno |
 | `avisarme` (1.16.0), **solo por el [buzón](#buzón-firmado-1160)** | `#insto avisarme Te bajé el volumen para la clase.` | No: es una notificación de Insto para vos |
 
@@ -168,11 +170,11 @@ Instinct puede pedir `#insto ejecutar la rutina <nombre>` para correr una rutina
 
 ## Catálogo para Instinct (1.14.0)
 
-El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses (o, con la bitácora, cómo leerla) y la versión del protocolo («Protocolo Insto v4» desde 1.16.0).
+El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses (o, con la bitácora, cómo leerla) y la versión del protocolo («Protocolo Insto v5» desde 1.17.0; v4 en 1.16.0).
 
 - **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** lo copia al portapapeles. Si las respuestas están activas y hay una acción «Responder» vigente (de un mensaje de Instinct de los últimos 10 minutos), aparece **«Enviarlas a Instinct»**: lo manda por ese chat.
 - La copia que viaja por WhatsApp marca cada ejemplo con «› » delante y lo explica, porque Insto lee ese chat y nunca debe tomar su propio mensaje por órdenes. Igual que un acuse, se comprueba que no tenga ninguna línea que empiece con «#insto ».
-- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v4 · rutinas habilitadas: Estudio.` (no el catálogo entero).
+- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v5 · rutinas habilitadas: Estudio.` (no el catálogo entero).
 - Copias de referencia, generadas sin rutinas: [`instinct-catalog.txt`](instinct-catalog.txt) (canal WhatsApp) y [`instinct-catalog-bitacora.txt`](instinct-catalog-bitacora.txt) (con bitácora, la copia que viaja por WhatsApp, sin URL ni token). Un test compara las dos con lo que genera el código; para regenerarla, corré `INSTO_WRITE_CATALOG=1 python3 scripts/test-phone-core.py com.example.phone.InstinctRoutinesTest`.
 
 ## Órdenes diferidas (1.14.0)
@@ -186,7 +188,7 @@ El envoltorio solo dice **cuándo**; la orden interior pasa por el validador int
 
 - **Los dos puntos después del tiempo son obligatorios.** Sin ellos la línea es una orden inmediata común, así que `#insto poner una alarma a las 07:00` conserva su significado.
 - **Al recibirla** se valida la orden interior con `InstinctProposalValidator.check` en ese momento. Si es inválida, se descarta y se responde `#insto-error`. Si es válida, se guarda y se responde `#insto-programada <orden> → a las 22:00`. También te llega un aviso «Instinct programó: …». No se anidan envoltorios ni consultas.
-- **Almacenamiento:** `instinct-scheduled.json` en `noBackupFilesDir`, con escritura atómica (como `ConfiguredRoutineStore`): id, orden completa e interior (texto), hora de disparo en tiempo de pared, huella de la configuración, condición opcional y un token aleatorio. Como máximo **10 programadas** y **24 horas** a futuro. Una restauración nunca las trae.
+- **Almacenamiento:** `instinct-scheduled.json` en `noBackupFilesDir` (con versión de formato desde 1.17.0, ver [Disparadores](#disparadores-por-estado-1170)), con escritura atómica (como `ConfiguredRoutineStore`): id, orden completa e interior (texto), hora de disparo en tiempo de pared, huella de la configuración, condición opcional y un token aleatorio. Como máximo **10 programadas** y **24 horas** a futuro. Una restauración nunca las trae.
 - **Disparo:** `AlarmManager.setAndAllowWhileIdle` (`setExactAndAllowWhileIdle` solo si `canScheduleExactAlarms`) hacia `InstinctScheduleReceiver`, que no está exportado; la alarma lleva el token de la orden. Se reprograma todo en `BOOT_COMPLETED` y cuando cambia la hora (`TIME_SET`) o la zona horaria (`TIMEZONE_CHANGED`). La hora guardada es un instante: si cambiás de zona, se dispara en el mismo instante, no a la misma hora local.
 - **Al dispararse:**
   1. Se marca **consumida en disco antes de cualquier otra cosa**: cada programada se ejecuta como máximo una vez. Si el proceso muere en el medio, al reiniciar se avisa «Pudo haberse ejecutado… no se repite» y nunca se vuelve a ejecutar (es un resultado incierto).
@@ -194,7 +196,7 @@ El envoltorio solo dice **cuándo**; la orden interior pasa por el validador int
   3. Si tiene condición, se evalúa ([Condiciones por clima](#condiciones-por-clima-1140)).
   4. Si llegó con **más de 15 minutos de atraso** (Doze, teléfono apagado), no se ejecuta sola: queda para Confirmar con el motivo «Llegó tarde».
   5. Si no, pasa por `autoRunBlocker` y `runInBackground` como cualquier orden (o al panel, si está abierto).
-- **Gestión:** `#insto ver programadas` (solo lectura, responde por el acuse con la hora y la orden de cada una) y `#insto cancelar programadas` (cancela todas las que vinieron de Instinct). En **Ajustes → Propuestas de Instinct → Órdenes programadas por Instinct** ves la lista con hora y resumen y podés cancelar cada una. Apagar «Recibir órdenes de Instinct» las cancela todas.
+- **Gestión:** `#insto ver programadas` (solo lectura, responde por el acuse con un id corto, el disparador y la orden de cada una), `#insto cancelar programada <id>` (1.17.0) y `#insto cancelar programadas` (cancela todas las que vinieron de Instinct, recurrentes incluidas). En **Ajustes → Propuestas de Instinct → Órdenes programadas por Instinct** ves la lista con hora y resumen y podés cancelar cada una. Apagar «Recibir órdenes de Instinct» las cancela todas.
 - **Acuse al dispararse:** por el chat, solo si la acción «Responder» del mensaje original sigue vigente (10 minutos), es decir, en la práctica para demoras cortas. Con la [bitácora](#bitácora-1150) se registra siempre, aunque hayan pasado horas o se haya reiniciado el teléfono (la programada guarda el identificador corto del mensaje).
 
 ## Condiciones por clima (1.14.0)
@@ -255,7 +257,7 @@ Cada acuse es un evento JSON:
 
 ```json
 {"id": "6f1c…", "at": "2026-11-21T09:30:12-03:00", "kind": "ok", "order": "poner el volumen al 30 por ciento",
- "detail": "Volumen multimedia ajustado.", "message": "3fa94c0b12de", "protocol": "Protocolo Insto v4"}
+ "detail": "Volumen multimedia ajustado.", "message": "3fa94c0b12de", "protocol": "Protocolo Insto v5"}
 ```
 
 - `id`: UUID aleatorio generado al crear el evento. El script descarta los ids repetidos y los confirma igual: un reintento nunca duplica una fila.
@@ -264,7 +266,7 @@ Cada acuse es un evento JSON:
 - `order`: la orden original recortada a 80 caracteres, como en el chat.
 - `detail`: el mismo texto de resultado del acuse en el chat (`InstinctAck`), con los mismos recortes y el mismo aplanado de saltos de línea y caracteres de control.
 - `message`: los primeros 12 dígitos hexadecimales del SHA-256 que ya usa el dedupe (clave de la notificación más texto). Identifica el mensaje de Instinct que originó la orden; **nunca es el texto**.
-- `protocol`: «Protocolo Insto v4» (v3 hasta 1.15.0).
+- `protocol`: «Protocolo Insto v5» (v4 en 1.16.0, v3 hasta 1.15.0).
 
 **Guardia anti-bucle:** ningún campo puede empezar con «#insto » ni tener una línea que el lector de órdenes tome por una orden. Un evento que no pase la guardia no se crea y la bandeja tampoco lo acepta. Las respuestas a consultas (`ver catálogo`, `ver programadas`, `cancelar programadas`) también son eventos (`kind=ok`).
 
@@ -282,7 +284,7 @@ Con la acción «Responder», los seguimientos solo salen durante 10 minutos. Co
 
 ### Para Instinct
 
-Con Bitácora o Ambos, el catálogo («Protocolo Insto v4») reemplaza la explicación de los prefijos por cómo leer la bitácora:
+Con Bitácora o Ambos, el catálogo («Protocolo Insto v5») reemplaza la explicación de los prefijos por cómo leer la bitácora:
 
 ```text
 GET <URL>?token=<token>&since=<ISO>&limit=50
@@ -344,7 +346,7 @@ El último estado publicado se guarda, con su hora, en `instinct-state-last.json
 
 ### Para Instinct
 
-Con la bitácora, el catálogo («Protocolo Insto v4») suma la sección «Estado del teléfono»: qué campos hay, cómo leerlos (`action=estado`) y la regla **«antes de una orden que dependa del estado (silencio, No molestar, alarmas, calendario), mirá el último estado; si tiene más de 30 minutos, pedí la consulta «ver estado» y esperá»**. Con el canal en WhatsApp esa sección no aparece, porque Instinct no tiene cómo leer la bitácora.
+Con la bitácora, el catálogo («Protocolo Insto v5») suma la sección «Estado del teléfono»: qué campos hay, cómo leerlos (`action=estado`) y la regla **«antes de una orden que dependa del estado (silencio, No molestar, alarmas, calendario), mirá el último estado; si tiene más de 30 minutos, pedí la consulta «ver estado» y esperá»**. Con el canal en WhatsApp esa sección no aparece, porque Instinct no tiene cómo leer la bitácora.
 
 ## Buzón firmado (1.16.0)
 
@@ -509,6 +511,57 @@ Al tocar el timbre a mano, el diagnóstico suma un timbre y un sondeo; la orden 
 - El script toca el timbre como mucho una vez cada 5 segundos; varias órdenes seguidas igual se leen todas en el mismo sondeo.
 - ntfy reenvía el texto `insto-timbre` sin cifrar; como Insto no lo lee, no importa qué diga.
 
+## Disparadores por estado (1.17.0)
+
+Hasta 1.16.0, para «cuando termine la clase, sacá el No molestar», Instinct tenía que vigilar el estado y mandar la orden en el momento justo. Ahora deja la orden **armada** y el teléfono la dispara solo. El envoltorio solo dice **cuándo**; la orden interior pasa por el validador intacta, al recibirla y otra vez al dispararse, como una diferida.
+
+```text
+#insto al terminar el evento: <orden>
+#insto al empezar el próximo evento: <orden>
+#insto al conectar auriculares: <orden>
+#insto al desconectar auriculares: <orden>
+#insto al desbloquear: <orden>
+```
+
+- **Los dos puntos son obligatorios** y cada línea admite **una sola condición**: sin «y», «o», sin clima y sin anidar otra diferida. `al conectar auriculares si llueve: …` o `al conectar auriculares y al desbloquear: …` se rechazan, nunca se toman por órdenes inmediatas.
+- **Vencimiento:** todos aceptan `hasta las HH:MM` antes de los dos puntos (`#insto al conectar auriculares hasta las 20:00: abrir spotify`); si esa hora ya pasó hoy, es mañana. Sin tope, vencen a las **12 horas**; el máximo es de **24 horas**. Una orden que vence sin dispararse se borra, te avisa y se registra como `vencida` (`venció sin dispararse; no se ejecutó.`).
+- **Cada disparador se usa una sola vez.** Se marca consumido en disco antes de ejecutarse, como cualquier programada.
+- **Eventos.** `al terminar el evento` toma el evento **en curso**; `al empezar el próximo evento`, el próximo que empiece dentro de las **12 horas**. Los dos leen el calendario al recibir la orden (`CalendarContract.Instances`, sin los eventos de todo el día y sin leer títulos), guardan el id de la instancia, el del evento y la hora, y se programan con `AlarmManager`, como una diferida. Al dispararse vuelven a leer esa instancia: **si se movió**, se reprograma a la hora nueva (y se avisa); **si se borró**, se descarta y se responde `descartada … → el evento se borró; no se ejecutó.`. Sin permiso de calendario, o sin un evento en curso o próximo dentro del tope, la orden se rechaza al llegar con el motivo («no hay ningún evento en curso.», «Insto no tiene permiso para leer el calendario…»).
+- **Auriculares y desbloqueo** se apoyan en los callbacks que ya registra `InstinctStateWatcher` para el [estado](#estado-del-teléfono-1160): `AudioDeviceCallback` y `ACTION_HEADSET_PLUG` (auriculares con cable, USB o Bluetooth) y `USER_PRESENT`. No hay receptores nuevos. Lo que ya estaba conectado cuando arranca el servicio no cuenta como «conectar» (ni el broadcast fijo inicial de `HEADSET_PLUG`). **Solo funcionan mientras «Insto · notificaciones» esté vivo**; su alarma es la del vencimiento, que se rearma en `BOOT_COMPLETED`.
+- **Acuses:** `#insto-programada <orden> → al conectar auriculares, hasta las 20:00` al recibirla; al dispararse, el acuse normal (`ok`, `error`, `descartada`, `incierto`) con el mismo `message` de la orden original.
+
+### Modelo y almacenamiento
+
+`Deferred` y `ScheduledOrder` llevan un disparador explícito (`Trigger`: `At`, `EventEnd`, `EventStart`, `HeadphonesOn`, `HeadphonesOff`, `Unlock`, `Recurring`), el vencimiento y la fuente. `instinct-scheduled.json` pasó a `{"version": 2, "orders": […]}`; un archivo de 1.16.0 (un arreglo sin versión) se lee igual y cada orden sin disparador es `At`: no se pierde nada, y se reescribe en el formato nuevo la próxima vez que cambia. La lógica de decidir (`ScheduleFirePolicy`, `InstinctTriggers`: próxima ocurrencia, vencimiento, si un evento coincide) es pura y está separada de `AlarmManager` y del calendario.
+
+## Órdenes recurrentes (1.17.0)
+
+```text
+#insto todos los días a las HH:MM hasta el DD/MM: <orden>
+#insto los días hábiles a las HH:MM hasta el DD/MM: <orden>
+#insto los fines de semana a las HH:MM hasta el DD/MM: <orden>
+```
+
+- **`hasta el DD/MM` es obligatorio:** no hay recurrentes sin fin. Es inclusive (la última ocurrencia puede ser ese día) y como mucho **30 días** después de hoy. Si la fecha ya pasó este año, es la del año que viene, y entonces queda fuera de rango.
+- Se combinan con la condición de clima que ya existe, antes de `hasta el`: `#insto todos los días a las 06:30 si llueve hasta el 15/12: poner una alarma a las 06:45`.
+- **Días hábiles** son de lunes a viernes (Insto no conoce los feriados); **fines de semana**, sábado y domingo.
+- Como máximo **5 recurrentes**, aparte del límite de 10 programadas.
+- **Cada ocurrencia se comporta como una diferida:** se marca consumida en disco antes de ejecutarse, se revalida desde cero y, si llega con más de 15 minutos de atraso, pasa a Confirmar. Al consumirse una ocurrencia, en la misma escritura queda programada la siguiente, con su propio id y su propio token. Si una ocurrencia queda incierta (el proceso murió en el medio), esa no se repite, pero la recurrencia sigue.
+- La hora es **local**: después de un cambio de zona horaria (`TIMEZONE_CHANGED`), la próxima ocurrencia pasa a ser la misma hora en la zona nueva. Una diferida común, en cambio, sigue siendo un instante.
+- Si la autonomía de su categoría pasa a **Nunca**, la recurrente se cancela entera, te avisa y se registra (`error … → la persona no permite esta acción; se canceló la recurrente entera.`). Lo mismo si llega a dispararse con «Nunca».
+- **Acuses:** `#insto-programada <orden> → días hábiles 08:00 hasta el 15/12, próxima mañana`; cada ocurrencia, el suyo.
+
+### Consultas y gestión
+
+- `#insto ver programadas` muestra, por cada una, un **id corto** de 6 caracteres, el disparador en palabras y la orden: `a1b2c3 · al conectar auriculares, hasta las 20:00: abrir spotify; d4e5f6 · días hábiles 08:00 hasta el 15/12, próxima mañana: activar no molestar.` El id es el mismo para todas las ocurrencias de una recurrente.
+- `#insto cancelar programada <id>` cancela esa orden o la recurrente entera. Es una consulta: no consume el freno. Responde `Se canceló a1b2c3: …` o `No hay ninguna orden programada con el id a1b2c3.`.
+- `#insto cancelar programadas` sigue cancelando todas, recurrentes incluidas.
+- En **Ajustes → Propuestas de Instinct → Órdenes programadas por Instinct** cada una muestra su id, el disparador o la recurrencia y un botón para cancelarla («Cancelar la recurrente» cancela todas sus ocurrencias).
+
+### Para Instinct
+
+El catálogo («Protocolo Insto v5») suma las formas nuevas, con un ejemplo de cada una (validados por un test), los límites y la regla **«Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después»**. La firma del buzón no cambia: la cadena canónica sigue empezando con `insto-v4`.
+
 ## Qué tiene que hacer Instinct
 
 1. **Antes de una orden que dependa del estado** (silencio, No molestar, alarmas, calendario): leer `GET <URL>?token=<token>&action=estado`. Si el estado tiene más de 30 minutos, pedir `#insto ver estado` y esperar el evento nuevo.
@@ -567,7 +620,8 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 - No alimentan el aprendizaje: no crean frases (`LearnedPhraseStore`) ni estructuras (`PhrasePatterns`).
 - No cuentan como turnos de `OperationalContext` ni lo modifican, tampoco los pasos de una rutina pedida por Instinct. Eso sí: al ejecutar un control multimedia sin app indicada, `PhoneActionExecutor` sigue eligiendo la sesión con el contexto vigente, como con cualquier pedido.
 - No se juntan en planes: cada línea es un comando independiente. Una rutina es un plan que **vos** configuraste y habilitaste; Instinct solo la nombra.
-- **Condiciones:** la única forma admitida es la del clima, con hora y una sola por línea ([Condiciones por clima](#condiciones-por-clima-1140)). Cualquier otra condición («si estoy en casa», «si llueve y hace frío») se descarta.
+- **Condiciones:** las únicas formas admitidas son la del clima, con hora o en una recurrente ([Condiciones por clima](#condiciones-por-clima-1140)), y los cinco [disparadores](#disparadores-por-estado-1170). Una sola por línea: cualquier otra condición o combinación («si estoy en casa», «si llueve y hace frío», «al conectar auriculares y al desbloquear») se descarta.
+- **No vigilan nada por su cuenta** fuera de lo que ya vigilaba Insto: los disparadores usan los callbacks del estado y el calendario, nunca la ubicación, la red ni otras apps. No hay recurrentes sin fecha de fin.
 - No agregan dependencias ni servidores propios. Los acuses usan la acción «Responder» de WhatsApp, que ya existe en la notificación, o tu propio Apps Script (con OkHttp y `JobScheduler`, que ya estaban).
 
 ## Límites conocidos
@@ -579,7 +633,10 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 - Si tenés abierto el chat de Instinct en WhatsApp, WhatsApp no genera notificación y no llega nada.
 - **Acuses:** dependen de que WhatsApp ofrezca «Responder» en la notificación. Si no lo hace, no se responde (lo dice el diagnóstico). Un acuse de una diferida que se dispara después de 10 minutos no sale.
 - **Bitácora:** depende de la red y de que Apps Script responda. Sin red, los eventos esperan en la bandeja (hasta 200) y se reintentan solos; si Google cambia la redirección de Apps Script, el diagnóstico dirá «respuesta inválida». Las cuotas diarias de Apps Script (ejecuciones y URL Fetch) alcanzan de sobra para uso personal: cada lote de hasta 50 eventos es una sola ejecución. Las líneas en memoria se pierden si el proceso muere, salvo las de las diferidas: un seguimiento de una orden inmediata que estaba en espera durante un reinicio no se registra.
-- **Diferidas:** sin permiso de alarmas exactas (Insto no lo pide), Android puede demorar el disparo; si la demora pasa de 15 minutos, la orden espera tu confirmación.
+- **Diferidas:** sin permiso de alarmas exactas (Insto no lo pide), Android puede demorar el disparo; si la demora pasa de 15 minutos, la orden espera tu confirmación. Vale igual para cada ocurrencia de una recurrente y para los disparadores de calendario.
+- **Disparadores por estado:** auriculares y desbloqueo solo se detectan mientras «Insto · notificaciones» esté conectado; si Android lo desconecta, no se disparan y vencen. Un evento que se mueve después de la alarma se ve recién cuando la alarma suena; uno que se adelanta a una hora que ya pasó se dispara en ese momento. Bluetooth cuenta como auriculares, igual que en el estado.
+- **Recurrentes:** como mucho 30 días y 5 a la vez. Una ocurrencia atrasada que espera confirmación bloquea, hasta que la confirmes, descartes o venza, otra ocurrencia de la misma orden (el libro no duplica una orden igual en espera). Los feriados cuentan como días hábiles.
+- **Timbre:** ver [Timbre](#timbre-1170), «Límites».
 - **Buzón y Doze:** `JobScheduler` no garantiza el intervalo. Con el teléfono en reposo, Android agrupa los jobs en ventanas de mantenimiento: en la práctica el intervalo mínimo real puede ser de 15 minutos o más, aunque elijas 2. Al abrir Insto, el panel o al llegar un mensaje de Instinct se sondea enseguida. Una orden que llega con más de 15 minutos de antigüedad se descarta como vencida: Instinct tiene que mandarla de nuevo con un id y un `at` nuevos.
 - **Cuotas de Apps Script:** cada sondeo es una ejecución (un `GET`, más un `POST tomadas` si había algo) y cada latido del estado suma un evento a la bandeja. Con el intervalo de 2 minutos son unas 720 ejecuciones por día solo del buzón, más 48 latidos; con 5 minutos, unas 290. Alcanza para uso personal en una cuenta común de Google, pero si compartís la cuota con otros scripts, preferí 5 o 15 minutos.
 - **El estado es una foto:** se publica con hasta 30 segundos de demora después de un cambio (por el agrupamiento), y además tarda lo que tarde la bandeja en vaciarse. Un evento sin permiso de calendario dice `sin permiso`; uno de todo el día no aparece.
@@ -598,6 +655,9 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 8. Autonomía (1.16.0): en **Autonomía** poné «Alarmas y temporizadores» en **Confirmar** y que Instinct mande `#insto poner un temporizador de 1 minuto`: llega «Instinct propone: …» y el acuse dice «la persona pide confirmación para alarmas y temporizadores». Poné «Linterna» en **Nunca** y probá `#insto prender la linterna`: no se prende y el acuse es `#insto-error … → la persona no permite esta acción`. Activá horas de silencio que incluyan la hora actual: `#insto poner el volumen al 30 por ciento` espera («horas de silencio») y `#insto poner en vibración` se hace solo. Mandá tres veces un cambio de volumen y tocá Deshacer las tres: llega «Instinct va a pedirte confirmación para volumen: deshiciste 3 de 3» con «Volver a automático».
 9. Estado (1.16.0): con la bitácora, tocá **«Publicar estado ahora»**: aparece una fila `estado` con `sonido=…; dnd=…`. Poné el teléfono en vibración y esperá unos 30 segundos: aparece otra. Probá `curl -sL "$URL?token=$TOKEN&action=estado"`. Con el canal en WhatsApp, `#insto ver estado` responde `#insto-error ver estado → el estado solo se publica en la bitácora`.
 10. Buzón (1.16.0): actualizá el Apps Script, tocá **«Generar clave»**, pasale la clave a Instinct por un canal seguro y encendé **«Recibir órdenes por el buzón»**. Publicá una orden firmada con el ejemplo de Python de [Qué tiene que hacer Instinct](#qué-tiene-que-hacer-instinct) y abrí Insto: se ejecuta y la bitácora suma su `ok`. Repetí el mismo `POST` (mismo id): no pasa nada. Cambiá una letra de la firma: no se ejecuta, no hay acuse y el diagnóstico suma «firmas inválidas 1». Por el buzón, `#insto avisarme Hola` muestra «Instinct te avisa». Elegí «Solo buzón» y mandá `#insto poner el volumen al 30 por ciento` por WhatsApp: se ignora y el diagnóstico lo dice.
+11. Timbre (1.17.0): instalá ntfy, actualizá el Apps Script, encendé **«Timbre instantáneo (ntfy)»** y tocá **«Probar timbre»**: dice «El timbre llegó en N s». Publicá una orden firmada con el ejemplo de Python: se ejecuta en segundos, sin abrir Insto. El diagnóstico suma «Timbre: último HH:MM · timbres 1 · sondeos por timbre 1».
+12. Disparadores (1.17.0): que Instinct mande `#insto al conectar auriculares: poner el volumen al 30 por ciento` y conectá unos auriculares: el volumen cambia una sola vez (desconectá y volvé a conectar: no pasa nada). Con un evento en curso en el calendario, `#insto al terminar el evento: desactivar no molestar`; cambiale la hora de fin en el calendario y mirá que, al llegar la hora vieja, se reprograma. Probá `#insto al desbloquear hasta las HH:MM: mostrar las alarmas` con una hora cercana y no desbloquees: llega «Venció sin dispararse».
+13. Recurrentes (1.17.0): `#insto todos los días a las HH:MM hasta el DD/MM: poner el volumen al 30 por ciento` con la hora de dentro de unos minutos; `#insto ver programadas` muestra su id y «próxima hoy». Se ejecuta y queda programada la del día siguiente. `#insto cancelar programada <id>` la cancela entera. Sin «hasta el», se rechaza.
 
 ## Instrucciones para pegar en el prompt de Instinct
 

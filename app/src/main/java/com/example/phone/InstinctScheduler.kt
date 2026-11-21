@@ -35,6 +35,18 @@ object InstinctScheduler {
   private val readings: WeatherReadings get() = weather ?: com.example.phone.weather.SmnWeatherService.shared
   /** A seam for tests; arms nothing when replaced. */
   internal var alarms: (Context, ScheduledOrder, Boolean) -> Unit = ::setAlarm
+  /**
+   * The calendar instances around [now] (1.17.0), without all-day ones' titles or any title at all; null without
+   * READ_CALENDAR. Tests replace it.
+   */
+  internal var calendar: (Context, Long) -> List<CalendarInstance>? = { context, now -> InstinctCalendarReader(context).instances(now) }
+  /** Runs a firing started by the phone's state (headphones, unlock) off the caller; tests run it inline. */
+  internal var launch: (suspend () -> Unit) -> Unit = { block ->
+    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch { runCatching { block() } }
+  }
+
+  /** What makes [fire] run: its alarm, or the phone's state for a state trigger. */
+  enum class Cause { ALARM, STATE }
 
   /** Orders this process is firing right now (waiting for the weather): consumed, but not interrupted. */
   private val firing = java.util.Collections.synchronizedSet(HashSet<String>())
@@ -55,13 +67,26 @@ object InstinctScheduler {
   /** Stores a validated deferred order (its inner order already passed the validator) and arms its alarm. */
   fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String, message: String = "",
     source: ProposalSource = ProposalSource.WHATSAPP): Outcome {
-    val deferred = check.deferred ?: return Outcome.Refused("no es una orden diferida.")
+    var deferred = check.deferred ?: return Outcome.Refused("no es una orden diferida.")
     recover(context)
+    val now = wallClock()
+    // An event trigger reads the calendar now: the instance and its time are stored, and read again when it fires.
+    if (deferred.trigger.unresolved) {
+      val events = runCatching { calendar(context.applicationContext, now) }.getOrNull()
+        ?: return Outcome.Refused("Insto no tiene permiso para leer el calendario; la persona lo da en Ajustes → Propuestas de Instinct.")
+      when (val pick = InstinctTriggers.pickEvent(deferred.trigger, events, now, deferred.expiresAt ?: now)) {
+        is InstinctTriggers.Pick.None -> return Outcome.Refused(pick.why)
+        is InstinctTriggers.Pick.Found -> deferred = deferred.copy(trigger = pick.trigger, fireAt = pick.fireAt,
+          label = InstinctTriggers.label(pick.trigger, deferred.expiresAt, pick.fireAt, now))
+      }
+    }
     val order = ScheduledOrder(UUID.randomUUID().toString(), check.order, deferred.inner, deferred.fireAt, fingerprint,
-      deferred.condition, deferred.label, wallClock(), message = InstinctLogEvents.messageId(message), source = source)
+      deferred.condition, deferred.label, now, message = InstinctLogEvents.messageId(message), source = source,
+      trigger = deferred.trigger, expiresAt = deferred.expiresAt)
     return when (val added = runCatching { store(context).add(order) }.getOrNull()) {
       is InstinctScheduleStore.Add.Added -> { alarms(context.applicationContext, order, true); Outcome.Scheduled(order) }
       InstinctScheduleStore.Add.Full -> Outcome.Refused("ya hay ${InstinctDeferral.MAX_SCHEDULED} órdenes programadas; cancelá alguna antes.")
+      InstinctScheduleStore.Add.FullRecurring -> Outcome.Refused("ya hay ${InstinctTriggers.MAX_RECURRING} órdenes recurrentes; cancelá alguna antes.")
       InstinctScheduleStore.Add.OutOfRange -> Outcome.Refused("la hora queda fuera de las próximas 24 horas.")
       null -> Outcome.Refused("no se pudo guardar la orden programada.")
     }
@@ -77,6 +102,74 @@ object InstinctScheduler {
     return store(context).remove(id)
   }
 
+  /** «#insto cancelar programada <id>» and the button in Settings: the order, or the whole recurrence. */
+  fun cancelShort(context: Context, shortId: String): List<ScheduledOrder> {
+    val cancelled = runCatching { store(context).cancelShort(shortId) }.getOrDefault(emptyList())
+    cancelled.forEach { alarms(context.applicationContext, it, false) }
+    return cancelled
+  }
+
+  /** The answer to «#insto cancelar programada <id>». */
+  fun cancelShortAnswer(context: Context, shortId: String): String {
+    val cancelled = cancelShort(context, shortId)
+    val first = cancelled.firstOrNull() ?: return "No hay ninguna orden programada con el id $shortId."
+    return "Se canceló $shortId: ${first.label}: ${first.inner}."
+  }
+
+  /** One line per order, as «ver programadas» and Settings show it: «abc123 · <disparador>: <orden>». */
+  fun line(order: ScheduledOrder, now: Long = wallClock()): String {
+    val label = InstinctTriggers.label(order.trigger, order.expiresAt, order.fireAt, now, condition = order.condition)
+    return "${order.shortId} · $label: ${order.inner}"
+  }
+
+  /**
+   * The phone did something (from the callbacks of «Insto · notificaciones»): every pending state trigger it
+   * matches fires once. One past its expiry lapses instead.
+   */
+  fun onPhoneEvent(context: Context, event: PhoneEvent) {
+    val app = context.applicationContext
+    if (!InstinctProposalSettings(app).isEnabled()) return
+    val matching = runCatching { store(app).pending() }.getOrDefault(emptyList()).filter { InstinctTriggers.fires(it.trigger, event) }
+    matching.forEach { order -> launch { fire(app, order.id, order.token, Cause.STATE) } }
+  }
+
+  /**
+   * «Nunca» for a category (1.17.0): every recurrence whose order it refuses is cancelled whole and logged. Other
+   * scheduled orders are refused when they fire, as before.
+   */
+  fun cancelRefused(context: Context) {
+    val app = context.applicationContext
+    val parser = PhoneCommandParser()
+    val routines = InstinctRoutineGrants(app).access()
+    val pending = runCatching { store(app).pending() }.getOrDefault(emptyList()).filter { it.recurring }
+    pending.distinctBy { it.series }.forEach { order ->
+      val command = (InstinctProposalValidator.check(order.inner, parser, Calendar.getInstance(), routines) as? ProposalCheck.Valid)?.command
+        ?: return@forEach
+      if (!InstinctProposalCenter.refusedByPolicy(app, command)) return@forEach
+      cancelShort(app, order.shortId)
+      InstinctProposalCenter.notifyScheduled(app, order, "Instinct había programado: ${order.summary}",
+        "Se canceló la recurrente entera: elegiste que Instinct nunca haga esto.")
+      tellLog(app, order, AckEntry(AckKind.ERROR, order.order, "${InstinctAutonomyPolicy.REFUSED}; se canceló la recurrente entera."))
+    }
+  }
+
+  /** The acknowledgement line of [order]: the chat's while its handle lives; for the log, also after a restart. */
+  private fun ackKey(app: Context, order: ScheduledOrder): Long? =
+    takeAckKey(order.id)?.takeIf(InstinctProposalCenter.acks::tracks)
+      ?: newAckKey().takeIf { InstinctProposalCenter.adopt(app, it, order.message, AckEntry(AckKind.SCHEDULED, order.order, order.label),
+        logOnly = order.source == ProposalSource.BUZON) }
+
+  /**
+   * What only triggers and recurrences produce (1.17.0: lapsed, the event deleted, cancelled by «Nunca») goes to the
+   * log only, whatever the channel: nothing new is written in the WhatsApp chat.
+   */
+  private fun tellLog(app: Context, order: ScheduledOrder, entry: AckEntry) {
+    takeAckKey(order.id)
+    val key = newAckKey()
+    if (InstinctProposalCenter.adopt(app, key, order.message, AckEntry(AckKind.SCHEDULED, order.order, order.label), logOnly = true))
+      InstinctProposalCenter.report(app, key, entry)
+  }
+
   /** «#insto cancelar programadas», the switch turned off, or every cancel button at once. */
   fun cancelAll(context: Context): Int {
     val cancelled = runCatching { store(context).cancelAll() }.getOrDefault(emptyList())
@@ -88,18 +181,31 @@ object InstinctScheduler {
   fun describe(context: Context): String {
     val pending = pending(context)
     if (pending.isEmpty()) return "No hay órdenes programadas."
-    val zone = Calendar.getInstance()
-    return pending.joinToString("; ", postfix = ".") { "${InstinctDeferral.clock(it.fireAt, zone)} ${it.condition?.label?.let { c -> "$c " } ?: ""}${it.inner}" }
+    val now = wallClock()
+    return pending.joinToString("; ", postfix = ".") { line(it, now) }
   }
 
   /**
    * After a boot, a time or time zone change, or a process start: orders left consumed by a process death may have
    * run and are reported as uncertain, never run again; the rest get their alarms again.
    */
-  fun rearm(context: Context) {
+  fun rearm(context: Context, zoneChanged: Boolean = false) {
     val app = context.applicationContext
     recover(app)
+    // A recurrence is a local time: after a time zone change its next occurrence is the same hour in the new zone.
+    if (zoneChanged) runCatching { relocate(app) }
     store(app).pending().forEach { alarms(app, it, true) }
+  }
+
+  private fun relocate(app: Context) {
+    val now = wallClock()
+    val zone = java.util.TimeZone.getDefault()
+    store(app).pending().filter { it.recurring }.forEach { order ->
+      val r = order.trigger as Trigger.Recurring
+      val next = InstinctTriggers.next(r.days, r.minuteOfDay, now, r.until, zone)
+      if (next == null) { alarms(app, order, false); store(app).remove(order.id) }
+      else if (next != order.fireAt) store(app).reschedule(order.id, r, next, InstinctTriggers.label(r, null, next, now, zone, order.condition))
+    }
   }
 
   /** Orders a process death left consumed: reported once as uncertain, never run again. */
@@ -115,11 +221,22 @@ object InstinctScheduler {
    * The alarm fired. Consumed on disk first, so it runs at most once. Then: revalidation, the weather condition
    * (fail-safe), lateness and the same path as an order that just arrived.
    */
-  suspend fun fire(context: Context, id: String, token: String?) {
+  suspend fun fire(context: Context, id: String, token: String?, cause: Cause = Cause.ALARM) {
     val app = context.applicationContext
     val store = store(app)
+    // First, what this firing means (1.17.0): a lapsed trigger expires, an event that moved is rescheduled.
+    val peeked = runCatching { store.peek(id, token) }.getOrNull() ?: return
+    if (cause == Cause.ALARM && InstinctTriggers.onAlarm(peeked, wallClock()) == InstinctTriggers.AlarmAction.EXPIRE) {
+      expire(app, peeked); return
+    }
+    if (cause == Cause.STATE && peeked.expiresAt != null && wallClock() > peeked.expiresAt) { expire(app, peeked); return }
+    if (peeked.trigger.byEvent && !checkEvent(app, peeked)) return
     firing += id
-    val order = runCatching { store.consume(id, token) }.getOrNull() ?: run { firing -= id; return }
+    val consumed = runCatching { store.consumeOccurrence(id, token) }.getOrNull() ?: run { firing -= id; return }
+    val order = consumed.order
+    // The next occurrence of a recurrence is on disk already: it never depends on how this one ends.
+    consumed.successor?.let { alarms(app, it, true) }
+    if (order.trigger.byState) alarms(app, order, false)
     try {
       val now = wallClock()
       val routines = InstinctRoutineGrants(app).access()
@@ -128,11 +245,11 @@ object InstinctScheduler {
         InstinctProposalValidator.check(it, parser, Calendar.getInstance().apply { timeInMillis = now }, routines)
       }
       // The chat's line while its handle lives; for the log, also after a restart, from the stored message id.
-      val ackKey = takeAckKey(order.id)?.takeIf(InstinctProposalCenter.acks::tracks)
-        ?: newAckKey().takeIf { InstinctProposalCenter.adopt(app, it, order.message, AckEntry(AckKind.SCHEDULED, order.order, order.label),
-          logOnly = order.source == ProposalSource.BUZON) }
+      val ackKey = ackKey(app, order)
       fun tell(entry: AckEntry) { if (ackKey != null) InstinctProposalCenter.report(app, ackKey, entry) }
       if (decision is ScheduleFirePolicy.Decision.Drop) {
+        // A recurrence that is no longer valid would be dropped every day: it is cancelled whole.
+        if (order.recurring) cancelShort(app, order.shortId)
         InstinctProposalCenter.notifyScheduled(app, order, "Instinct había programado: ${order.summary}", "No se ejecutó: ${decision.why}")
         tell(AckEntry(AckKind.ERROR, order.order, decision.why))
         return
@@ -160,6 +277,14 @@ object InstinctScheduler {
         is ScheduleFirePolicy.Decision.Late -> decision.command
         else -> return
       }
+      // «Nunca» since it was programmed: a recurrence is cancelled whole.
+      if (order.recurring && InstinctProposalCenter.refusedByPolicy(app, command)) {
+        cancelShort(app, order.shortId)
+        InstinctProposalCenter.notifyScheduled(app, order, "Instinct había programado: ${order.summary}",
+          "No se ejecutó y se canceló la recurrente entera: elegiste que Instinct nunca haga esto.")
+        tell(AckEntry(AckKind.ERROR, order.order, "${InstinctAutonomyPolicy.REFUSED}; se canceló la recurrente entera."))
+        return
+      }
       val proposal = InstinctProposalCenter.book.offer(order.order, command, order.fingerprint, order.source) ?: run {
         tell(AckEntry(AckKind.ERROR, order.order, "ya había una orden igual esperando confirmación; no se duplica."))
         return
@@ -172,6 +297,55 @@ object InstinctScheduler {
       // It ran, waits in the book for Confirmar, or was dropped: it never fires again.
       runCatching { store.remove(order.id) }
       firing -= id
+    }
+  }
+
+  /** A trigger that lapsed without firing: removed, told and logged as «vencida». */
+  private fun expire(app: Context, order: ScheduledOrder) {
+    if (runCatching { store(app).remove(order.id) }.getOrDefault(false).not()) return
+    alarms(app, order, false)
+    InstinctProposalCenter.notifyScheduled(app, order, "Instinct había programado: ${order.summary}", "Venció sin dispararse. No se ejecutó.")
+    tellLog(app, order, AckEntry(AckKind.EXPIRED, order.order, "venció sin dispararse; no se ejecutó."))
+  }
+
+  /**
+   * An event trigger's alarm: the instance is read again. True when it is still there at that time (it fires now).
+   * Moved: rescheduled (or lapsed past its expiry). Deleted, or no permission to check: dropped and told.
+   */
+  private fun checkEvent(app: Context, order: ScheduledOrder): Boolean {
+    val now = wallClock()
+    val candidates = runCatching { calendar(app, now) }.getOrNull()
+    val check = if (candidates == null) null else InstinctTriggers.matchEvent(order.trigger, candidates)
+    fun drop(text: String, entry: AckEntry) {
+      if (runCatching { store(app).remove(order.id) }.getOrDefault(false).not()) return
+      InstinctProposalCenter.notifyScheduled(app, order, "Instinct había programado: ${order.summary}", text)
+      tellLog(app, order, entry)
+    }
+    return when (check) {
+      null -> { drop("No se ejecutó: Insto ya no puede leer el calendario.", AckEntry(AckKind.ERROR, order.order, "sin permiso para leer el calendario; no se ejecutó.")); false }
+      InstinctTriggers.EventCheck.Deleted -> {
+        drop("No se ejecutó: el evento se borró.", AckEntry(AckKind.DISCARDED, order.order, "el evento se borró; no se ejecutó.")); false
+      }
+      InstinctTriggers.EventCheck.Same -> true
+      is InstinctTriggers.EventCheck.Moved -> when {
+        // Earlier than planned, already past: it fires now.
+        check.at <= now -> true
+        order.expiresAt != null && check.at > order.expiresAt -> { expire(app, order); false }
+        else -> {
+          val trigger = when (val t = order.trigger) {
+            is Trigger.EventEnd -> t.copy(at = check.at)
+            is Trigger.EventStart -> t.copy(at = check.at)
+            else -> t
+          }
+          val label = InstinctTriggers.label(trigger, order.expiresAt, check.at, now)
+          runCatching { store(app).reschedule(order.id, trigger, check.at, label) }.getOrNull()?.let { moved ->
+            alarms(app, moved, true)
+            InstinctProposalCenter.notifyScheduled(app, moved, "Instinct había programado: ${moved.summary}",
+              "El evento cambió de horario: se reprogramó.")
+          }
+          false
+        }
+      }
     }
   }
 
@@ -208,8 +382,9 @@ class InstinctScheduleReceiver : BroadcastReceiver() {
           try { runCatching { InstinctScheduler.fire(context, id, token) } } finally { pending.finish() }
         }
       }
-      Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED ->
+      Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED ->
         runCatching { InstinctScheduler.rearm(context) }
+      Intent.ACTION_TIMEZONE_CHANGED -> runCatching { InstinctScheduler.rearm(context, zoneChanged = true) }
     }
   }
 }

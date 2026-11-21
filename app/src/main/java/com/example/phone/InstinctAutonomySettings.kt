@@ -37,6 +37,8 @@ class InstinctAutonomySettings(context: Context) {
   fun set(category: InstinctCategory, level: InstinctAutonomy) {
     val before = synchronized(LOCK) { policy().also { write(it.with(category, level)) } }
     if (level == InstinctAutonomy.SOLO && before.level(category) != InstinctAutonomy.SOLO) InstinctTrust.reset(app, category)
+    // «Nunca» cancels whole every recurrence it now refuses (1.17.0).
+    if (level == InstinctAutonomy.NUNCA) runCatching { InstinctScheduler.cancelRefused(app) }
   }
 
   fun setAll(level: InstinctAutonomy) = InstinctCategory.entries.forEach { set(it, level) }

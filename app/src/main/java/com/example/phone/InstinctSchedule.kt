@@ -27,8 +27,14 @@ sealed interface WeatherCondition {
   }
 }
 
-/** When a wrapped order runs: wall-clock [fireAt], an optional [condition], and its inner order as written. */
-data class Deferred(val inner: String, val fireAt: Long, val condition: WeatherCondition?, val label: String)
+/**
+ * When a wrapped order runs: wall-clock [fireAt], an optional [condition], and its inner order as written. Since
+ * 1.17.0 also [trigger] (a time by default) and [expiresAt]: a state or event trigger that has not fired by then
+ * lapses as «vencida». For a state trigger [fireAt] is its expiry; for an event one, a placeholder until the
+ * calendar is read when the order is stored.
+ */
+data class Deferred(val inner: String, val fireAt: Long, val condition: WeatherCondition?, val label: String,
+  val trigger: Trigger = Trigger.At, val expiresAt: Long? = null)
 
 object InstinctDeferral {
   const val MIN_DELAY_MILLIS = 60_000L
@@ -41,6 +47,14 @@ object InstinctDeferral {
   // the line is an ordinary order, so «poner una alarma a las 07:00» keeps its meaning.
   private val atTime = Regex("^a las (\\d{1,2}):(\\d{2})(?: (si [^:]+?))?\\s*:\\s*(.+)$", RegexOption.IGNORE_CASE)
   private val inDelay = Regex("^en (\\d{1,4}) (minutos?|horas?)\\s*:\\s*(.+)$", RegexOption.IGNORE_CASE)
+  // 1.17.0: «al <algo>[ hasta las HH:MM]: <orden>» and «<días> a las HH:MM[ si …] hasta el DD/MM: <orden>». One
+  // condition per line: anything else that starts like a trigger is refused, never taken as an immediate order.
+  private val stateTrigger = Regex("^al (terminar el evento|empezar el pr[oó]ximo evento|conectar (?:los )?auriculares|" +
+    "desconectar (?:los )?auriculares|desbloquear(?: el tel[eé]fono)?)(?: hasta las (\\d{1,2}):(\\d{2}))?\\s*:\\s*(.+)$", RegexOption.IGNORE_CASE)
+  private val triggerLike = Regex("^al (terminar|empezar|conectar|desconectar|desbloquear)\\b[^:]*:", RegexOption.IGNORE_CASE)
+  private val recurring = Regex("^(todos los d[ií]as|los d[ií]as h[aá]biles|los fines de semana) a las (\\d{1,2}):(\\d{2})" +
+    "(?: (si .+?))? hasta el (\\d{1,2})/(\\d{1,2})\\s*:\\s*(.+)$", RegexOption.IGNORE_CASE)
+  private val recurringLike = Regex("^(todos los d[ií]as|los d[ií]as h[aá]biles|los fines de semana)\\b.*:", RegexOption.IGNORE_CASE)
   private val rain = Regex("^si (no )?llueve$")
   private val temperature = Regex("^si hace (menos|mas) de (-?\\d{1,2}) grados$")
 
@@ -54,6 +68,12 @@ object InstinctDeferral {
 
   fun parse(order: String, now: Calendar): Parse {
     val text = order.trim()
+    stateTrigger.matchEntire(text)?.let { m -> return stateTrigger(m, now) }
+    if (triggerLike.containsMatchIn(text))
+      return Parse.Rejected("cada línea admite un solo disparador, sin «y», «o» ni condiciones: «al conectar auriculares[ hasta las HH:MM]: …».")
+    recurring.matchEntire(text)?.let { m -> return recurring(m, now) }
+    if (recurringLike.containsMatchIn(text))
+      return Parse.Rejected("una orden recurrente necesita la hora y «hasta el DD/MM» (como mucho ${InstinctTriggers.MAX_RECURRING_DAYS} días): «todos los días a las 07:30 hasta el 15/12: …».")
     atTime.matchEntire(text)?.let { m ->
       val hour = m.groupValues[1].toInt(); val minute = m.groupValues[2].toInt()
       if (hour !in 0..23 || minute !in 0..59) return Parse.Rejected("la hora tiene que ser de 00:00 a 23:59.")
@@ -77,6 +97,37 @@ object InstinctDeferral {
     if (Regex("^(a las \\S+|en \\d+ \\S+) si .+:", RegexOption.IGNORE_CASE).containsMatchIn(text))
       return Parse.Rejected("las condiciones van solo con una hora: «a las 06:30 si llueve: …».")
     return Parse.None
+  }
+
+  private fun stateTrigger(m: MatchResult, now: Calendar): Parse {
+    val phrase = PhoneCommandParser.normalize(m.groupValues[1])
+    val trigger = when {
+      phrase.startsWith("terminar") -> Trigger.EventEnd()
+      phrase.startsWith("empezar") -> Trigger.EventStart()
+      phrase.startsWith("conectar") -> Trigger.HeadphonesOn
+      phrase.startsWith("desconectar") -> Trigger.HeadphonesOff
+      else -> Trigger.Unlock
+    }
+    val expiresAt = if (m.groups[2] != null) {
+      InstinctTriggers.untilTime(m.groupValues[2].toInt(), m.groupValues[3].toInt(), now)
+        ?: return Parse.Rejected("el tope «hasta las HH:MM» tiene que ser una hora de 00:00 a 23:59.")
+    } else now.timeInMillis + InstinctTriggers.DEFAULT_EXPIRY_MILLIS
+    val label = InstinctTriggers.label(trigger, expiresAt, expiresAt, now.timeInMillis, now.timeZone)
+    return Parse.Wrapped(Deferred(m.groupValues[4].trim(), expiresAt, null, label, trigger, expiresAt))
+  }
+
+  private fun recurring(m: MatchResult, now: Calendar): Parse {
+    val days = RecurrenceDays.entries.first { PhoneCommandParser.normalize(it.phrase) == PhoneCommandParser.normalize(m.groupValues[1]) }
+    val hour = m.groupValues[2].toInt(); val minute = m.groupValues[3].toInt()
+    if (hour !in 0..23 || minute !in 0..59) return Parse.Rejected("la hora tiene que ser de 00:00 a 23:59.")
+    val condition = m.groups[4]?.value?.let { raw -> condition(raw) ?: return Parse.Rejected("solo se acepta una condición del clima: si llueve, si no llueve, si hace menos o más de N grados.") }
+    val until = InstinctTriggers.untilDate(m.groupValues[5].toInt(), m.groupValues[6].toInt(), now)
+      ?: return Parse.Rejected("«hasta el DD/MM» tiene que ser una fecha válida dentro de los próximos ${InstinctTriggers.MAX_RECURRING_DAYS} días.")
+    val trigger = Trigger.Recurring(days, hour * 60 + minute, until)
+    val first = InstinctTriggers.next(days, trigger.minuteOfDay, now.timeInMillis, until, now.timeZone)
+      ?: return Parse.Rejected("no hay ninguna ocurrencia antes de esa fecha.")
+    val label = InstinctTriggers.label(trigger, null, first, now.timeInMillis, now.timeZone, condition)
+    return Parse.Wrapped(Deferred(m.groupValues[7].trim(), first, condition, label, trigger))
   }
 
   /** One condition, exactly as listed: no «y», «o» or nesting. */
@@ -168,9 +219,18 @@ data class ScheduledOrder(
   val message: String = "",
   /** WhatsApp or the signed mailbox (1.16.0): the same cap and the same log rules apply when it fires. */
   val source: ProposalSource = ProposalSource.WHATSAPP,
+  /** What fires it (1.17.0); orders stored by 1.16.0 are [Trigger.At]. */
+  val trigger: Trigger = Trigger.At,
+  /** A state or event trigger lapses as «vencida» after this; null for a time or a recurrence. */
+  val expiresAt: Long? = null,
+  /** The same for every occurrence of a recurrence, so it is cancelled whole and keeps its short id. */
+  val series: String = id,
 ) {
   enum class State { PENDING, CONSUMED }
   val summary: String get() = "$label: $inner"
+  val recurring: Boolean get() = trigger is Trigger.Recurring
+  /** The 6 characters of «ver programadas» and «cancelar programada <id>». */
+  val shortId: String get() = InstinctTriggers.shortId(series)
 }
 
 /**
@@ -182,8 +242,13 @@ class InstinctScheduleStore(private val file: File, private val clock: () -> Lon
   sealed interface Add {
     data class Added(val order: ScheduledOrder) : Add
     data object Full : Add
+    /** Already [InstinctTriggers.MAX_RECURRING] recurrences (1.17.0), apart from the 10 scheduled. */
+    data object FullRecurring : Add
     data object OutOfRange : Add
   }
+
+  /** A consumed order and, for a recurrence, its next occurrence, written in the same step. */
+  data class Consumed(val order: ScheduledOrder, val successor: ScheduledOrder?)
 
   @Synchronized fun read(): List<ScheduledOrder> = if (!file.exists()) emptyList() else runCatching { decode(file.readText()) }.getOrDefault(emptyList())
 
@@ -191,20 +256,63 @@ class InstinctScheduleStore(private val file: File, private val clock: () -> Lon
 
   @Synchronized fun add(order: ScheduledOrder): Add {
     val now = clock()
-    if (order.fireAt - now !in 1..InstinctDeferral.MAX_DELAY_MILLIS + 60_000L) return Add.OutOfRange
     val all = read()
-    if (all.count { it.state == ScheduledOrder.State.PENDING } >= InstinctDeferral.MAX_SCHEDULED) return Add.Full
+    val pending = all.filter { it.state == ScheduledOrder.State.PENDING }
+    val trigger = order.trigger
+    if (trigger is Trigger.Recurring) {
+      if (order.fireAt <= now || order.fireAt >= trigger.until || trigger.until - now > (InstinctTriggers.MAX_RECURRING_DAYS + 2) * 86_400_000L)
+        return Add.OutOfRange
+      if (pending.filter { it.recurring }.distinctBy { it.series }.size >= InstinctTriggers.MAX_RECURRING) return Add.FullRecurring
+    } else {
+      if (order.fireAt - now !in 1..InstinctDeferral.MAX_DELAY_MILLIS + 60_000L) return Add.OutOfRange
+      if (pending.count { !it.recurring } >= InstinctDeferral.MAX_SCHEDULED) return Add.Full
+    }
     write(all + order)
     return Add.Added(order)
   }
 
-  /** Marks [id] consumed on disk; true only for the one caller that found it pending with [token]. */
-  @Synchronized fun consume(id: String, token: String?): ScheduledOrder? {
+  /** The pending order [id] with [token], without touching it: to decide what its alarm means. */
+  @Synchronized fun peek(id: String, token: String?): ScheduledOrder? =
+    read().firstOrNull { it.id == id && it.state == ScheduledOrder.State.PENDING && (token == null || it.token == token) }
+
+  /**
+   * Marks [id] consumed on disk; only the one caller that found it pending with [token] gets it. A recurrence's
+   * next occurrence after [now] (local time in [zone]) is written in the same step, as a new pending order with
+   * its own id and token: each occurrence runs at most once and an uncertain one never stops the next.
+   */
+  @Synchronized fun consumeOccurrence(id: String, token: String?, now: Long = clock(),
+    zone: java.util.TimeZone = java.util.TimeZone.getDefault()): Consumed? {
     val all = read()
     val order = all.firstOrNull { it.id == id && it.state == ScheduledOrder.State.PENDING && (token == null || it.token == token) } ?: return null
     val consumed = order.copy(state = ScheduledOrder.State.CONSUMED)
-    write(all.map { if (it.id == id) consumed else it })
-    return consumed
+    val successor = (order.trigger as? Trigger.Recurring)?.let { r ->
+      InstinctTriggers.next(r.days, r.minuteOfDay, maxOf(order.fireAt, now), r.until, zone)?.let { next ->
+        order.copy(id = java.util.UUID.randomUUID().toString(), token = java.util.UUID.randomUUID().toString(), fireAt = next,
+          label = InstinctTriggers.label(r, null, next, now, zone, order.condition), createdAt = now)
+      }
+    }
+    write(all.map { if (it.id == id) consumed else it } + listOfNotNull(successor))
+    return Consumed(consumed, successor)
+  }
+
+  /** [consumeOccurrence] without the successor, as before 1.17.0. */
+  @Synchronized fun consume(id: String, token: String?): ScheduledOrder? = consumeOccurrence(id, token)?.order
+
+  /** A pending order moves (an event that changed its time, a recurrence after a time zone change). */
+  @Synchronized fun reschedule(id: String, trigger: Trigger, fireAt: Long, label: String): ScheduledOrder? {
+    val all = read()
+    val order = all.firstOrNull { it.id == id && it.state == ScheduledOrder.State.PENDING } ?: return null
+    val moved = order.copy(trigger = trigger, fireAt = fireAt, label = label)
+    write(all.map { if (it.id == id) moved else it })
+    return moved
+  }
+
+  /** Cancels every pending order of the recurrence or order whose short id is [shortId]; returns them. */
+  @Synchronized fun cancelShort(shortId: String): List<ScheduledOrder> {
+    val all = read()
+    val matched = all.filter { it.state == ScheduledOrder.State.PENDING && it.shortId == shortId.lowercase() }
+    if (matched.isNotEmpty()) write(all - matched.toSet())
+    return matched
   }
 
   @Synchronized fun remove(id: String): Boolean {
@@ -242,24 +350,39 @@ class InstinctScheduleStore(private val file: File, private val clock: () -> Lon
   }
 
   companion object {
-    fun encode(values: List<ScheduledOrder>): String = JSONArray(values.map { o ->
+    /** 2 since 1.17.0: `{version, orders}`, with a trigger per order. 1.16.0 wrote a bare array. */
+    const val VERSION = 2
+
+    fun encode(values: List<ScheduledOrder>): String = JSONObject().put("version", VERSION).put("orders", JSONArray(values.map { o ->
       JSONObject().put("id", o.id).put("order", o.order).put("inner", o.inner).put("fireAt", o.fireAt).put("fingerprint", o.fingerprint)
         .put("label", o.label).put("createdAt", o.createdAt).put("token", o.token).put("state", o.state.name)
         .apply { o.condition?.let { put("condition", conditionCode(it)) } }
         .apply { if (o.message.isNotEmpty()) put("message", o.message) }
         .apply { if (o.source != ProposalSource.WHATSAPP) put("source", o.source.name) }
-    }).toString()
+        .put("trigger", InstinctTriggers.encode(o.trigger))
+        .apply { o.expiresAt?.let { put("expiresAt", it) } }
+        .apply { if (o.series != o.id) put("series", o.series) }
+    })).toString()
 
+    /**
+     * Reads both formats: 1.16.0's bare array (every order a [Trigger.At], nothing lost) and the versioned object.
+     * A newer version is read the same way; an order with a trigger Insto does not understand fails the file.
+     */
     fun decode(text: String): List<ScheduledOrder> {
-      require(text.length <= 65_536)
-      val array = JSONArray(text)
-      return (0 until minOf(array.length(), 32)).map { i ->
+      require(text.length <= 131_072)
+      val trimmed = text.trimStart()
+      val array = if (trimmed.startsWith("[")) JSONArray(trimmed) else JSONObject(trimmed).also { require(it.getInt("version") >= 2) }.getJSONArray("orders")
+      return (0 until minOf(array.length(), 48)).map { i ->
         val o = array.getJSONObject(i)
-        ScheduledOrder(o.getString("id"), o.getString("order"), o.getString("inner"), o.getLong("fireAt"), o.getString("fingerprint"),
+        val id = o.getString("id")
+        ScheduledOrder(id, o.getString("order"), o.getString("inner"), o.getLong("fireAt"), o.getString("fingerprint"),
           o.optString("condition").takeIf { it.isNotEmpty() }?.let(::condition), o.getString("label"), o.getLong("createdAt"),
           o.getString("token"), ScheduledOrder.State.valueOf(o.getString("state")),
           InstinctLogEvents.messageId(o.optString("message")),
-          if (o.optString("source") == ProposalSource.BUZON.name) ProposalSource.BUZON else ProposalSource.WHATSAPP)
+          if (o.optString("source") == ProposalSource.BUZON.name) ProposalSource.BUZON else ProposalSource.WHATSAPP,
+          InstinctTriggers.decode(o.optJSONObject("trigger")),
+          if (o.has("expiresAt")) o.getLong("expiresAt") else null,
+          o.optString("series").takeIf { it.isNotEmpty() } ?: id)
       }
     }
 
