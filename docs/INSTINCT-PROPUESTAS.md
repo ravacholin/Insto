@@ -2,7 +2,9 @@
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
-La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. Con **«Pedirme confirmación antes de ejecutar»** encendido, cada orden espera tu toque o un «dale».
+Desde 1.14.0, además: Insto le puede **responder** a Instinct con el resultado de cada orden, Instinct puede pedir **rutinas** que vos le habilitaste, el bloque de instrucciones para Instinct se **genera desde el código**, las órdenes pueden quedar **programadas** para más tarde (con una única condición de clima) y lo que se puede revertir trae **Deshacer**.
+
+La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. Con **«Pedirme confirmación antes de ejecutar»** encendido, cada orden espera tu toque o un «dale». Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
 
 ## Protocolo
 
@@ -13,7 +15,8 @@ La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct 
 - La línea tiene que *empezar* con `#insto`, en minúsculas (se ignoran los espacios iniciales). Un `#insto` en medio de una oración es texto común.
 - Se leen como máximo **3 líneas por mensaje**; las demás se ignoran. El resto del mensaje no se interpreta.
 - No hay JSON ni parámetros libres: la línea pasa por el mismo parser que un pedido escrito. No usa Gemini, Groq, frases aprendidas, estructuras aprendidas ni el contexto operativo. **Solo la gramática explícita.**
-- Si una línea no se resuelve como un único `PhoneRoute.Local` permitido, se descarta y aparece un aviso discreto: «Instinct propuso algo que no entiendo». Eso incluye las aclaraciones (por ejemplo, «a las 7» sin mañana ni tarde), varios pasos, condiciones, negaciones y preguntas.
+- Hay tres formas extra, todas fijas: el envoltorio de una **orden diferida** (`a las HH:MM: …`, `en N minutos: …`, ver [Órdenes diferidas](#órdenes-diferidas-1140)), su única **condición de clima** y las **consultas** `ver catálogo`, `ver programadas` y `cancelar programadas`.
+- Si una línea no se resuelve como un único `PhoneRoute.Local` permitido (o una de esas formas), se descarta y aparece un aviso discreto: «Instinct propuso algo que no entiendo». Eso incluye las aclaraciones (por ejemplo, «a las 7» sin mañana ni tarde), varios pasos, condiciones fuera del envoltorio, negaciones y preguntas.
 
 ## Acciones permitidas (lista blanca)
 
@@ -30,9 +33,10 @@ La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct 
 | `MusicSearch`, `SpotifySearch`, `YouTubeSearch` | `#insto buscar jazz en YouTube` | Sí |
 | `CalendarEvent` | `#insto agendar reunión mañana a las 17:00 durante una hora` | Sí (el calendario muestra el evento para guardarlo) |
 | `ROUTINE_RUN` de una rutina **habilitada para Instinct** (1.14.0) | `#insto ejecutar la rutina Estudio` | Según sus pasos |
-| Consulta de solo lectura (1.14.0) | `#insto ver catálogo` | No: no hace nada en el teléfono |
+| Cualquiera de las anteriores, **diferida** (1.14.0) | `#insto a las 22:00: poner el volumen al 10 por ciento` · `#insto a las 06:30 si llueve: poner una alarma a las 06:45` | Según la orden |
+| Consultas (1.14.0) | `#insto ver catálogo` · `#insto ver programadas` · `#insto cancelar programadas` | No: no hacen nada en el teléfono |
 
-Los ejemplos de esta tabla salen de una sola fuente en el código (`InstinctProposalValidator.examples`, junto a la lista blanca) y un test comprueba que cada uno es una orden válida.
+Los ejemplos salen de una sola fuente en el código (`InstinctProposalValidator.examples`, junto a la lista blanca) y un test comprueba que cada uno es una orden válida.
 
 **Prohibidas siempre:** llamadas (`Dial`, `CALL_DIRECT`), cualquier envío de mensajes o archivos, compartir texto, `SavePlace`, navegación, rutinas que no habilitaste (o que cambiaron desde que las habilitaste), workflows y planes de varios pasos armados a partir del texto, y volumen multimedia temporal.
 
@@ -44,19 +48,21 @@ Los ejemplos de esta tabla salen de una sola fuente en el código (`InstinctProp
 2. **Filtros**, en orden, cortando en el primero que falle:
    1. Paquete de la app de WhatsApp configurada.
    2. No es un grupo (`EXTRA_IS_GROUP_CONVERSATION`).
-   3. El remitente del mensaje más nuevo coincide **exactamente** con el nombre del contacto configurado (sin `MessagingStyle`, el título). Una respuesta tuya en el mismo chat no cuenta.
+   3. El remitente del mensaje más nuevo coincide **exactamente** con el nombre del contacto configurado (sin `MessagingStyle`, el título). Una respuesta tuya en el mismo chat no cuenta, y tampoco un acuse de Insto.
    4. Mensaje nuevo: dedupe por `key` de la notificación más un SHA-256 del texto, en memoria.
    5. Tiene líneas `#insto`.
-3. **Validación de cada línea:** `RequestSafetyPolicy` (también descarta preguntas), `PhoneCommandParser`, `SemanticCommandGuard.review` con la línea como texto del pedido y la lista blanca.
+3. **Validación de cada línea:** primero las consultas y el envoltorio de las diferidas; después, para la orden (o la orden interior), `RequestSafetyPolicy` (también descarta preguntas), `PhoneCommandParser`, `SemanticCommandGuard.review` con la línea como texto del pedido y la lista blanca (más las rutinas habilitadas).
 4. **Ejecución:**
-   - **Flotante cerrado:** `PhoneActionExecutor` en el proceso de Insto, sin `confirmed`. Si sale bien, llega «Instinct hizo: …» en el canal «Insto · acciones de Instinct». Si falla, «Instinct pidió: … No se pudo: …». Si el resultado es incierto, se avisa y **no se repite**.
+   - **Flotante cerrado:** `PhoneActionExecutor` en el proceso de Insto, sin `confirmed`. Si sale bien, llega «Instinct hizo: …» en el canal «Insto · acciones de Instinct» (con **Deshacer** si se puede revertir). Si falla, «Instinct pidió: … No se pudo: …». Si el resultado es incierto, se avisa y **no se repite**.
    - **Flotante abierto y libre:** se ejecuta en la sesión del panel, como una orden local. **Flotante ocupado** (texto sin enviar, grabación, interpretación, confirmación, plan o elección): la orden espera y se ejecuta sola cuando el panel se libera. Un evento de calendario pasa por la vista previa de siempre.
+   - **Diferida:** se guarda y se ejecuta por este mismo camino cuando llega su hora.
 5. **Cuándo espera tu toque en lugar de ejecutarse** (notificación «Instinct propone: …» con **Confirmar**/**Descartar**, en el canal «Insto · propuestas de Instinct»):
    - encendiste «Pedirme confirmación antes de ejecutar»;
    - el teléfono está bloqueado;
-   - la orden abre otra app, el panel está cerrado y el servicio de Accesibilidad de Insto no está conectado (ver Límites);
-   - Instinct ya pidió 6 acciones en los últimos 10 minutos (freno anti-bucle);
-   - la acción necesita algo tuyo: confirmar «esa hora ya pasó», un permiso o elegir entre varias apps.
+   - la orden (o algún paso de la rutina) abre otra app, el panel está cerrado y el servicio de Accesibilidad de Insto no está conectado (ver Límites);
+   - Instinct ya pidió 6 acciones en los últimos 10 minutos (freno anti-bucle; una rutina cuenta como una);
+   - una orden diferida se disparó con más de 15 minutos de atraso;
+   - la acción necesita algo tuyo: confirmar «esa hora ya pasó», confirmar un modo temporal, un permiso o elegir entre varias apps.
 
 ## Respuestas a Instinct (1.14.0)
 
@@ -79,13 +85,15 @@ Hasta 1.13.0, Instinct nunca sabía qué había pasado con sus órdenes. Ahora I
 #insto-incierto <orden original> → <mensaje> · no se repite
 ```
 
+Hay dos prefijos más: `#insto-programada <orden> → a las 22:00` (una orden diferida quedó guardada) y `#insto-deshecho <orden> → <mensaje>` (deshiciste lo que hizo).
+
 - El mensaje es el texto de resultado que Insto ya produce para vos (`PhoneActionResult.message`) o un motivo fijo. No se agregan datos del teléfono.
 - Los motivos de `#insto-error` para una línea inválida: vacía («la línea no tenía ninguna orden»), insegura o pregunta, no entendida («no la entendí: usá una de las formas del catálogo»), incoherente con el control semántico y no permitida («esa acción no está permitida para Instinct»).
 - **Guardia anti-bucle:** ninguna línea puede empezar con «#insto » (con espacio). El formateador aplana saltos de línea y caracteres de control, y además pasa el acuse por el mismo lector de órdenes: si detectara una, no se envía.
 - Como máximo 3 líneas (igual que el máximo de órdenes) y 600 caracteres. La orden original se recorta a 80.
-- **Solo errores y esperas** omite las líneas `#insto-ok`; si todo salió bien, no se envía nada.
+- **Solo errores y esperas** omite las líneas `#insto-ok`; si todo salió bien, no se envía nada. Las respuestas a consultas (`ver catálogo`, `ver programadas`, `cancelar programadas`) salen en los dos modos activos.
 
-**Seguimiento.** Si una orden quedó en espera y después la confirmás, la descartás o vence, Insto manda un segundo acuse breve con la misma acción guardada, **solo si sigue vigente**: `#insto-ok …` (o `#insto-error`/`#insto-incierto` si al confirmarla falló), `#insto-descartada …` o `#insto-vencida …`. Este seguimiento sale también en «Solo errores y esperas», porque cierra una espera que Instinct ya vio. Para que el aviso de vencimiento llegue antes de que caduque la acción, una orden en espera vence unos 2 segundos antes de sus 10 minutos.
+**Seguimiento.** Si una orden quedó en espera (o programada) y después la confirmás, la descartás, vence o se dispara, Insto manda un segundo acuse breve con la misma acción guardada, **solo si sigue vigente**: `#insto-ok …` (o `#insto-error`/`#insto-incierto` si al confirmarla falló), `#insto-descartada …` o `#insto-vencida …`. Este seguimiento sale también en «Solo errores y esperas», porque cierra una espera que Instinct ya vio. Para que el aviso de vencimiento llegue antes de que caduque la acción, una orden en espera vence unos 2 segundos antes de sus 10 minutos.
 
 **Diagnóstico.** La pantalla de diagnóstico suma una línea propia, sin contenido: «Última respuesta a Instinct: Se respondió a Instinct» o «No se pudo responder» con el motivo. No reemplaza el estado del último mensaje.
 
@@ -110,27 +118,87 @@ El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: l
 - `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v2 · rutinas habilitadas: Estudio.` (no el catálogo entero).
 - Copia de referencia, generada sin rutinas: [`instinct-catalog.txt`](instinct-catalog.txt). Un test compara esa copia con lo que genera el código; para regenerarla, corré `INSTO_WRITE_CATALOG=1 python3 scripts/test-phone-core.py com.example.phone.InstinctRoutinesTest`.
 
+## Órdenes diferidas (1.14.0)
+
+El envoltorio solo dice **cuándo**; la orden interior pasa por el validador intacta, al recibirla y otra vez al dispararse.
+
+```text
+#insto a las HH:MM: <orden>       24 horas; si esa hora ya pasó hoy (o es justo ahora), es mañana
+#insto en N minutos: <orden>      también «en N horas»; de 1 minuto a 24 horas
+```
+
+- **Los dos puntos después del tiempo son obligatorios.** Sin ellos la línea es una orden inmediata común, así que `#insto poner una alarma a las 07:00` conserva su significado.
+- **Al recibirla** se valida la orden interior con `InstinctProposalValidator.check` en ese momento. Si es inválida, se descarta y se responde `#insto-error`. Si es válida, se guarda y se responde `#insto-programada <orden> → a las 22:00`. También te llega un aviso «Instinct programó: …». No se anidan envoltorios ni consultas.
+- **Almacenamiento:** `instinct-scheduled.json` en `noBackupFilesDir`, con escritura atómica (como `ConfiguredRoutineStore`): id, orden completa e interior (texto), hora de disparo en tiempo de pared, huella de la configuración, condición opcional y un token aleatorio. Como máximo **10 programadas** y **24 horas** a futuro. Una restauración nunca las trae.
+- **Disparo:** `AlarmManager.setAndAllowWhileIdle` (`setExactAndAllowWhileIdle` solo si `canScheduleExactAlarms`) hacia `InstinctScheduleReceiver`, que no está exportado; la alarma lleva el token de la orden. Se reprograma todo en `BOOT_COMPLETED` y cuando cambia la hora (`TIME_SET`) o la zona horaria (`TIMEZONE_CHANGED`). La hora guardada es un instante: si cambiás de zona, se dispara en el mismo instante, no a la misma hora local.
+- **Al dispararse:**
+  1. Se marca **consumida en disco antes de cualquier otra cosa**: cada programada se ejecuta como máximo una vez. Si el proceso muere en el medio, al reiniciar se avisa «Pudo haberse ejecutado… no se repite» y nunca se vuelve a ejecutar (es un resultado incierto).
+  2. Se vuelve a validar desde cero: interruptor encendido, huella vigente y orden válida con el parser de ese momento. Si algo falla, no se ejecuta y se avisa por qué.
+  3. Si tiene condición, se evalúa ([Condiciones por clima](#condiciones-por-clima-1140)).
+  4. Si llegó con **más de 15 minutos de atraso** (Doze, teléfono apagado), no se ejecuta sola: queda para Confirmar con el motivo «Llegó tarde».
+  5. Si no, pasa por `autoRunBlocker` y `runInBackground` como cualquier orden (o al panel, si está abierto).
+- **Gestión:** `#insto ver programadas` (solo lectura, responde por el acuse con la hora y la orden de cada una) y `#insto cancelar programadas` (cancela todas las que vinieron de Instinct). En **Ajustes → Propuestas de Instinct → Órdenes programadas por Instinct** ves la lista con hora y resumen y podés cancelar cada una. Apagar «Recibir órdenes de Instinct» las cancela todas.
+- **Acuse al dispararse:** solo si la acción «Responder» del mensaje original sigue vigente (10 minutos), es decir, en la práctica para demoras cortas. Si no, el resultado solo te llega a vos.
+
+## Condiciones por clima (1.14.0)
+
+Solo con una hora de disparo y **una sola condición por línea**, sin «y», «o» ni anidamiento:
+
+```text
+#insto a las 06:30 si llueve: <orden>
+#insto a las 06:30 si no llueve: <orden>
+#insto a las 06:30 si hace menos de N grados: <orden>
+#insto a las 06:30 si hace más de N grados: <orden>
+```
+
+- **«Llueve»** = probabilidad de lluvia del pronóstico para las **próximas 6 horas ≥ 50 %** (`WeatherConditions.RAIN_THRESHOLD_PERCENT`). Se toma el bloque más alto de la ventana. El SMN publica rangos: si el rango completo está en 50 % o más, llueve; si está todo por debajo, no llueve; si cruza el umbral (por ejemplo, 40–70 %), es **ambiguo** y cuenta como sin datos. Open-Meteo, el respaldo, publica valores exactos por hora.
+- **Temperatura** = la **observación actual** (no la sensación térmica ni el pronóstico), con la misma regla de frescura que la consulta común (más de 3 horas es vieja). «Menos de» y «más de» son estrictos: con 10 grados, «si hace menos de 10 grados» no se cumple.
+- La condición se evalúa **en el momento del disparo**, con el SMN y el respaldo que ya existen. `SmnWeatherService` expone valores estructurados (`WeatherReadings.currentTemperature()` y `rainChance()`, números), no el texto de `SmnWeatherReply`; no hay clientes nuevos.
+- **Fail-safe:** si el clima no está disponible, tarda más de 20 segundos o el dato es ambiguo, **no se ejecuta**. Te avisa y responde `#insto-error … → sin datos del clima`. Nunca se toma un valor por defecto. Si la condición no se cumple, tampoco se ejecuta: te avisa y responde `#insto-descartada … → no se cumplió «si llueve»`.
+
+## Deshacer (1.14.0)
+
+La notificación «Instinct hizo: …» trae la acción **«Deshacer»** solo para comandos con estado reversible:
+
+| Comando | Qué restaura |
+| --- | --- |
+| `Volume` | El volumen multimedia anterior. |
+| `Torch` | El estado inverso (Android no deja leer el estado de la linterna). |
+| Silencio, vibración, No molestar | El modo de timbre o el filtro de interrupciones anterior. |
+| `TemporaryMode` | El estado anterior, terminando su propio *lease* con `TemporaryModeManager`. |
+
+- **Nunca pisa un cambio manual:** si después de la orden tocaste ese estado (volumen, modo de timbre, No molestar o el modo temporal), Deshacer no hace nada y lo dice («No toqué lo que cambiaste después: …»). Para el modo temporal usa `TemporaryModeManager.current` y la misma regla del *lease* (`TemporaryModePolicy.canRestore`).
+- Alarmas, temporizadores, eventos, apps y búsquedas **no tienen Deshacer**.
+- El estado anterior vive **en memoria**, con id y **token aleatorio** como en `ProposalBook`; la acción viaja en un `PendingIntent` a `InstinctProposalReceiver`, que no está exportado. **Vence a los 10 minutos y se usa una sola vez.**
+- **Rutinas:** Deshacer revierte los pasos reversibles en **orden inverso** y avisa cuáles no se podían revertir («No se pueden deshacer: Temporizador…»).
+- Si los acuses están activos y la acción «Responder» sigue vigente, se responde `#insto-deshecho <orden> → <qué se deshizo>`.
+- Un modo temporal pedido por Instinct siempre espera tu confirmación (como cualquier modo temporal), así que en la práctica no se ejecuta en segundo plano ni trae este botón; el soporte queda listo para cuando se ejecute por ese camino.
+
 ## Idempotencia y vencimiento
 
-- Las órdenes viven solo en memoria (`ProposalBook`). Cada una se ejecuta como máximo una vez gracias a un `claim` atómico. Si WhatsApp vuelve a publicar la misma notificación, no pasa nada.
-- Las que esperan confirmación vencen a los **10 minutos**. Una vencida, descartada o ya ejecutada no se puede volver a ejecutar.
-- Cada orden guarda la huella de la configuración con la que llegó (contacto y app de WhatsApp). Si eso cambió o se apagó el interruptor, no se ejecuta.
-- Confirmar desde la notificación exige, además del id, un **token aleatorio** que solo viaja en el `PendingIntent` de Insto, porque `AssistActivity` está exportada.
+- Las órdenes inmediatas viven solo en memoria (`ProposalBook`). Cada una se ejecuta como máximo una vez gracias a un `claim` atómico. Si WhatsApp vuelve a publicar la misma notificación, no pasa nada.
+- Las que esperan confirmación vencen a los **10 minutos** (unos 2 segundos antes si hay un acuse pendiente, para poder avisar el vencimiento). Una vencida, descartada o ya ejecutada no se puede volver a ejecutar.
+- Las diferidas se guardan en disco y se marcan consumidas **antes** de ejecutarse: nunca se repiten.
+- Cada orden guarda la huella de la configuración con la que llegó (contacto y app de WhatsApp). Si eso cambió o se apagó el interruptor, no se ejecuta, tampoco una diferida.
+- Confirmar desde la notificación exige, además del id, un **token aleatorio** que solo viaja en el `PendingIntent` de Insto, porque `AssistActivity` está exportada. Lo mismo vale para Deshacer y para la alarma de una programada.
+- Un resultado incierto nunca se repite: ni una orden suelta, ni un paso de rutina, ni una programada interrumpida.
 
 ## Privacidad
 
 - La lectura es **pasiva**: con el interruptor encendido, Insto mira cada notificación de WhatsApp y lee solo el último mensaje del chat individual con el contacto configurado. De ese mensaje usa únicamente las líneas `#insto`. Las notificaciones de otras apps solo se miran por su paquete. Las de grupos y otros contactos se descartan antes de leer el texto.
-- El texto no se guarda, no se registra (Logcat muestra solo contadores, en debug), no sale del teléfono y no entra en copias de seguridad.
-- Los interruptores viven en `noBackupFilesDir`: una restauración nunca enciende ni la lectura ni la ejecución automática.
+- El texto del mensaje no se guarda, no se registra (Logcat muestra solo contadores, en debug), no sale del teléfono y no entra en copias de seguridad. La única excepción es la orden de una diferida, que se guarda en `noBackupFilesDir` hasta que se dispara o la cancelás.
+- Los interruptores, el modo de respuesta, los permisos de rutinas y las programadas viven en `noBackupFilesDir`: una restauración nunca enciende ni trae nada de esto.
 - El diagnóstico de Ajustes muestra estados y el motivo del último resultado. Nunca muestra el contenido del mensaje.
-- Los acuses a Instinct (apagados por defecto) solo repiten la orden que Instinct mandó y el texto de resultado que Insto ya te muestra. La acción «Responder» que los envía vive en memoria como máximo 10 minutos y nunca se guarda.
+- Los acuses a Instinct (apagados por defecto) solo repiten la orden que Instinct mandó y el texto de resultado que Insto ya te muestra. La acción «Responder» que los envía vive en memoria como máximo 10 minutos y nunca se guarda. A Instinct le llegan los nombres de las rutinas habilitadas, nunca sus pasos.
+- La única red nueva en uso es la del clima que ya existía (SMN y Open-Meteo), y solo cuando se dispara una orden con condición.
 
 ## Lo que no hacen las órdenes
 
 - No alimentan el aprendizaje: no crean frases (`LearnedPhraseStore`) ni estructuras (`PhrasePatterns`).
-- No cuentan como turnos de `OperationalContext` ni lo modifican. Eso sí: al ejecutar un control multimedia sin app indicada, `PhoneActionExecutor` sigue eligiendo la sesión con el contexto vigente, como con cualquier pedido.
-- No se juntan en planes: cada línea es un comando independiente.
-- No agregan dependencias, servidores ni llamadas de red. Los acuses usan la acción «Responder» de WhatsApp, que ya existe en la notificación.
+- No cuentan como turnos de `OperationalContext` ni lo modifican, tampoco los pasos de una rutina pedida por Instinct. Eso sí: al ejecutar un control multimedia sin app indicada, `PhoneActionExecutor` sigue eligiendo la sesión con el contexto vigente, como con cualquier pedido.
+- No se juntan en planes: cada línea es un comando independiente. Una rutina es un plan que **vos** configuraste y habilitaste; Instinct solo la nombra.
+- **Condiciones:** la única forma admitida es la del clima, con hora y una sola por línea ([Condiciones por clima](#condiciones-por-clima-1140)). Cualquier otra condición («si estoy en casa», «si llueve y hace frío») se descarta.
+- No agregan dependencias ni servidores. Los acuses usan la acción «Responder» de WhatsApp, que ya existe en la notificación.
 
 ## Límites conocidos
 
@@ -139,18 +207,21 @@ El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: l
 - La comparación usa el nombre que **muestra WhatsApp** (el de tu agenda). Si en Insto guardaste a Instinct con otro nombre, no se lee nada.
 - Si Android acaba de iniciar el proceso de Insto y todavía no cargó los ajustes, esa notificación se descarta.
 - Si tenés abierto el chat de Instinct en WhatsApp, WhatsApp no genera notificación y no llega nada.
+- **Acuses:** dependen de que WhatsApp ofrezca «Responder» en la notificación. Si no lo hace, no se responde (lo dice el diagnóstico). Un acuse de una diferida que se dispara después de 10 minutos no sale.
+- **Diferidas:** sin permiso de alarmas exactas (Insto no lo pide), Android puede demorar el disparo; si la demora pasa de 15 minutos, la orden espera tu confirmación.
 - Requiere Android 9 o posterior.
 
 ## Cómo probarlo en el teléfono
 
 1. Configurá el contacto de Instinct con el nombre exacto que muestra WhatsApp.
 2. Andá a **Ajustes → Propuestas de Instinct**, activá «Recibir órdenes de Instinct» y habilitá «Insto · notificaciones» y las notificaciones.
-3. Sin escribirle nada antes, que Instinct mande `#insto poner el volumen al 30 por ciento`: el volumen cambia y llega «Instinct hizo: …».
+3. Sin escribirle nada antes, que Instinct mande `#insto poner el volumen al 30 por ciento`: el volumen cambia y llega «Instinct hizo: …» con **Deshacer**.
 4. Con la Accesibilidad de Insto activa, `#insto poner un temporizador de 1 minuto` se crea solo. Sin ella, llega «Instinct propone: …» con Confirmar.
-5. Si algo no pasa, mirá **Diagnóstico** en la misma pantalla y tocá «Actualizar diagnóstico».
+5. Elegí «Responderle a Instinct: Siempre» y repetí el paso 3: en el chat aparece `#insto-ok poner el volumen al 30 por ciento → Volumen multimedia ajustado.`
+6. Si algo no pasa, mirá **Diagnóstico** en la misma pantalla y tocá «Actualizar diagnóstico».
 
 ## Instrucciones para pegar en el prompt de Instinct
 
-Desde 1.14.0 el bloque se genera desde el código y se obtiene en **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** (o «Enviarlas a Instinct»). Así nunca se desincroniza de la gramática ni de tus rutinas habilitadas. Copiá el bloque de nuevo cada vez que habilites o deshabilites una rutina, o cuando Insto se actualice.
+El bloque se genera desde el código y se obtiene en **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** (o «Enviarlas a Instinct»). Así nunca se desincroniza de la gramática ni de tus rutinas habilitadas. Copialo de nuevo cada vez que habilites o deshabilites una rutina, o cuando Insto se actualice.
 
-La copia de referencia, sin rutinas, está en [`instinct-catalog.txt`](instinct-catalog.txt). Incluye los prefijos de los acuses (`#insto-ok`, `#insto-espera`, `#insto-error`, `#insto-incierto`, más `#insto-descartada` y `#insto-vencida` como seguimiento) y la regla para Instinct: **esas líneas son informativas; no se responden con nuevas órdenes, salvo una sola orden corregida después de un `#insto-error`, y nunca se repite una orden después de `#insto-incierto` o `#insto-espera`.**
+La copia de referencia, sin rutinas, está en [`instinct-catalog.txt`](instinct-catalog.txt). Incluye las formas diferidas y condicionales, los prefijos de los acuses (`#insto-ok`, `#insto-espera`, `#insto-error`, `#insto-incierto`, `#insto-programada`, y `#insto-descartada`, `#insto-vencida` y `#insto-deshecho` como seguimiento) y la regla para Instinct: **esas líneas son informativas; no se responden con nuevas órdenes, salvo una sola orden corregida después de un `#insto-error`, y nunca se repite una orden después de `#insto-incierto` o `#insto-espera`.**

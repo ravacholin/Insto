@@ -16,10 +16,14 @@ enum class AckKind(val prefix: String) {
   UNCERTAIN("#insto-incierto"),
   DISCARDED("#insto-descartada"),
   EXPIRED("#insto-vencida"),
+  /** A deferred order was stored; its outcome may follow when it fires, while the reply handle is valid. */
+  SCHEDULED("#insto-programada"),
+  /** The user undid what the order did. */
+  UNDONE("#insto-deshecho"),
   ;
 
   /** Kinds that end an order: after one of them nothing more is reported for it. */
-  val final: Boolean get() = this != WAITING
+  val final: Boolean get() = this != WAITING && this != SCHEDULED
 }
 
 /**

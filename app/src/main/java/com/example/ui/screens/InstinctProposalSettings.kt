@@ -82,6 +82,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         "Solo usa el texto del resultado que ya te muestra a vos.")
       SettingsChoices(InstinctReplyMode.entries, replyMode, { settings.setReplyMode(it); revision++ }, label = ::replyModeLabel,
         itemModifier = { Modifier.testTag("instinct_reply_${it.name.lowercase()}") })
+      InstinctScheduledList(revision) { revision++ }
       InstinctRoutineSwitches(revision) { revision++ }
       InstinctCatalogActions(replyMode, revision) { revision++ }
       ProposalDiagnostics(contact, revision) { revision++ }
@@ -107,6 +108,24 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         }, modifier = Modifier.testTag("instinct_proposals_accept")) { Text("Activar") }
       },
     )
+  }
+}
+
+/** Orders Instinct scheduled for later, with their time and a button to cancel each one. */
+@Composable
+private fun InstinctScheduledList(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val pending = remember(revision) { com.example.phone.InstinctScheduler.pending(context) }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_scheduled")) {
+    Text("Órdenes programadas por Instinct", style = MaterialTheme.typography.bodyLarge)
+    if (pending.isEmpty()) SettingsDescription("No hay órdenes programadas.")
+    val zone = java.util.Calendar.getInstance()
+    pending.forEach { order ->
+      SettingsDescription("${com.example.phone.InstinctDeferral.clock(order.fireAt, zone)}" +
+        (order.condition?.let { " ${it.label}" } ?: "") + ": ${order.inner}")
+      TextButton(onClick = { com.example.phone.InstinctScheduler.cancel(context, order.id); onChange() },
+        modifier = Modifier.testTag("instinct_scheduled_cancel")) { Text("Cancelar esta orden") }
+    }
   }
 }
 

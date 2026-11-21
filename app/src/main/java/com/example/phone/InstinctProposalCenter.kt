@@ -41,8 +41,10 @@ class InstinctProposalSettings(context: Context) {
       if (enabled.exists()) enabled.delete()
       // Replies are cut first: discarding below must not answer Instinct either.
       InstinctProposalCenter.acks.clear()
-      // Turning it off discards every pending proposal: nothing can run after this.
+      // Turning it off discards every pending proposal and scheduled order: nothing can run after this.
       InstinctProposalCenter.discardAll(app)
+      InstinctScheduler.cancelAll(app)
+      InstinctProposalCenter.undos.clear()
     }
   }
 
@@ -211,7 +213,9 @@ object InstinctProposalIntake {
     }
     val parser = PhoneCommandParser()
     val routines = InstinctRoutineGrants(app).access()
-    val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser, routines = routines) }
+    // One wall clock for the grammar and the deferred orders it may produce.
+    val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
+    val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser, now, routines) }
     if (checks.none { it !is ProposalCheck.Invalid }) diagnose(Diagnosis.NOT_UNDERSTOOD)
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
     val ticket = InstinctProposalCenter.openReply(app, checks.size, replyHandle)
@@ -272,7 +276,7 @@ object InstinctProposalCenter {
         is ProposalCheck.Invalid -> reply(app, acks.resolve(ticket, index, InstinctAck.invalid(check)))
         // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
         is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index, AckEntry(AckKind.OK, check.order, answer(app, check.kind), informative = true)))
-        is ProposalCheck.Valid -> {
+        is ProposalCheck.Valid -> if (check.deferred != null) schedule(app, check, fingerprint, ticket, index) else {
           val proposal = book.offer(check.order, check.command, fingerprint)
           if (proposal == null) reply(app, acks.resolve(ticket, index,
             AckEntry(AckKind.ERROR, check.order, "ya había una orden igual esperando confirmación; no se duplica.")))
@@ -345,9 +349,42 @@ object InstinctProposalCenter {
     }
   }
 
-  /** The answer to a read-only query. Names of enabled routines only, never their steps. */
+  /** The answer to a query. Names of enabled routines only, never their steps. */
   internal fun answer(context: Context, kind: ProposalCheck.QueryKind): String = when (kind) {
     ProposalCheck.QueryKind.CATALOG -> InstinctProtocolCatalog.summary(InstinctRoutineGrants(context).access().enabledNames())
+    ProposalCheck.QueryKind.SCHEDULED -> InstinctScheduler.describe(context)
+    ProposalCheck.QueryKind.CANCEL_SCHEDULED -> when (val n = InstinctScheduler.cancelAll(context)) {
+      0 -> "No había órdenes programadas."
+      1 -> "Se canceló 1 orden programada."
+      else -> "Se cancelaron $n órdenes programadas."
+    }
+  }
+
+  /** A deferred order: stored for later, never run now. Instinct hears «#insto-programada» or why not. */
+  private fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String, ticket: InstinctAckLedger.Ticket?, index: Int) {
+    when (val outcome = InstinctScheduler.schedule(context, check, fingerprint)) {
+      is InstinctScheduler.Outcome.Refused -> reply(context, acks.resolve(ticket, index, AckEntry(AckKind.ERROR, check.order, outcome.why)))
+      is InstinctScheduler.Outcome.Scheduled -> {
+        notifyScheduled(context, outcome.order, "Instinct programó: ${PhoneCommandCodec.summary(check.command)}",
+          "Se ejecuta ${outcome.order.label}. Podés cancelarla en Ajustes → Propuestas de Instinct.")
+        if (ticket == null) return
+        val key = InstinctScheduler.ackKey(outcome.order.id)
+        acks.link(ticket, index, key)
+        report(context, key, AckEntry(AckKind.SCHEDULED, check.order, outcome.order.label))
+      }
+    }
+  }
+
+  /** A scheduled order fired and may run now: to the open panel, or in the background, as any order that arrives. */
+  internal fun dispatch(context: Context, proposal: ProposalBook.Proposal) {
+    val target = listener
+    if (target != null) target.onProposal(proposal) else runInBackground(context.applicationContext, proposal)
+  }
+
+  /** A scheduled order that fired late waits for Confirmar. */
+  internal fun askLate(context: Context, proposal: ProposalBook.Proposal, reason: String) {
+    askConfirmation(context, proposal, reason)
+    report(context, proposal.id, AckEntry(AckKind.WAITING, proposal.order, reason))
   }
 
   /** The catalog to give Instinct, with the routines enabled now. */
@@ -419,6 +456,7 @@ object InstinctProposalCenter {
     val claim = book.claim(proposal.id, fingerprint(context))
     if (claim !is ProposalBook.Claim.Granted) { reportUnavailable(context, proposal, claim); return }
     if (isRoutine(proposal.command)) { runRoutineInBackground(context, proposal); return }
+    val capture = InstinctUndoActions.capture(context, proposal.command)
     val result = PhoneActionExecutor(context).execute(proposal.command)
     when {
       // Maybe it happened: never offered again, so it is never repeated.
@@ -443,7 +481,8 @@ object InstinctProposalCenter {
       }
       else -> {
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.EXECUTED)
-        notifyResult(context, proposal, "Instinct hizo: ${proposal.summary}", result.message)
+        val undo = capture?.let { InstinctUndoActions.complete(context, it) }?.let { undos.offer(proposal.id, proposal.order, listOf(it)) }
+        notifyResult(context, proposal, "Instinct hizo: ${proposal.summary}", result.message, undo)
         report(context, proposal, result)
       }
     }
@@ -467,10 +506,21 @@ object InstinctProposalCenter {
     // A routine interrupted by a process death is never resumed: its uncertain step is not repeated.
     val runner = WorkflowRunner(runCatching { store.read() }.getOrNull(), store::write)
     val executor = PhoneActionExecutor(context)
-    val run = InstinctRoutineRun(runner, { blocker(context, it, foreground = false) }, executor::execute).run(routine)
+    val reversals = ArrayList<Reversal>()
+    val irreversible = ArrayList<PhoneCommand>()
+    val run = InstinctRoutineRun(runner, { blocker(context, it, foreground = false) }) { step ->
+      val capture = InstinctUndoActions.capture(context, step)
+      executor.execute(step).also { result ->
+        if (InstinctAck.kindOf(result) == AckKind.OK) {
+          val reversal = capture?.let { InstinctUndoActions.complete(context, it) }
+          if (reversal != null) reversals += reversal else irreversible += step
+        }
+      }
+    }.run(routine)
+    val undo = undos.offer(proposal.id, proposal.order, reversals, irreversible)
     InstinctProposalIntake.diagnose(if (run.finished) InstinctProposalIntake.Diagnosis.EXECUTED else InstinctProposalIntake.Diagnosis.FAILED,
       run.summary.takeUnless { run.finished })
-    notifyResult(context, proposal, if (run.finished) "Instinct hizo: rutina ${routine.name}" else "Instinct pidió: rutina ${routine.name}", run.summary)
+    notifyResult(context, proposal, if (run.finished) "Instinct hizo: rutina ${routine.name}" else "Instinct pidió: rutina ${routine.name}", run.summary, undo)
     report(context, proposal.id, AckEntry(run.kind, proposal.order, run.summary))
   }
 
@@ -570,17 +620,75 @@ object InstinctProposalCenter {
     runCatching { context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_BASE + requestCode, notification) }
   }
 
-  /** «Instinct hizo: …» after an automatic execution, or why it could not. Informative: no action runs from it. */
-  private fun notifyResult(context: Context, proposal: ProposalBook.Proposal, title: String, text: String) {
+  /**
+   * «Instinct hizo: …» after an automatic execution, or why it could not. Its only action is «Deshacer», for a
+   * reversible state ([undo]); it carries a random token and lapses with the undo after ten minutes.
+   */
+  private fun notifyResult(context: Context, proposal: ProposalBook.Proposal, title: String, text: String, undo: UndoBook.Entry? = null) {
     if (!canNotify(context, ACTIONS_CHANNEL_ID)) return
     val public = builder(context, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info)
       .setContentTitle("Instinct usó Insto").build()
     val notification = builder(context, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info)
       .setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text))
       .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(public)
-      .setAutoCancel(true).build()
+      .setAutoCancel(true)
+      .apply {
+        if (undo != null) {
+          val intent = PendingIntent.getBroadcast(context, UNDO_BASE + undo.id.toInt(),
+            Intent(context, InstinctProposalReceiver::class.java).setAction(ACTION_UNDO)
+              .putExtra(EXTRA_UNDO_ID, undo.id).putExtra(EXTRA_UNDO_TOKEN, undo.token),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+          addAction(Notification.Action.Builder(null, "Deshacer", intent).build())
+          if (Build.VERSION.SDK_INT >= 26) setTimeoutAfter(ProposalBook.TTL_MILLIS)
+        }
+      }.build()
     runCatching { context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_BASE + proposal.id.toInt(), notification) }
   }
+
+  /** Pending «Deshacer», in memory only: ten minutes, one use, a random token. */
+  val undos = UndoBook({ clock() })
+  const val ACTION_UNDO = "com.example.phone.ACTION_UNDO_INSTINCT_ACTION"
+  const val EXTRA_UNDO_ID = "insto.instinct.undo"
+  const val EXTRA_UNDO_TOKEN = "insto.instinct.undo.token"
+  private const val UNDO_BASE = 50_000
+
+  /**
+   * «Deshacer»: reverts the reversible steps in reverse order, never over a change the user made afterwards, and
+   * says what could not be undone. Instinct hears «#insto-deshecho» if replies are on and the handle is valid.
+   */
+  fun undo(context: Context, id: Long, token: String?): String {
+    val app = context.applicationContext
+    val entry = when (val claim = undos.claim(id, token)) {
+      is UndoBook.Claim.Granted -> claim.entry
+      UndoBook.Claim.Expired -> return "Ya pasaron más de 10 minutos: no se puede deshacer."
+      UndoBook.Claim.Used -> return "Ya se deshizo."
+      UndoBook.Claim.Unknown -> return "No hay nada para deshacer."
+    }
+    val reverted = ArrayList<PhoneCommand>()
+    val kept = ArrayList<PhoneCommand>()
+    entry.reversals.asReversed().forEach { if (InstinctUndoActions.revert(app, it)) reverted += it.command else kept += it.command }
+    val message = UndoPolicy.summary(reverted.asReversed(), kept.asReversed(), entry.irreversible)
+    if (canNotify(app, ACTIONS_CHANNEL_ID)) {
+      val notification = builder(app, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle(if (reverted.isEmpty()) "No se deshizo nada" else "Deshecho").setContentText(message)
+        .setStyle(Notification.BigTextStyle().bigText(message)).setVisibility(Notification.VISIBILITY_PRIVATE).setAutoCancel(true).build()
+      runCatching { app.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_BASE + entry.proposalId.toInt(), notification) }
+    }
+    if (reverted.isNotEmpty()) reply(app, acks.note(entry.proposalId, AckEntry(AckKind.UNDONE, entry.order, message)))
+    return message
+  }
+
+  /** About a scheduled order: programmed, dropped, uncertain. Informative, in the actions channel. */
+  internal fun notifyScheduled(context: Context, order: ScheduledOrder, title: String, text: String) {
+    if (!canNotify(context, ACTIONS_CHANNEL_ID)) return
+    val notification = builder(context, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info)
+      .setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text))
+      .setVisibility(Notification.VISIBILITY_PRIVATE)
+      .setPublicVersion(builder(context, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Instinct usó Insto").build())
+      .setAutoCancel(true).build()
+    runCatching { context.getSystemService(NotificationManager::class.java).notify(SCHEDULED_BASE + (order.id.hashCode() and 0xFFFF), notification) }
+  }
+  private const val SCHEDULED_BASE = 60_000
 
   private fun notifyNotUnderstood(context: Context) {
     if (!canNotify(context, NOTICE_CHANNEL_ID)) return
@@ -603,9 +711,14 @@ object InstinctProposalCenter {
   fun notificationId(id: Long): Int = NOTIFICATION_BASE + id.toInt()
 }
 
-/** «Descartar» from the notification. Not exported; only Insto's own PendingIntent reaches it. */
+/** «Descartar» and «Deshacer» from the notifications. Not exported; only Insto's own PendingIntents reach it. */
 class InstinctProposalReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
+    if (intent.action == InstinctProposalCenter.ACTION_UNDO) {
+      val id = intent.getLongExtra(InstinctProposalCenter.EXTRA_UNDO_ID, -1L)
+      if (id > 0) InstinctProposalCenter.undo(context, id, intent.getStringExtra(InstinctProposalCenter.EXTRA_UNDO_TOKEN))
+      return
+    }
     if (intent.action != InstinctProposalCenter.ACTION_DISCARD) return
     val id = intent.getLongExtra(InstinctProposalCenter.EXTRA_PROPOSAL_ID, -1L)
     if (id > 0) InstinctProposalCenter.discard(context, id)

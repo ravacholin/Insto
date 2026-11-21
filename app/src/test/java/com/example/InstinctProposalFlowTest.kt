@@ -141,7 +141,8 @@ class InstinctProposalFlowTest {
     val done = posted().single()
     assertEquals(InstinctProposalCenter.ACTIONS_CHANNEL_ID, done.channelId)
     assertTrue(titles().single().startsWith("Instinct hizo: "))
-    assertTrue(done.actions.isNullOrEmpty())
+    // Its only action is «Deshacer» (1.14.0): the volume is a reversible state.
+    assertEquals(listOf("Deshacer"), done.actions.map { it.title.toString() })
     assertEquals(InstinctProposalIntake.Diagnosis.EXECUTED, InstinctProposalIntake.lastDiagnosis)
     // The same notification again (WhatsApp re-posting it) runs nothing more.
     audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)

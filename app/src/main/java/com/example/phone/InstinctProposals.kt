@@ -29,12 +29,16 @@ object InstinctProposalProtocol {
 /** The result of checking one proposal line. Only [Valid] can ever reach the user as something to confirm. */
 sealed interface ProposalCheck {
   val order: String
-  data class Valid(override val order: String, val command: PhoneCommand) : ProposalCheck
+  /** With [deferred], [command] is the inner order, checked now and again when it fires. */
+  data class Valid(override val order: String, val command: PhoneCommand, val deferred: Deferred? = null) : ProposalCheck
   data class Invalid(override val order: String, val reason: Reason) : ProposalCheck
   /** A read-only question about the protocol itself: it never does anything on the phone. */
   data class Query(override val order: String, val kind: QueryKind) : ProposalCheck
   enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN }
-  enum class QueryKind(val phrase: String) { CATALOG("ver catálogo") }
+  /** [readOnly] queries change nothing; «cancelar programadas» only cancels Insto's own pending orders. */
+  enum class QueryKind(val phrase: String, val readOnly: Boolean = true) {
+    CATALOG("ver catálogo"), SCHEDULED("ver programadas"), CANCEL_SCHEDULED("cancelar programadas", readOnly = false)
+  }
 }
 
 /**
@@ -60,6 +64,20 @@ object InstinctProposalValidator {
     val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
     ProposalCheck.QueryKind.entries.firstOrNull { PhoneCommandParser.normalize(it.phrase) == folded }
       ?.let { return ProposalCheck.Query(order, it) }
+    // A deferred order: only a wrapper. Its inner order goes through every check below, untouched, and cannot be
+    // another wrapper or a query.
+    when (val wrapper = InstinctDeferral.parse(order, now)) {
+      is InstinctDeferral.Parse.Rejected -> return ProposalCheck.Invalid(order, ProposalCheck.Reason.NOT_LOCAL)
+      is InstinctDeferral.Parse.Wrapped -> {
+        val inner = check(wrapper.deferred.inner, parse, now, routines)
+        return when {
+          inner is ProposalCheck.Valid && inner.deferred == null -> ProposalCheck.Valid(order, inner.command, wrapper.deferred)
+          inner is ProposalCheck.Invalid -> ProposalCheck.Invalid(order, inner.reason)
+          else -> ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
+        }
+      }
+      InstinctDeferral.Parse.None -> Unit
+    }
     if (RequestSafetyPolicy.refusal(order) != null || RequestSafetyPolicy.isQuestion(order))
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.UNSAFE)
     val command = (parse(order) as? PhoneRoute.Local)?.command
@@ -106,6 +124,14 @@ object InstinctProposalValidator {
     "buscar jazz en YouTube",
     "buscar Cerati en Spotify",
     "agendar reunión mañana a las 17:00 durante una hora",
+    // Deferred and conditional forms (1.14.0): the wrapper, then any order above.
+    "a las 22:00: poner el volumen al 10 por ciento",
+    "en 30 minutos: apagar la linterna",
+    "en 2 horas: desactivar no molestar",
+    "a las 06:30 si llueve: poner una alarma a las 06:45",
+    "a las 06:30 si no llueve: poner música de Soda Stereo",
+    "a las 07:00 si hace menos de 10 grados: poner un temporizador de 10 minutos",
+    "a las 14:00 si hace más de 30 grados: activar no molestar",
   )
 
   /**

@@ -2,7 +2,11 @@ package com.example.phone.weather
 
 import com.example.phone.PhoneCommand
 import com.example.phone.PlatformAction
+import com.example.phone.PercentRange
+import com.example.phone.WeatherConditions
 import com.example.phone.WeatherIntentParser
+import com.example.phone.WeatherReadings
+import java.math.BigDecimal
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -15,8 +19,12 @@ import kotlinx.coroutines.sync.withLock
 /** Answer for the floating surface. [answered] is false when the SMN could not be consulted. */
 data class SmnWeatherReply(val text: String, val answered: Boolean)
 
-/** Boundary used by the view model; tests replace it. */
-fun interface WeatherQueries {
+/**
+ * Boundary used by the view model; tests replace it. The structured readings of [WeatherReadings] (numbers, not the
+ * reply text) are what Instinct's weather conditions use; a replacement that does not provide them reads as
+ * unavailable, so a condition never runs on made-up data.
+ */
+fun interface WeatherQueries : WeatherReadings {
   suspend fun answer(command: PhoneCommand.Platform): SmnWeatherReply
 }
 
@@ -79,6 +87,46 @@ class SmnWeatherService(
     if (now - forecast.updatedAtMillis > MAX_FORECAST_AGE_MILLIS)
       return backupRain() ?: SmnWeatherReply(SmnWeatherText.staleForecast(location), answered = false)
     return SmnWeatherReply(SmnWeatherText.rain(location, window(forecast.periods, now), now), answered = true)
+  }
+
+  /**
+   * The current temperature as a number: the SMN observation when it is fresh, else the fallback when fresh, else
+   * null. Never the feels-like and never a forecast value.
+   */
+  override suspend fun currentTemperature(): BigDecimal? {
+    val rows = try { cached("tiepre", ::observationExpiry) { openData.observations() } } catch (_: SmnException) { null }
+    val now = clock()
+    val wanted = fold(stationName)
+    rows?.firstOrNull { fold(it.stationName) == wanted }
+      ?.takeIf { it.observedAtMillis <= now + FUTURE_TOLERANCE_MILLIS && now - it.observedAtMillis <= MAX_OBSERVATION_AGE_MILLIS }
+      ?.let { return it.temperatureCelsius }
+    return backup()?.takeIf { now - it.observedAtMillis <= MAX_OBSERVATION_AGE_MILLIS }?.temperatureCelsius
+  }
+
+  /**
+   * Precipitation probability over the same six-hour window as [rain], as the highest published block. A fresh SMN
+   * forecast with a missing probability is unavailable (null), never zero; the fallback is used only when the SMN
+   * does not answer, as for the reply.
+   */
+  override suspend fun rainChance(): PercentRange? {
+    val forecast = try { cached("forecast:$locationId", { it + FORECAST_TTL_MILLIS }) { forecasts.forecast(locationId) } }
+      catch (_: SmnException) { null }
+    val now = clock()
+    if (forecast != null && now - forecast.updatedAtMillis <= MAX_FORECAST_AGE_MILLIS) {
+      val blocks = window(forecast.periods, now)
+      val ranges = blocks.map { when (val p = it.probability) {
+        is com.example.phone.weather.RainProbability.Range -> p.min to p.max
+        is com.example.phone.weather.RainProbability.Exact -> p.value to p.value
+        com.example.phone.weather.RainProbability.Missing -> return null
+      } }
+      if (ranges.isEmpty()) return null
+      return PercentRange(ranges.maxOf { it.first }, ranges.maxOf { it.second })
+    }
+    val weather = backup() ?: return null
+    val upcoming = weather.rain.filter { it.first + 3_600_000L > now && it.first < now + WeatherConditions.RAIN_WINDOW_MILLIS }
+    if (upcoming.isEmpty()) return null
+    val highest = upcoming.maxOf { it.second }.coerceIn(0, 100)
+    return PercentRange(highest, highest)
   }
 
   private suspend fun backup(): FallbackWeather? {
