@@ -166,6 +166,8 @@ data class ScheduledOrder(
   val state: State = State.PENDING,
   /** The short id of Instinct's message (never its text), so a follow-up in the log names it even after a restart. */
   val message: String = "",
+  /** WhatsApp or the signed mailbox (1.16.0): the same cap and the same log rules apply when it fires. */
+  val source: ProposalSource = ProposalSource.WHATSAPP,
 ) {
   enum class State { PENDING, CONSUMED }
   val summary: String get() = "$label: $inner"
@@ -245,6 +247,7 @@ class InstinctScheduleStore(private val file: File, private val clock: () -> Lon
         .put("label", o.label).put("createdAt", o.createdAt).put("token", o.token).put("state", o.state.name)
         .apply { o.condition?.let { put("condition", conditionCode(it)) } }
         .apply { if (o.message.isNotEmpty()) put("message", o.message) }
+        .apply { if (o.source != ProposalSource.WHATSAPP) put("source", o.source.name) }
     }).toString()
 
     fun decode(text: String): List<ScheduledOrder> {
@@ -255,7 +258,8 @@ class InstinctScheduleStore(private val file: File, private val clock: () -> Lon
         ScheduledOrder(o.getString("id"), o.getString("order"), o.getString("inner"), o.getLong("fireAt"), o.getString("fingerprint"),
           o.optString("condition").takeIf { it.isNotEmpty() }?.let(::condition), o.getString("label"), o.getLong("createdAt"),
           o.getString("token"), ScheduledOrder.State.valueOf(o.getString("state")),
-          InstinctLogEvents.messageId(o.optString("message")))
+          InstinctLogEvents.messageId(o.optString("message")),
+          if (o.optString("source") == ProposalSource.BUZON.name) ProposalSource.BUZON else ProposalSource.WHATSAPP)
       }
     }
 

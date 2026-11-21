@@ -1,0 +1,404 @@
+package com.example.phone
+
+import java.io.File
+import java.io.FileOutputStream
+import java.util.TimeZone
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * «Autonomía por acción» (1.16.0): what Instinct may do alone, category by category. The pure part: categories,
+ * levels, quiet hours, the policy decision, how it combines with the existing blockers and the trust ledger that
+ * lowers a category after repeated undos. Nothing here touches Android. See docs/INSTINCT-PROPUESTAS.md,
+ * «Autonomía por acción».
+ */
+enum class InstinctCategory(val label: String) {
+  VOLUMEN("volumen"),
+  LINTERNA("linterna"),
+  SILENCIO("silencio y No molestar"),
+  MUSICA("música"),
+  RELOJ("alarmas y temporizadores"),
+  APPS("abrir apps y búsquedas"),
+  CALENDARIO("calendario"),
+  RUTINAS("rutinas"),
+  /** «#insto avisarme …» (fase 3): a local notice for the person, only from the signed mailbox. */
+  AVISOS("avisos para vos"),
+  ;
+
+  companion object {
+    private val silence = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
+      PlatformAction.DND_ON, PlatformAction.DND_OFF)
+
+    /** The category of one allowed command; null for anything outside the allowlist. A deferred order uses its inner one. */
+    fun of(command: PhoneCommand): InstinctCategory? = when (command) {
+      is PhoneCommand.Volume -> VOLUMEN
+      is PhoneCommand.Torch -> LINTERNA
+      is PhoneCommand.TemporaryMode -> if (command.kind == ModeKind.SILENT || command.kind == ModeKind.DND) SILENCIO else null
+      is PhoneCommand.Media -> MUSICA
+      is PhoneCommand.Alarm, is PhoneCommand.Timer, is PhoneCommand.ClockList -> RELOJ
+      is PhoneCommand.OpenApp, is PhoneCommand.MusicSearch, is PhoneCommand.SpotifySearch, is PhoneCommand.YouTubeSearch -> APPS
+      is PhoneCommand.CalendarEvent -> CALENDARIO
+      is PhoneCommand.Platform -> when {
+        command.action == PlatformAction.ROUTINE_RUN -> RUTINAS
+        command.action in silence -> SILENCIO
+        else -> null
+      }
+      else -> null
+    }
+
+    /** Silence, vibrate or Do not disturb turned on: the phone gets quieter. Turning them off does not. */
+    fun lowersNoise(command: PhoneCommand): Boolean = when (command) {
+      is PhoneCommand.Platform -> command.action == PlatformAction.SILENT_ON || command.action == PlatformAction.VIBRATE_ON ||
+        command.action == PlatformAction.DND_ON
+      is PhoneCommand.TemporaryMode -> command.kind == ModeKind.SILENT || command.kind == ModeKind.DND
+      else -> false
+    }
+  }
+}
+
+/** How much Instinct may do alone in a category. Declared from the loosest to the strictest. */
+enum class InstinctAutonomy(val label: String) {
+  /** Runs and tells afterwards, with «Deshacer» when it can be undone. */
+  SOLO("Solo"),
+  /** Waits as «Instinct propone: …». */
+  CONFIRMAR("Confirmar"),
+  /** Refused: «#insto-error … → la persona no permite esta acción». */
+  NUNCA("Nunca"),
+}
+
+/** A daily range in minutes from midnight, [start] included, [end] excluded. Crosses midnight when start > end. */
+data class QuietHours(val start: Int, val end: Int) {
+  init { require(start in 0 until DAY && end in 0 until DAY) }
+
+  fun contains(minuteOfDay: Int): Boolean = when {
+    start == end -> false
+    start < end -> minuteOfDay in start until end
+    else -> minuteOfDay >= start || minuteOfDay < end
+  }
+
+  val label: String get() = "de ${clock(start)} a ${clock(end)}"
+
+  companion object {
+    const val DAY = 24 * 60
+    fun clock(minute: Int): String = "%02d:%02d".format(minute / 60, minute % 60)
+    private val HHMM = Regex("^([01]?\\d|2[0-3]):([0-5]\\d)$")
+    /** «07:00» → 420; null when it is not a 24-hour time. */
+    fun parse(text: String): Int? = HHMM.matchEntire(text.trim())?.let { it.groupValues[1].toInt() * 60 + it.groupValues[2].toInt() }
+  }
+}
+
+/** What the policy says about one order, before the existing blockers are combined with it. */
+sealed interface AutonomyDecision {
+  data object Run : AutonomyDecision
+  data class Confirm(val reason: String) : AutonomyDecision
+  data class Refuse(val reason: String) : AutonomyDecision
+}
+
+/**
+ * The person's policy. A missing category is [InstinctAutonomy.SOLO], the behavior before 1.16.0. [quiet] is off
+ * when null. [adjusted] is when a category was lowered automatically (wall-clock millis), for «Ajustada
+ * automáticamente el DD/MM».
+ */
+data class InstinctAutonomyPolicy(
+  val levels: Map<InstinctCategory, InstinctAutonomy> = emptyMap(),
+  val quiet: QuietHours? = null,
+  /** «Permitir que silencie el teléfono durante las horas de silencio». */
+  val silenceInQuiet: Boolean = true,
+  val adjusted: Map<InstinctCategory, Long> = emptyMap(),
+) {
+  fun level(category: InstinctCategory): InstinctAutonomy = levels[category] ?: InstinctAutonomy.SOLO
+
+  /** [category] at [level]. Choosing a level by hand clears the «ajustada automáticamente» mark. */
+  fun with(category: InstinctCategory, level: InstinctAutonomy, adjustedAt: Long? = null): InstinctAutonomyPolicy = copy(
+    levels = if (level == InstinctAutonomy.SOLO) levels - category else levels + (category to level),
+    adjusted = if (adjustedAt != null) adjusted + (category to adjustedAt) else adjusted - category)
+
+  /**
+   * The decision for one order whose [steps] are given (a routine expanded, otherwise the command itself). A routine
+   * uses [InstinctCategory.RUTINAS] and also the strictest of its steps. Within [quiet] hours every [SOLO] becomes
+   * [CONFIRMAR], except silencing the phone when [silenceInQuiet] allows it. [minuteOfDay] is when it runs.
+   */
+  fun decide(steps: List<PhoneCommand>, routine: Boolean, minuteOfDay: Int): AutonomyDecision {
+    val categories = (if (routine) listOf(InstinctCategory.RUTINAS) else emptyList()) + steps.mapNotNull(InstinctCategory::of)
+    if (categories.isEmpty()) return AutonomyDecision.Run
+    val strictest = categories.maxBy { level(it).ordinal }
+    return when (level(strictest)) {
+      InstinctAutonomy.NUNCA -> AutonomyDecision.Refuse(REFUSED)
+      InstinctAutonomy.CONFIRMAR -> AutonomyDecision.Confirm("la persona pide confirmación para ${strictest.label}")
+      InstinctAutonomy.SOLO -> {
+        val exempt = silenceInQuiet && !routine && steps.isNotEmpty() && steps.all(InstinctCategory::lowersNoise)
+        if (quiet?.contains(minuteOfDay) == true && !exempt) AutonomyDecision.Confirm(QUIET) else AutonomyDecision.Run
+      }
+    }
+  }
+
+  /** Refused right away, whatever the hour: some category of the order is [InstinctAutonomy.NUNCA]. */
+  fun refuses(steps: List<PhoneCommand>, routine: Boolean): Boolean =
+    ((if (routine) listOf(InstinctCategory.RUTINAS) else emptyList()) + steps.mapNotNull(InstinctCategory::of))
+      .any { level(it) == InstinctAutonomy.NUNCA }
+
+  companion object {
+    const val REFUSED = "la persona no permite esta acción"
+    const val QUIET = "horas de silencio"
+
+    /** Migration from 1.15.0: «Pedirme confirmación antes de ejecutar» on means every category starts at Confirmar. */
+    fun migrated(askFirst: Boolean): InstinctAutonomyPolicy =
+      if (!askFirst) InstinctAutonomyPolicy()
+      else InstinctAutonomyPolicy(InstinctCategory.entries.associateWith { InstinctAutonomy.CONFIRMAR })
+
+    fun encode(policy: InstinctAutonomyPolicy): String = JSONObject()
+      .put("levels", JSONObject().apply { policy.levels.toSortedMap().forEach { (k, v) -> put(k.name, v.name) } })
+      .put("silenceInQuiet", policy.silenceInQuiet)
+      .put("adjusted", JSONObject().apply { policy.adjusted.toSortedMap().forEach { (k, v) -> put(k.name, v) } })
+      .apply { policy.quiet?.let { put("quiet", JSONObject().put("start", it.start).put("end", it.end)) } }
+      .toString()
+
+    /** Unknown categories or levels are ignored: a newer file never loosens anything here. */
+    fun decode(text: String): InstinctAutonomyPolicy {
+      require(text.length <= 16_384)
+      val o = JSONObject(text)
+      val levels = o.optJSONObject("levels")?.let { l ->
+        l.keys().asSequence().mapNotNull { key ->
+          val category = InstinctCategory.entries.firstOrNull { it.name == key } ?: return@mapNotNull null
+          val level = InstinctAutonomy.entries.firstOrNull { it.name == l.optString(key) } ?: return@mapNotNull null
+          category to level
+        }.toMap()
+      }.orEmpty()
+      val adjusted = o.optJSONObject("adjusted")?.let { a ->
+        a.keys().asSequence().mapNotNull { key ->
+          InstinctCategory.entries.firstOrNull { it.name == key }?.let { it to a.optLong(key) }
+        }.filter { it.second > 0 }.toMap()
+      }.orEmpty()
+      val quiet = o.optJSONObject("quiet")?.let { q -> runCatching { QuietHours(q.getInt("start"), q.getInt("end")) }.getOrNull() }
+      return InstinctAutonomyPolicy(levels, quiet, o.optBoolean("silenceInQuiet", true), adjusted)
+    }
+  }
+}
+
+/** «Las órdenes por WhatsApp (sin firma) como máximo en»: a cap that only ever makes an unsigned order stricter. */
+object InstinctSourceCap {
+  const val REASON = "las órdenes por WhatsApp, sin firma, esperan confirmación"
+
+  fun apply(decision: AutonomyDecision, source: ProposalSource, whatsappCap: InstinctAutonomy): AutonomyDecision =
+    if (source == ProposalSource.WHATSAPP && whatsappCap != InstinctAutonomy.SOLO && decision == AutonomyDecision.Run)
+      AutonomyDecision.Confirm(REASON) else decision
+}
+
+/**
+ * How the policy combines with the blockers that already existed (phone locked, another app without Accessibility,
+ * a deferred order that fired late, a routine that changed). Structural on purpose: the existing blocker is decided
+ * first and the policy after, so the policy can only make an order stricter, never looser. The anti-loop budget is
+ * acquired last, only for an order that would really run.
+ */
+object InstinctAutonomyGate {
+  sealed interface Gate {
+    data object Run : Gate
+    data class Wait(val reason: String) : Gate
+    data class Refuse(val reason: String) : Gate
+  }
+
+  const val BUDGET = "Instinct pidió muchas acciones seguidas; esta espera tu confirmación."
+
+  fun combine(structural: String?, policy: AutonomyDecision, acquire: () -> Boolean): Gate {
+    // «Nunca» is stricter than waiting: it wins over everything.
+    if (policy is AutonomyDecision.Refuse) return Gate.Refuse(policy.reason)
+    if (structural != null) return Gate.Wait(structural)
+    if (policy is AutonomyDecision.Confirm) return Gate.Wait(policy.reason)
+    return if (acquire()) Gate.Run else Gate.Wait(BUDGET)
+  }
+}
+
+/** What the trust ledger counts. Only counters: never an order or a text. */
+enum class TrustEvent(val code: String) {
+  EJECUTADA("ejecutada"), DESHECHA("deshecha"), CONFIRMADA("confirmada"), DESCARTADA("descartada"), VENCIDA("vencida"),
+}
+
+/**
+ * «Ajuste adaptativo»: counters per category and day, at most [RETENTION_DAYS] days. Lowers a category that keeps
+ * being undone and suggests (never applies) raising one the person keeps confirming. The notification actions it
+ * issues carry a random single-use token, stored here so it survives a process restart. [clock] is wall-clock
+ * millis; days are local days in [zone].
+ */
+class InstinctTrustLedger(private val clock: () -> Long, private val zone: () -> TimeZone = TimeZone::getDefault) {
+  enum class Action { RESTORE, SUGGEST }
+  data class Pending(val action: Action, val category: InstinctCategory, val issuedAt: Long)
+  data class Lowering(val undone: Int, val executed: Int)
+
+  /** day → category → counts by [TrustEvent.ordinal]. */
+  private val days = java.util.TreeMap<Long, MutableMap<InstinctCategory, IntArray>>()
+  private val snoozed = HashMap<InstinctCategory, Long>()
+  private val suggested = HashMap<InstinctCategory, Long>()
+  private val tokens = LinkedHashMap<String, Pending>()
+
+  private fun today(): Long = day(clock())
+  private fun day(millis: Long): Long = Math.floorDiv(millis + zone().getOffset(millis), DAY_MILLIS)
+
+  @Synchronized fun record(category: InstinctCategory, event: TrustEvent) {
+    prune()
+    days.getOrPut(today()) { HashMap() }.getOrPut(category) { IntArray(TrustEvent.entries.size) }[event.ordinal]++
+  }
+
+  /** [event]s of [category] in the last [window] days, today included. */
+  @Synchronized fun count(category: InstinctCategory, event: TrustEvent, window: Int): Int {
+    val from = today() - window + 1
+    return days.tailMap(from, true).values.sumOf { it[category]?.get(event.ordinal) ?: 0 }
+  }
+
+  /**
+   * A [InstinctAutonomy.SOLO] category to lower: in the last 7 days 3 or more undos, or at least 30 % undone with 5
+   * or more executed. Null otherwise, and never for another level.
+   */
+  @Synchronized fun lowering(category: InstinctCategory, level: InstinctAutonomy): Lowering? {
+    if (level != InstinctAutonomy.SOLO) return null
+    val undone = count(category, TrustEvent.DESHECHA, LOWER_WINDOW_DAYS)
+    val executed = count(category, TrustEvent.EJECUTADA, LOWER_WINDOW_DAYS)
+    val lower = undone >= LOWER_UNDONE || (executed >= LOWER_MIN_EXECUTED && undone * 100 >= LOWER_PERCENT * executed)
+    return if (lower) Lowering(undone, executed) else null
+  }
+
+  /**
+   * A [InstinctAutonomy.CONFIRMAR] category the person keeps confirming: 8 or more confirmations and no discards in
+   * 14 days, not silenced by a «No» and not suggested in the last week. Raising is only ever suggested.
+   */
+  @Synchronized fun suggestsRaise(category: InstinctCategory, level: InstinctAutonomy): Boolean {
+    if (level != InstinctAutonomy.CONFIRMAR) return false
+    val now = clock()
+    if ((snoozed[category] ?: 0L) > now) return false
+    if (suggested[category]?.let { now - it in 0 until SUGGESTION_PENDING_MILLIS } == true) return false
+    return count(category, TrustEvent.CONFIRMADA, RAISE_WINDOW_DAYS) >= RAISE_CONFIRMED &&
+      count(category, TrustEvent.DESCARTADA, RAISE_WINDOW_DAYS) == 0
+  }
+
+  @Synchronized fun markSuggested(category: InstinctCategory) { suggested[category] = clock() }
+
+  /** «No» to a suggestion: silenced for 30 days. */
+  @Synchronized fun snooze(category: InstinctCategory) { snoozed[category] = clock() + SNOOZE_MILLIS; suggested.remove(category) }
+
+  /** Back to Solo, from the notification or Settings: the category starts counting again. */
+  @Synchronized fun reset(category: InstinctCategory) {
+    days.values.forEach { it.remove(category) }
+    days.entries.removeAll { it.value.isEmpty() }
+    suggested.remove(category)
+  }
+
+  /** A random token for one notification action; single use, kept at most [TOKEN_TTL_MILLIS]. */
+  @Synchronized fun issue(action: Action, category: InstinctCategory): String {
+    prune()
+    val token = java.util.UUID.randomUUID().toString()
+    tokens[token] = Pending(action, category, clock())
+    while (tokens.size > MAX_TOKENS) tokens.remove(tokens.keys.first())
+    return token
+  }
+
+  /** The action of [token], once: a second use, an unknown or an expired token gives null. */
+  @Synchronized fun redeem(token: String?, action: Action): Pending? {
+    prune()
+    val pending = tokens[token ?: return null] ?: return null
+    if (pending.action != action) return null
+    tokens.remove(token)
+    return pending
+  }
+
+  private fun prune() {
+    val now = clock()
+    val oldest = day(now) - RETENTION_DAYS + 1
+    days.headMap(oldest, false).clear()
+    // A clock set back leaves nothing in the future.
+    days.tailMap(day(now), false).clear()
+    tokens.entries.removeAll { now - it.value.issuedAt !in 0..TOKEN_TTL_MILLIS }
+    snoozed.entries.removeAll { it.value <= now }
+  }
+
+  @Synchronized fun encode(): String {
+    prune()
+    return JSONObject()
+      .put("days", JSONObject().apply {
+        days.forEach { (day, byCategory) ->
+          put(day.toString(), JSONObject().apply { byCategory.toSortedMap().forEach { (c, counts) -> put(c.name, JSONArray(counts.toList())) } })
+        }
+      })
+      .put("snoozed", JSONObject().apply { snoozed.toSortedMap().forEach { (c, v) -> put(c.name, v) } })
+      .put("suggested", JSONObject().apply { suggested.toSortedMap().forEach { (c, v) -> put(c.name, v) } })
+      .put("tokens", JSONObject().apply { tokens.forEach { (t, p) -> put(t, JSONObject().put("action", p.action.name).put("category", p.category.name).put("at", p.issuedAt)) } })
+      .toString()
+  }
+
+  /** Replaces the state with [text]; anything malformed is skipped. */
+  @Synchronized fun load(text: String) {
+    require(text.length <= 262_144)
+    days.clear(); snoozed.clear(); suggested.clear(); tokens.clear()
+    val o = JSONObject(text)
+    fun category(key: String) = InstinctCategory.entries.firstOrNull { it.name == key }
+    o.optJSONObject("days")?.let { d ->
+      d.keys().forEach { key ->
+        val day = key.toLongOrNull() ?: return@forEach
+        val byCategory = d.optJSONObject(key) ?: return@forEach
+        val map = HashMap<InstinctCategory, IntArray>()
+        byCategory.keys().forEach { c ->
+          val cat = category(c) ?: return@forEach
+          val array = byCategory.optJSONArray(c) ?: return@forEach
+          map[cat] = IntArray(TrustEvent.entries.size) { i -> array.optInt(i, 0).coerceIn(0, 100_000) }
+        }
+        if (map.isNotEmpty()) days[day] = map
+      }
+    }
+    o.optJSONObject("snoozed")?.let { s -> s.keys().forEach { k -> category(k)?.let { snoozed[it] = s.optLong(k) } } }
+    o.optJSONObject("suggested")?.let { s -> s.keys().forEach { k -> category(k)?.let { suggested[it] = s.optLong(k) } } }
+    o.optJSONObject("tokens")?.let { t ->
+      t.keys().forEach { k ->
+        val p = t.optJSONObject(k) ?: return@forEach
+        val action = Action.entries.firstOrNull { it.name == p.optString("action") } ?: return@forEach
+        val cat = category(p.optString("category")) ?: return@forEach
+        tokens[k] = Pending(action, cat, p.optLong("at"))
+      }
+    }
+    prune()
+  }
+
+  companion object {
+    const val DAY_MILLIS = 24 * 60 * 60_000L
+    const val RETENTION_DAYS = 30
+    const val LOWER_WINDOW_DAYS = 7
+    const val LOWER_UNDONE = 3
+    const val LOWER_MIN_EXECUTED = 5
+    const val LOWER_PERCENT = 30
+    const val RAISE_WINDOW_DAYS = 14
+    const val RAISE_CONFIRMED = 8
+    const val SNOOZE_MILLIS = 30 * DAY_MILLIS
+    const val SUGGESTION_PENDING_MILLIS = 7 * DAY_MILLIS
+    const val TOKEN_TTL_MILLIS = 7 * DAY_MILLIS
+    private const val MAX_TOKENS = 16
+  }
+}
+
+/** The catalog section «Qué hace Insto solo y qué espera confirmación», from the policy in force. */
+object InstinctAutonomyCatalog {
+  fun text(policy: InstinctAutonomyPolicy): String = buildString {
+    appendLine("Qué hace Insto solo y qué espera confirmación (lo eligió la persona; puede cambiar):")
+    for (level in InstinctAutonomy.entries) {
+      val names = InstinctCategory.entries.filter { policy.level(it) == level }.map { it.label }
+      if (names.isEmpty()) continue
+      appendLine(when (level) {
+        InstinctAutonomy.SOLO -> "- Lo hace solo: "
+        InstinctAutonomy.CONFIRMAR -> "- Espera confirmación (${AckKind.WAITING.code}): "
+        InstinctAutonomy.NUNCA -> "- Lo rechaza siempre (${AckKind.ERROR.code}): "
+      } + names.joinToString(", ") + ".")
+    }
+    appendLine("- Una rutina espera confirmación si las rutinas o alguno de sus pasos la esperan. Una orden programada se evalúa cuando se dispara. Un evento de calendario siempre muestra la vista previa antes de guardarse.")
+    val quiet = policy.quiet
+    if (quiet != null) appendLine("- Horas de silencio, ${quiet.label}: en ese rango todo lo que haría solo espera confirmación" +
+      (if (policy.silenceInQuiet) ", salvo silenciar el teléfono, ponerlo en vibración o activar No molestar." else "."))
+    append("- Además siempre esperan confirmación: con el teléfono bloqueado, lo que abre otra app sin la Accesibilidad de Insto, " +
+      "más de 6 órdenes en 10 minutos y una orden programada que se dispara con más de ${InstinctDeferral.LATE_MILLIS / 60_000} minutos de atraso.")
+  }
+}
+
+/** One file written atomically, like [ConfiguredRoutineStore]: a temporary file, synced, then renamed. */
+internal fun writeAtomically(file: File, text: String, prefix: String) {
+  file.parentFile?.mkdirs()
+  val temporary = File.createTempFile(prefix, ".tmp", file.absoluteFile.parentFile)
+  try {
+    FileOutputStream(temporary).use { it.write(text.toByteArray(Charsets.UTF_8)); it.fd.sync() }
+    check(temporary.renameTo(file)) { "No se pudo guardar ${file.name}" }
+  } finally { temporary.delete() }
+}

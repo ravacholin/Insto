@@ -93,6 +93,8 @@
         </receiver>
         <receiver android:name=".phone.InstinctProposalReceiver" android:exported="false" />
         <service android:name=".phone.InstinctLogJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <service android:name=".phone.InstinctStateJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <service android:name=".phone.InstinctMailboxJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <receiver android:name=".phone.InstinctLogBootReceiver" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
         </receiver>

@@ -11,9 +11,12 @@ import android.service.notification.StatusBarNotification
  * to acknowledge the orders ([InstinctReplyHandle]).
  */
 class NotificationAccessService : NotificationListenerService() {
-  override fun onListenerConnected() { connected=this }
-  override fun onListenerDisconnected() { if(connected===this) connected=null }
-  override fun onDestroy() { if(connected===this) connected=null;super.onDestroy() }
+  /** The phone's state for Instinct (1.16.0): system changes signal a publication; nothing is read from notifications. */
+  private val state by lazy { InstinctStateWatcher(applicationContext) }
+
+  override fun onListenerConnected() { connected=this; runCatching { state.start() } }
+  override fun onListenerDisconnected() { if(connected===this) connected=null; runCatching { state.stop() } }
+  override fun onDestroy() { if(connected===this) connected=null; runCatching { state.stop() }; super.onDestroy() }
 
   override fun onNotificationPosted(sbn: StatusBarNotification?) {
     // Checked before touching the notification: with the switch off nothing of it is read.

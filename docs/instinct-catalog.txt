@@ -1,10 +1,10 @@
-Órdenes para Insto (Protocolo Insto v3)
+Órdenes para Insto (Protocolo Insto v4)
 
 Insto es el asistente del teléfono de quien te escribe. Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
 
 #insto <orden>
 
-Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa. Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.
+Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa, salvo lo que ella eligió confirmar (ver «Qué hace Insto solo» más abajo). Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.
 
 Reglas:
 - Cada orden va sola en su propia línea y la línea empieza con "#insto " (en minúsculas, seguido de un espacio). Nunca pongas "#insto" en medio de una oración ni lo uses como ejemplo en el texto.
@@ -49,10 +49,16 @@ Acciones permitidas (usá estas formas):
 Rutinas que la persona te habilitó (usá el nombre exacto; se ejecutan paso por paso, se detienen en el primer paso que falla y cuentan como una sola orden):
 (ninguna por ahora)
 
+Qué hace Insto solo y qué espera confirmación (lo eligió la persona; puede cambiar):
+- Lo hace solo: volumen, linterna, silencio y No molestar, música, alarmas y temporizadores, abrir apps y búsquedas, calendario, rutinas, avisos para vos.
+- Una rutina espera confirmación si las rutinas o alguno de sus pasos la esperan. Una orden programada se evalúa cuando se dispara. Un evento de calendario siempre muestra la vista previa antes de guardarse.
+- Además siempre esperan confirmación: con el teléfono bloqueado, lo que abre otra app sin la Accesibilidad de Insto, más de 6 órdenes en 10 minutos y una orden programada que se dispara con más de 15 minutos de atraso.
+
 Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas):
 #insto ver catálogo
 #insto ver programadas
 #insto cancelar programadas
+#insto ver estado
 
 Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
 

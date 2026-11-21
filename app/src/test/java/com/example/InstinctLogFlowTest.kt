@@ -60,7 +60,7 @@ class InstinctLogFlowTest {
 
   @After fun tearDown() {
     InstinctProposalSettings(app).setChannel(InstinctAckChannel.WHATSAPP)
-    InstinctProposalSettings(app).setAsksFirst(false)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.SOLO)
     InstinctProposalSettings(app).setReplyMode(InstinctReplyMode.NEVER)
     InstinctProposalSettings(app).setEnabled(false)
     InstinctLogSettings(app).clear()
@@ -111,7 +111,7 @@ class InstinctLogFlowTest {
     assertEquals("poner el volumen al 30 por ciento", events[0].order)
     assertEquals("esa acción no está permitida para Instinct.", events[1].detail)
     assertTrue(events.all { it.message.matches(Regex("[0-9a-f]{12}")) && it.message == events[0].message })
-    assertTrue(events.all { it.protocol == "Protocolo Insto v3" })
+    assertTrue(events.all { it.protocol == "Protocolo Insto v4" })
     assertTrue(scheduled > 0)
     assertFalse(InstinctProposalCenter.sendCatalog(app))
     assertTrue(sent.isEmpty())
@@ -133,7 +133,7 @@ class InstinctLogFlowTest {
 
   @Test fun `a waiting order is closed in the log when it lapses`() {
     InstinctProposalSettings(app).setChannel(InstinctAckChannel.BITACORA)
-    InstinctProposalSettings(app).setAsksFirst(true)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.CONFIRMAR)
     post("#insto prender la linterna")
     assertEquals(listOf("espera"), pending().map { it.kind })
     fakeNow += ProposalBook.TTL_MILLIS - 1_000L

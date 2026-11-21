@@ -1,10 +1,10 @@
-Órdenes para Insto (Protocolo Insto v3)
+Órdenes para Insto (Protocolo Insto v4)
 
 Insto es el asistente del teléfono de quien te escribe. Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
 
 › #insto <orden>
 
-Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa. Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.
+Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa, salvo lo que ella eligió confirmar (ver «Qué hace Insto solo» más abajo). Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.
 
 En este mensaje cada ejemplo va precedido por «›» para que Insto no lo ejecute. Vos escribí la línea sin ese signo, empezando con "#insto ".
 
@@ -51,10 +51,25 @@ Acciones permitidas (usá estas formas):
 Rutinas que la persona te habilitó (usá el nombre exacto; se ejecutan paso por paso, se detienen en el primer paso que falla y cuentan como una sola orden):
 (ninguna por ahora)
 
+Qué hace Insto solo y qué espera confirmación (lo eligió la persona; puede cambiar):
+- Lo hace solo: volumen, linterna, silencio y No molestar, música, alarmas y temporizadores, abrir apps y búsquedas, calendario, rutinas, avisos para vos.
+- Una rutina espera confirmación si las rutinas o alguno de sus pasos la esperan. Una orden programada se evalúa cuando se dispara. Un evento de calendario siempre muestra la vista previa antes de guardarse.
+- Además siempre esperan confirmación: con el teléfono bloqueado, lo que abre otra app sin la Accesibilidad de Insto, más de 6 órdenes en 10 minutos y una orden programada que se dispara con más de 15 minutos de atraso.
+
+Estado del teléfono (solo lectura, si la persona configuró la bitácora):
+Insto publica en la bitácora un evento de tipo «estado» cuando algo cambia (agrupado cada 30 segundos), cada 30 minutos aunque no cambie nada y después de cada orden tuya que se ejecutó. Para leer el último:
+GET <URL>?token=<token>&action=estado
+(URL y token: pedíselos a Pablo)
+La respuesta es {ok, estado} con estado null o {recibido, evento_id, ocurrido, tipo, orden, detalle, mensaje_id, protocolo}. ocurrido dice cuándo se tomó. detalle es una línea «clave=valor; clave=valor» con estos campos:
+sonido: normal, vibración o silencio. dnd: sí o no (No molestar). alarma: la hora de la próxima alarma, o ninguna. evento: «ahora <título> HH:MM–HH:MM», «próximo <título> HH:MM–HH:MM» (en las próximas 12 horas) o libre. audio: no, o sí con el tipo (auriculares o Bluetooth). bloqueado: sí o no. modo_temporal: no, o cuál y hasta qué hora. programadas: ninguna, o cuántas órdenes tuyas hay programadas y la próxima hora.
+Un campo puede decir «sin datos» o «sin permiso». El estado es una foto: puede tener hasta 30 segundos de demora.
+Antes de una orden que dependa del estado (silencio, No molestar, alarmas, calendario), mirá el último estado; si tiene más de 30 minutos, pedí la consulta «ver estado» y esperá a que aparezca el nuevo.
+
 Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas):
 › #insto ver catálogo
 › #insto ver programadas
 › #insto cancelar programadas
+› #insto ver estado
 
 Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
 
@@ -69,6 +84,7 @@ espera: quedó esperando que la persona la confirme.
 error: no se ejecutó (no se entendió, no está permitida o falló).
 incierto: pudo haberse hecho; Insto no la repite.
 programada: quedó programada.
+estado: el estado del teléfono (ver «Estado del teléfono»); no es el resultado de una orden.
 Después de una espera o de una orden programada puede llegar otro evento de la misma orden: ok, error, descartada o vencida, aunque haya pasado mucho tiempo. Si la persona deshace lo que hiciste, llega deshecho.
 orden es tu orden (recortada a 80 caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).
 Los eventos son informativos: no los respondas con nuevas órdenes, salvo una sola orden corregida después de un error. Nunca repitas una orden después de incierto ni de espera. Antes de repetir o corregir una orden, consultá la bitácora.

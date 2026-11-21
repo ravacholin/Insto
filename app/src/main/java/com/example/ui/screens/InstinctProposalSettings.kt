@@ -40,6 +40,12 @@ import com.example.phone.InstinctLog
 import com.example.phone.InstinctLogConfig
 import com.example.phone.InstinctLogSettings
 import com.example.phone.InstinctReplyMode
+import com.example.phone.InstinctAutonomy
+import com.example.phone.InstinctAutonomySettings
+import com.example.phone.InstinctCategory
+import com.example.phone.QuietHours
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.FilterChip
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,7 +71,6 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
   var revision by remember { mutableIntStateOf(0) }
   var explain by remember { mutableStateOf(false) }
   val enabled = remember(revision) { settings.isEnabled() }
-  val asksFirst = remember(revision) { settings.asksFirst() }
   val replyMode = remember(revision) { settings.replyMode() }
   val channel = remember(revision) { settings.channel() }
   val listenerEnabled = remember(revision) {
@@ -88,8 +93,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
           modifier = Modifier.testTag("instinct_proposals_listener")) { Text("Habilitar acceso en Ajustes") }
       }
-      SettingsSwitch("Pedirme confirmación antes de ejecutar", asksFirst, { settings.setAsksFirst(it); revision++ },
-        "Apagado: Insto ejecuta y avisa después. Encendido: cada orden espera tu toque o un «dale».")
+      InstinctAutonomySection(revision) { revision++ }
       Text("Responderle a Instinct", style = MaterialTheme.typography.bodyLarge)
       SettingsDescription("Insto contesta en el mismo chat, con la acción «Responder» de la notificación de WhatsApp, " +
         "una línea por orden (#insto-ok, #insto-espera, #insto-error, #insto-incierto). No abre WhatsApp. " +
@@ -102,6 +106,8 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       SettingsChoices(InstinctAckChannel.entries, channel, { settings.setChannel(it); revision++ }, label = ::channelLabel,
         itemModifier = { Modifier.testTag("instinct_channel_${it.name.lowercase()}") })
       if (channel.usesLog) InstinctLogConfiguration(revision) { revision++ }
+      InstinctStateSection(revision) { revision++ }
+      InstinctMailboxSection(replyMode, revision) { revision++ }
       InstinctScheduledList(revision) { revision++ }
       InstinctRoutineSwitches(revision) { revision++ }
       InstinctCatalogActions(replyMode, channel, revision) { revision++ }
@@ -128,6 +134,67 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         }, modifier = Modifier.testTag("instinct_proposals_accept")) { Text("Activar") }
       },
     )
+  }
+}
+
+internal fun autonomyLabel(level: InstinctAutonomy): String = when (level) {
+  InstinctAutonomy.SOLO -> "Solo"
+  InstinctAutonomy.CONFIRMAR -> "Confirmar"
+  InstinctAutonomy.NUNCA -> "Nunca"
+}
+
+/**
+ * «Autonomía»: one row per category with three levels, the quiet hours and their exception. Replaces «Pedirme
+ * confirmación antes de ejecutar» (1.15.0). A category the ledger lowered says when.
+ */
+@Composable
+private fun InstinctAutonomySection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val autonomy = remember { InstinctAutonomySettings(context) }
+  val policy = remember(revision) { autonomy.policy() }
+  var start by remember(revision) { mutableStateOf(QuietHours.clock(policy.quiet?.start ?: 0)) }
+  var end by remember(revision) { mutableStateOf(QuietHours.clock(policy.quiet?.end ?: 7 * 60)) }
+  var notice by remember { mutableStateOf<String?>(null) }
+  val day = remember { java.text.SimpleDateFormat("dd/MM", java.util.Locale.US) }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_autonomy")) {
+    Text("Autonomía", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("Qué puede hacer Instinct solo, por tipo de acción. «Solo»: lo hace y te avisa (con Deshacer cuando se puede). " +
+      "«Confirmar»: espera tu toque o un «dale». «Nunca»: lo rechaza. Con el teléfono bloqueado, sin la Accesibilidad para abrir otra " +
+      "app o con muchas órdenes seguidas, igual espera tu confirmación.")
+    InstinctCategory.entries.forEach { category ->
+      Text(category.label.replaceFirstChar { it.uppercaseChar() }, style = MaterialTheme.typography.bodyMedium)
+      Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        InstinctAutonomy.entries.forEach { level ->
+          FilterChip(selected = policy.level(category) == level, onClick = { autonomy.set(category, level); onChange() },
+            label = { Text(autonomyLabel(level)) },
+            modifier = Modifier.testTag("instinct_autonomy_${category.name.lowercase()}_${level.name.lowercase()}"))
+        }
+      }
+      policy.adjusted[category]?.let { SettingsDescription("Ajustada automáticamente el ${day.format(java.util.Date(it))}.") }
+    }
+    if (InstinctCategory.AVISOS.let { policy.level(it) } != InstinctAutonomy.NUNCA)
+      SettingsDescription("«Avisos para vos» es «#insto avisarme …»: una notificación de Insto, solo desde el buzón firmado.")
+    SettingsSwitch("Horas de silencio para Instinct", policy.quiet != null, { on ->
+      if (!on) autonomy.setQuiet(null)
+      else autonomy.setQuiet(QuietHours(QuietHours.parse(start) ?: 0, QuietHours.parse(end) ?: 7 * 60))
+      onChange()
+    }, "En ese rango, lo que haría solo espera tu confirmación. Se evalúa cuando se ejecuta: una orden programada, cuando se dispara.")
+    if (policy.quiet != null) {
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(start, { start = it; notice = null }, label = { Text("Desde") }, singleLine = true,
+          isError = QuietHours.parse(start) == null, modifier = Modifier.weight(1f).testTag("instinct_quiet_start"))
+        OutlinedTextField(end, { end = it; notice = null }, label = { Text("Hasta") }, singleLine = true,
+          isError = QuietHours.parse(end) == null, modifier = Modifier.weight(1f).testTag("instinct_quiet_end"))
+      }
+      OutlinedButton(onClick = {
+        val from = QuietHours.parse(start); val to = QuietHours.parse(end)
+        notice = if (from == null || to == null || from == to) "Escribí dos horas distintas en formato 24 horas (00:00 a 23:59)."
+          else { autonomy.setQuiet(QuietHours(from, to)); onChange(); "Horas de silencio guardadas: ${QuietHours(from, to).label}." }
+      }, modifier = Modifier.testTag("instinct_quiet_save")) { Text("Guardar horas de silencio") }
+      SettingsSwitch("Permitir que silencie el teléfono durante las horas de silencio", policy.silenceInQuiet,
+        { autonomy.setSilenceInQuiet(it); onChange() }, "Silenciar, poner en vibración o activar No molestar se sigue haciendo solo.")
+    }
+    notice?.let { SettingsDescription(it) }
   }
 }
 
@@ -180,7 +247,8 @@ private fun InstinctCatalogActions(replyMode: InstinctReplyMode, channel: Instin
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_catalog")) {
     Text("Instrucciones para Instinct", style = MaterialTheme.typography.bodyLarge)
     SettingsDescription("Se generan con la gramática de Insto (${com.example.phone.InstinctProtocolCatalog.TITLE}) y las rutinas que habilitaste. Pegalas en el prompt de Instinct." +
-      if (channel.usesLog) " La copia incluye la URL y el token de la bitácora, porque Instinct los necesita para leerla; la que se envía por WhatsApp no los lleva." else "")
+      (if (channel.usesLog) " La copia incluye la URL y el token de la bitácora, porque Instinct los necesita para leerla; la que se envía por WhatsApp no los lleva." else "") +
+      " Nunca incluyen la clave del buzón: esa se copia aparte, con «Copiar clave».")
     OutlinedButton(onClick = {
       val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
       clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Instrucciones para Instinct",
@@ -245,6 +313,140 @@ private fun InstinctLogConfiguration(revision: Int, onChange: () -> Unit) {
   }
 }
 
+/**
+ * «Estado para Instinct» (1.16.0): always on while the log is configured. Only an informative line, «Publicar estado
+ * ahora» and, once, the calendar permission with what it is for.
+ */
+@Composable
+private fun InstinctStateSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  var notice by remember { mutableStateOf<String?>(null) }
+  val line = remember(revision) { com.example.phone.InstinctStatePublisher.diagnosis(context) }
+  val configured = remember(revision) { InstinctLogSettings(context).configured() }
+  val calendar = remember(revision) { context.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED }
+  val askCalendar = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onChange() }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_state")) {
+    Text("Estado para Instinct", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("Con la bitácora configurada, Insto publica ahí un resumen del teléfono para que Instinct decida con contexto: " +
+      "modo de sonido y No molestar, hora de la próxima alarma, evento en curso y próximo, si hay auriculares o Bluetooth, si está " +
+      "bloqueado, el modo temporal y las órdenes programadas. Nunca volumen, batería, red, ubicación, contactos ni notificaciones.")
+    SettingsDescription(line, modifier = Modifier.testTag("instinct_state_line"))
+    if (!calendar) {
+      SettingsDescription("Para el evento en curso y el próximo, Insto necesita leer el calendario (solo título y horario). Sin permiso, el campo sale «sin permiso».")
+      OutlinedButton(onClick = { askCalendar.launch(Manifest.permission.READ_CALENDAR) },
+        modifier = Modifier.testTag("instinct_state_calendar")) { Text("Permitir leer el calendario") }
+    }
+    OutlinedButton(onClick = {
+      notice = "Publicando…"
+      scope.launch {
+        val outcome = withContext(Dispatchers.IO) {
+          com.example.phone.InstinctStatePublisher.publish(context, com.example.phone.InstinctState.Reason.MANUAL)
+        }
+        notice = when (outcome) {
+          com.example.phone.InstinctStatePublisher.Outcome.PUBLISHED -> "Estado agregado a la bandeja de la bitácora."
+          com.example.phone.InstinctStatePublisher.Outcome.NOT_CONFIGURED -> "Falta configurar la bitácora."
+          com.example.phone.InstinctStatePublisher.Outcome.DISABLED -> "«Recibir órdenes de Instinct» está apagado."
+          com.example.phone.InstinctStatePublisher.Outcome.UNCHANGED -> "No se publicó."
+        }
+        onChange()
+      }
+    }, enabled = configured, modifier = Modifier.testTag("instinct_state_publish")) { Text("Publicar estado ahora") }
+    notice?.let { SettingsDescription(it) }
+  }
+}
+
+internal fun acceptLabel(value: com.example.phone.InstinctMailboxAccept): String = when (value) {
+  com.example.phone.InstinctMailboxAccept.WHATSAPP_Y_BUZON -> "WhatsApp y buzón"
+  com.example.phone.InstinctMailboxAccept.SOLO_BUZON -> "Solo buzón"
+}
+
+/**
+ * «Buzón» (1.16.0): signed orders through the same sheet. The key is never shown whole; its field starts empty and
+ * «Copiar clave» is the only way it leaves Insto (to the clipboard, apart from the instructions).
+ */
+@Composable
+private fun InstinctMailboxSection(replyMode: InstinctReplyMode, revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val box = remember { com.example.phone.InstinctMailboxSettings(context) }
+  val scope = rememberCoroutineScope()
+  val enabled = remember(revision) { box.enabled() }
+  val hasKey = remember(revision) { box.hasKey() }
+  val masked = remember(revision) { box.maskedKey() }
+  val logReady = remember(revision) { InstinctLogSettings(context).configured() }
+  val accept = remember(revision) { box.accept() }
+  val cap = remember(revision) { box.whatsappCap() }
+  val interval = remember(revision) { box.intervalMinutes() }
+  val diagnosis = remember(revision) { com.example.phone.InstinctMailbox.diagnosis(context) }
+  var key by remember(revision) { mutableStateOf("") }
+  var notice by remember { mutableStateOf<String?>(null) }
+  var busy by remember { mutableStateOf(false) }
+  fun copy(label: String, text: String) {
+    context.getSystemService(android.content.ClipboardManager::class.java)
+      ?.setPrimaryClip(android.content.ClipData.newPlainText(label, text))
+  }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_mailbox")) {
+    Text("Buzón", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("Instinct también puede dejar órdenes firmadas en la planilla de la bitácora, sin escribir en el chat. Insto " +
+      "las revisa cada pocos minutos y solo ejecuta las que tienen la firma de la clave que comparten. La planilla y el Apps Script " +
+      "nunca conocen la clave.")
+    SettingsSwitch("Recibir órdenes por el buzón", enabled, { box.setEnabled(it); onChange() },
+      when {
+        !logReady -> "Configurá primero la bitácora (URL y token)."
+        !hasKey -> "Generá o pegá la clave antes de encenderlo."
+        else -> "Clave guardada: $masked."
+      }, enabled = enabled || (logReady && hasKey))
+    OutlinedTextField(key, { key = it; notice = null }, label = { Text("Clave (guardada: $masked)") }, singleLine = true,
+      visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+      modifier = Modifier.fillMaxWidth().testTag("instinct_mailbox_key"))
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      OutlinedButton(onClick = {
+        notice = if (box.saveKey(key)) "Clave guardada." else "No se guardó: la clave tiene que tener de 32 a 200 caracteres, sin espacios."
+        key = ""; onChange()
+      }, enabled = key.isNotBlank(), modifier = Modifier.testTag("instinct_mailbox_key_save")) { Text("Guardar clave") }
+      OutlinedButton(onClick = {
+        copy("Clave del buzón de Insto", box.generateKey())
+        notice = "Se generó una clave nueva y se copió. Pasásela a Instinct por un canal seguro; la anterior deja de valer."
+        onChange()
+      }, modifier = Modifier.testTag("instinct_mailbox_key_generate")) { Text("Generar clave") }
+    }
+    OutlinedButton(onClick = {
+      box.key()?.let { copy("Clave del buzón de Insto", it); notice = "Clave copiada. No la pegues en WhatsApp." }
+    }, enabled = hasKey, modifier = Modifier.testTag("instinct_mailbox_key_copy")) { Text("Copiar clave") }
+    Text("Aceptar órdenes de", style = MaterialTheme.typography.bodyMedium)
+    SettingsChoices(com.example.phone.InstinctMailboxAccept.entries, accept, { box.setAccept(it); onChange() }, label = ::acceptLabel,
+      description = { if (it == com.example.phone.InstinctMailboxAccept.SOLO_BUZON) "Las líneas #insto de WhatsApp se ignoran: nadie puede usar el nombre del contacto para darte órdenes." else null },
+      itemModifier = { Modifier.testTag("instinct_mailbox_accept_${it.name.lowercase()}") })
+    Text("Las órdenes por WhatsApp (sin firma) como máximo en", style = MaterialTheme.typography.bodyMedium)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      listOf(InstinctAutonomy.SOLO, InstinctAutonomy.CONFIRMAR).forEach { level ->
+        FilterChip(selected = cap == level, onClick = { box.setWhatsappCap(level); onChange() }, label = { Text(autonomyLabel(level)) },
+          modifier = Modifier.testTag("instinct_mailbox_cap_${level.name.lowercase()}"))
+      }
+    }
+    Text("Revisar el buzón cada", style = MaterialTheme.typography.bodyMedium)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      com.example.phone.InstinctMailboxSettings.INTERVALS.forEach { minutes ->
+        FilterChip(selected = interval == minutes, onClick = { box.setIntervalMinutes(minutes); onChange() }, label = { Text("$minutes min") },
+          modifier = Modifier.testTag("instinct_mailbox_interval_$minutes"))
+      }
+    }
+    SettingsDescription("Con el teléfono en reposo, Android puede demorar la revisión (Doze). Además se revisa enseguida al abrir Insto o el " +
+      "panel flotante y cuando llega un mensaje de Instinct por WhatsApp.")
+    if (enabled && replyMode == InstinctReplyMode.NEVER)
+      SettingsDescription("«Responderle a Instinct» está en Nunca: sin acuses, Instinct no se entera de qué pasó con sus órdenes del buzón. Te conviene subirlo.")
+    OutlinedButton(onClick = {
+      busy = true; notice = "Probando…"
+      scope.launch {
+        notice = withContext(Dispatchers.IO) { com.example.phone.InstinctMailbox.test(context) }
+        busy = false; onChange()
+      }
+    }, enabled = !busy && logReady && hasKey, modifier = Modifier.testTag("instinct_mailbox_test")) { Text("Probar buzón") }
+    SettingsDescription(diagnosis, modifier = Modifier.testTag("instinct_mailbox_line"))
+    notice?.let { SettingsDescription(it) }
+  }
+}
+
 internal fun replyModeLabel(mode: InstinctReplyMode): String = when (mode) {
   InstinctReplyMode.NEVER -> "Nunca"
   InstinctReplyMode.PROBLEMS -> "Solo errores y esperas"
@@ -281,6 +483,12 @@ private fun ProposalDiagnostics(contact: PinnedContact?, revision: Int, onRefres
       if (InstinctProposalSettings(context).channel().usesLog || InstinctLog.outbox(context).size() > 0) InstinctLog.diagnosis(context) else null
     }
     logLine?.let { SettingsDescription(it, modifier = Modifier.testTag("instinct_log_diagnosis")) }
+    val stateLine = remember(revision) { com.example.phone.InstinctStatePublisher.diagnosis(context) }
+    SettingsDescription(stateLine, modifier = Modifier.testTag("instinct_state_diagnosis"))
+    val mailboxLine = remember(revision) {
+      if (com.example.phone.InstinctMailboxSettings(context).enabled()) com.example.phone.InstinctMailbox.diagnosis(context) else null
+    }
+    mailboxLine?.let { SettingsDescription(it, modifier = Modifier.testTag("instinct_mailbox_diagnosis")) }
     TextButton(onClick = onRefresh) { Text("Actualizar diagnóstico") }
   }
 }
