@@ -5,7 +5,6 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.text.ParsePosition
 import java.text.SimpleDateFormat
-import java.util.Base64
 import java.util.Locale
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -33,8 +32,27 @@ object InstinctMailboxKey {
   fun valid(key: String): Boolean = VALID.matches(key)
 
   /** 32 random bytes from [SecureRandom], base64url without padding (43 characters). */
-  fun generate(random: SecureRandom = SecureRandom()): String =
-    Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also(random::nextBytes))
+  fun generate(random: SecureRandom = SecureRandom()): String = base64Url(ByteArray(32).also(random::nextBytes))
+
+  private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+  /**
+   * Base64url (RFC 4648 §5) without padding. Written here because `java.util.Base64` needs Android 8 and Insto
+   * supports Android 7; `android.util.Base64` would not run in the JVM tests.
+   */
+  internal fun base64Url(bytes: ByteArray): String = buildString((bytes.size * 4 + 2) / 3) {
+    var i = 0
+    while (i < bytes.size) {
+      val b0 = bytes[i].toInt() and 0xff
+      val b1 = if (i + 1 < bytes.size) bytes[i + 1].toInt() and 0xff else 0
+      val b2 = if (i + 2 < bytes.size) bytes[i + 2].toInt() and 0xff else 0
+      val n = (b0 shl 16) or (b1 shl 8) or b2
+      append(ALPHABET[(n shr 18) and 63]).append(ALPHABET[(n shr 12) and 63])
+      if (i + 1 < bytes.size) append(ALPHABET[(n shr 6) and 63])
+      if (i + 2 < bytes.size) append(ALPHABET[n and 63])
+      i += 3
+    }
+  }
 
   /** «••••abcd»: never the whole key. */
   fun mask(key: String?): String = if (key.isNullOrEmpty()) "sin clave" else "••••" + key.takeLast(4)

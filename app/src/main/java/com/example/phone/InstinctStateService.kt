@@ -94,7 +94,10 @@ class InstinctStateReader(context: Context) {
   }
 
   private companion object {
+    // Inlined constants: on an older Android those device types simply never appear, so nothing breaks.
+    @android.annotation.SuppressLint("InlinedApi")
     val WIRED = setOf(AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET)
+    @android.annotation.SuppressLint("InlinedApi")
     val BLUETOOTH = setOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET,
       AudioDeviceInfo.TYPE_BLE_SPEAKER)
   }

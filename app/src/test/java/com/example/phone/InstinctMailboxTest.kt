@@ -37,6 +37,15 @@ class InstinctMailboxTest {
     assertEquals("sin clave", InstinctMailboxKey.mask(null))
   }
 
+  @Test fun `the base64url encoder matches the JVM's for every length and byte`() {
+    val random = java.util.Random(7)
+    for (size in 0..70) repeat(20) {
+      val bytes = ByteArray(size).also(random::nextBytes)
+      assertEquals(java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes), InstinctMailboxKey.base64Url(bytes))
+    }
+    assertEquals("-_8", InstinctMailboxKey.base64Url(byteArrayOf(0xfb.toByte(), 0xff.toByte())))
+  }
+
   // Canonical string and HMAC
 
   @Test fun `the canonical string and HMAC match fixed vectors`() {
