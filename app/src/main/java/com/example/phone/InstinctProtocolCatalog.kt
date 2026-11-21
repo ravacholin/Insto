@@ -19,7 +19,7 @@ data class InstinctCatalogLog(val url: String?, val token: String?) {
 }
 
 object InstinctProtocolCatalog {
-  const val VERSION = 3
+  const val VERSION = 4
   const val TITLE = "Protocolo Insto v$VERSION"
   const val ROUTINE_FORM = "ejecutar la rutina"
   /** Marks example lines in a copy sent through WhatsApp, so that copy never reads as orders for Insto. */
@@ -30,7 +30,8 @@ object InstinctProtocolCatalog {
    * Insto reads that chat and must never take its own message for orders. With [log] the results are in the log,
    * not in the chat, and the block says how to read it.
    */
-  fun text(routines: List<String>, forChat: Boolean = false, log: InstinctCatalogLog? = null): String {
+  fun text(routines: List<String>, forChat: Boolean = false, log: InstinctCatalogLog? = null,
+    autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy()): String {
     fun example(order: String) = (if (forChat) CHAT_MARK else "") + "${InstinctProposalProtocol.PREFIX} $order"
     return buildString {
       appendLine("Órdenes para Insto ($TITLE)")
@@ -39,7 +40,7 @@ object InstinctProtocolCatalog {
       appendLine()
       appendLine(example("<orden>"))
       appendLine()
-      appendLine("Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa. Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.")
+      appendLine("Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa, salvo lo que ella eligió confirmar (ver «Qué hace Insto solo» más abajo). Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.")
       if (forChat) {
         appendLine()
         appendLine("En este mensaje cada ejemplo va precedido por «${CHAT_MARK.trim()}» para que Insto no lo ejecute. Vos escribí la línea sin ese signo, empezando con \"${InstinctProposalProtocol.PREFIX} \".")
@@ -60,6 +61,8 @@ object InstinctProtocolCatalog {
       appendLine("Rutinas que la persona te habilitó (usá el nombre exacto; se ejecutan paso por paso, se detienen en el primer paso que falla y cuentan como una sola orden):")
       if (routines.isEmpty()) appendLine("(ninguna por ahora)")
       else routines.forEach { appendLine(example("$ROUTINE_FORM $it")) }
+      appendLine()
+      appendLine(InstinctAutonomyCatalog.text(autonomy))
       appendLine()
       appendLine("Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas):")
       ProposalCheck.QueryKind.entries.forEach { appendLine(example(it.phrase)) }

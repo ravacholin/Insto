@@ -160,33 +160,33 @@ class InstinctReplyFlowTest {
 
   @Test fun `a waiting order is followed up when discarded`() {
     InstinctProposalSettings(app).setReplyMode(InstinctReplyMode.PROBLEMS)
-    InstinctProposalSettings(app).setAsksFirst(true)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.CONFIRMAR)
     post(whatsApp("#insto prender la linterna"))
     val proposal = InstinctProposalCenter.book.pending().single()
     InstinctProposalReceiver().onReceive(app, Intent(InstinctProposalCenter.ACTION_DISCARD)
       .putExtra(InstinctProposalCenter.EXTRA_PROPOSAL_ID, proposal.id))
     assertEquals("#insto-descartada prender la linterna → la persona la descartó; no se ejecutó.", sent.last())
-    InstinctProposalSettings(app).setAsksFirst(false)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.SOLO)
   }
 
   @Test fun `a waiting order is followed up when it expires, while the handle is still valid`() {
     InstinctProposalSettings(app).setReplyMode(InstinctReplyMode.ALWAYS)
-    InstinctProposalSettings(app).setAsksFirst(true)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.CONFIRMAR)
     post(whatsApp("#insto pausar la música"))
     val proposal = InstinctProposalCenter.book.pending().single()
     fakeNow += ProposalBook.TTL_MILLIS - 1_000
     InstinctProposalCenter.sweepReplies(app)
     assertEquals("#insto-vencida pausar la música → venció sin que se confirmara; no se ejecutó.", sent.last())
     assertFalse(InstinctProposalCenter.book.isPending(proposal.id))
-    InstinctProposalSettings(app).setAsksFirst(false)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.SOLO)
   }
 
   @Test fun `after the handle lapsed nothing is sent`() {
     InstinctProposalSettings(app).setReplyMode(InstinctReplyMode.ALWAYS)
-    InstinctProposalSettings(app).setAsksFirst(true)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.CONFIRMAR)
     post(whatsApp("#insto pausar la música"))
     val proposal = InstinctProposalCenter.book.pending().single()
-    InstinctProposalSettings(app).setAsksFirst(false)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.SOLO)
     fakeNow += ProposalBook.TTL_MILLIS + 1
     InstinctProposalCenter.discard(app, proposal.id)
     assertEquals(1, sent.size)
@@ -194,13 +194,13 @@ class InstinctReplyFlowTest {
 
   @Test fun `turning Recibir órdenes off cuts pending replies`() {
     InstinctProposalSettings(app).setReplyMode(InstinctReplyMode.ALWAYS)
-    InstinctProposalSettings(app).setAsksFirst(true)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.CONFIRMAR)
     post(whatsApp("#insto pausar la música"))
     assertEquals(1, sent.size)
     InstinctProposalSettings(app).setEnabled(false)
     assertEquals("discarding on switch-off answers nothing", 1, sent.size)
     assertNull(InstinctProposalCenter.acks.latestHandle())
-    InstinctProposalSettings(app).setAsksFirst(false)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.SOLO)
   }
 
   @Test fun `the reply mode lives outside backups and defaults to Nunca`() {

@@ -73,6 +73,8 @@ class UndoBook(private val clock: () -> Long, private val ttlMillis: Long = Prop
     val irreversible: List<PhoneCommand>,
     val createdAt: Long,
     val token: String = java.util.UUID.randomUUID().toString(),
+    /** For the trust ledger: an undo counts against this category ([InstinctTrustLedger]). */
+    val category: InstinctCategory? = null,
   )
 
   sealed interface Claim {
@@ -86,9 +88,10 @@ class UndoBook(private val clock: () -> Long, private val ttlMillis: Long = Prop
   private val entries = LinkedHashMap<Long, Pair<Entry, Boolean>>()
 
   /** Null when nothing is reversible: no «Deshacer» is offered. */
-  @Synchronized fun offer(proposalId: Long, order: String, reversals: List<Reversal>, irreversible: List<PhoneCommand> = emptyList()): Entry? {
+  @Synchronized fun offer(proposalId: Long, order: String, reversals: List<Reversal>, irreversible: List<PhoneCommand> = emptyList(),
+    category: InstinctCategory? = null): Entry? {
     if (reversals.isEmpty()) return null
-    val entry = Entry(nextId++, proposalId, order, reversals, irreversible, clock())
+    val entry = Entry(nextId++, proposalId, order, reversals, irreversible, clock(), category = category)
     entries[entry.id] = entry to false
     while (entries.size > 32) entries.remove(entries.keys.first())
     return entry

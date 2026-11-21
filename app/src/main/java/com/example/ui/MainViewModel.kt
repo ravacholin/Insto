@@ -1112,18 +1112,26 @@ class MainViewModel @JvmOverloads constructor(
     learningPreview = null; patternExample = null
     InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.OFFERED)
     // Instinct acts on its own: with the panel free, the proposal runs now, like a local order.
-    val blocker = InstinctProposalCenter.autoRunBlocker(getApplication(), proposal.command, foreground = true)
-    if (blocker == null) {
+    val gate = InstinctProposalCenter.gate(getApplication(), proposal.command, foreground = true)
+    if (gate is com.example.phone.InstinctAutonomyGate.Gate.Run) {
       sessions.begin(com.example.session.SessionState.IDLE)
       floatingState.value = floatingState.value.copy(status = "Instinct pidió: ${proposal.summary}.", error = null)
-      executeInstinctProposal(proposal.id)
+      executeInstinctProposal(proposal.id, auto = true)
       return
     }
+    if (gate is com.example.phone.InstinctAutonomyGate.Gate.Refuse) {
+      InstinctProposalCenter.refuse(getApplication(), proposal, gate.reason)
+      floatingState.value = floatingState.value.copy(status = null,
+        error = "Instinct pidió: ${proposal.summary}. No se ejecutó: elegiste que Instinct nunca haga esto.")
+      presentWaitingProposal()
+      return
+    }
+    val blocker = InstinctProposalCenter.sentence((gate as com.example.phone.InstinctAutonomyGate.Gate.Wait).reason)
     sessions.begin(com.example.session.SessionState.AWAITING_CONFIRMATION)
     activeProposal = proposal
     confirmation = proposal.command
     InstinctProposalCenter.report(getApplication(), proposal.id,
-      com.example.phone.AckEntry(com.example.phone.AckKind.WAITING, proposal.order, blocker))
+      com.example.phone.AckEntry(com.example.phone.AckKind.WAITING, proposal.order, gate.reason))
     floatingState.value = floatingState.value.copy(needsConfirmation = true, queryPreview = false, error = null,
       proposalsWaiting = waitingProposals.size,
       status = "Instinct propone: ${proposal.summary}. $blocker Confirmá o decí dale para hacerlo; si no, cancelala.")
@@ -1141,8 +1149,8 @@ class MainViewModel @JvmOverloads constructor(
     executeInstinctProposal(id, token, fromNotification = true)
   }
 
-  private fun executeInstinctProposal(id: Long, token: String? = null, fromNotification: Boolean = false) {
-    when (val claim = InstinctProposalCenter.claim(getApplication(), id, token, fromNotification)) {
+  private fun executeInstinctProposal(id: Long, token: String? = null, fromNotification: Boolean = false, auto: Boolean = false) {
+    when (val claim = InstinctProposalCenter.claim(getApplication(), id, token, fromNotification, auto)) {
       is ProposalBook.Claim.Granted -> {
         val command = claim.proposal.command
         if (!sessions.canExecute(floatingGeneration)) sessions.begin(com.example.session.SessionState.IDLE)

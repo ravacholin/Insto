@@ -62,7 +62,7 @@ class InstinctProposalFlowTest {
   }
 
   @After fun tearDown() {
-    InstinctProposalSettings(app).setAsksFirst(false)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.SOLO)
     InstinctProposalSettings(app).setEnabled(false)
     InstinctProposalCenter.book.discardAll()
     InstinctProposalCenter.accessibilityConnected = { com.example.assist.PingAutoSendAccessibilityService.isConnected() }
@@ -77,7 +77,7 @@ class InstinctProposalFlowTest {
 
   private fun enable(asksFirst: Boolean = false) {
     InstinctProposalSettings(app).setEnabled(true)
-    InstinctProposalSettings(app).setAsksFirst(asksFirst)
+    InstinctAutonomySettings(app).setAll(if (asksFirst) InstinctAutonomy.CONFIRMAR else InstinctAutonomy.SOLO)
   }
 
   private fun whatsApp(text: String, sender: String = "Instinct", group: Boolean = false): Notification {
@@ -186,10 +186,10 @@ class InstinctProposalFlowTest {
     assertEquals(InstinctProposalCenter.CHANNEL_ID, posted().last().channelId)
     InstinctProposalCenter.keyguardLocked = { false }
 
-    InstinctProposalSettings(app).setAsksFirst(true)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.CONFIRMAR)
     deliver(PhoneCommand.Volume(VolumeOp.SET, 12))
     assertEquals(InstinctProposalCenter.CHANNEL_ID, posted().last().channelId)
-    InstinctProposalSettings(app).setAsksFirst(false)
+    InstinctAutonomySettings(app).setAll(InstinctAutonomy.SOLO)
 
     (13..18).forEach { deliver(PhoneCommand.Volume(VolumeOp.SET, it)) }
     deliver(PhoneCommand.Volume(VolumeOp.SET, 19))

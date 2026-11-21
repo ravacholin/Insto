@@ -40,6 +40,12 @@ import com.example.phone.InstinctLog
 import com.example.phone.InstinctLogConfig
 import com.example.phone.InstinctLogSettings
 import com.example.phone.InstinctReplyMode
+import com.example.phone.InstinctAutonomy
+import com.example.phone.InstinctAutonomySettings
+import com.example.phone.InstinctCategory
+import com.example.phone.QuietHours
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.FilterChip
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,7 +71,6 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
   var revision by remember { mutableIntStateOf(0) }
   var explain by remember { mutableStateOf(false) }
   val enabled = remember(revision) { settings.isEnabled() }
-  val asksFirst = remember(revision) { settings.asksFirst() }
   val replyMode = remember(revision) { settings.replyMode() }
   val channel = remember(revision) { settings.channel() }
   val listenerEnabled = remember(revision) {
@@ -88,8 +93,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
           modifier = Modifier.testTag("instinct_proposals_listener")) { Text("Habilitar acceso en Ajustes") }
       }
-      SettingsSwitch("Pedirme confirmación antes de ejecutar", asksFirst, { settings.setAsksFirst(it); revision++ },
-        "Apagado: Insto ejecuta y avisa después. Encendido: cada orden espera tu toque o un «dale».")
+      InstinctAutonomySection(revision) { revision++ }
       Text("Responderle a Instinct", style = MaterialTheme.typography.bodyLarge)
       SettingsDescription("Insto contesta en el mismo chat, con la acción «Responder» de la notificación de WhatsApp, " +
         "una línea por orden (#insto-ok, #insto-espera, #insto-error, #insto-incierto). No abre WhatsApp. " +
@@ -128,6 +132,67 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         }, modifier = Modifier.testTag("instinct_proposals_accept")) { Text("Activar") }
       },
     )
+  }
+}
+
+internal fun autonomyLabel(level: InstinctAutonomy): String = when (level) {
+  InstinctAutonomy.SOLO -> "Solo"
+  InstinctAutonomy.CONFIRMAR -> "Confirmar"
+  InstinctAutonomy.NUNCA -> "Nunca"
+}
+
+/**
+ * «Autonomía»: one row per category with three levels, the quiet hours and their exception. Replaces «Pedirme
+ * confirmación antes de ejecutar» (1.15.0). A category the ledger lowered says when.
+ */
+@Composable
+private fun InstinctAutonomySection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val autonomy = remember { InstinctAutonomySettings(context) }
+  val policy = remember(revision) { autonomy.policy() }
+  var start by remember(revision) { mutableStateOf(QuietHours.clock(policy.quiet?.start ?: 0)) }
+  var end by remember(revision) { mutableStateOf(QuietHours.clock(policy.quiet?.end ?: 7 * 60)) }
+  var notice by remember { mutableStateOf<String?>(null) }
+  val day = remember { java.text.SimpleDateFormat("dd/MM", java.util.Locale.US) }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_autonomy")) {
+    Text("Autonomía", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("Qué puede hacer Instinct solo, por tipo de acción. «Solo»: lo hace y te avisa (con Deshacer cuando se puede). " +
+      "«Confirmar»: espera tu toque o un «dale». «Nunca»: lo rechaza. Con el teléfono bloqueado, sin la Accesibilidad para abrir otra " +
+      "app o con muchas órdenes seguidas, igual espera tu confirmación.")
+    InstinctCategory.entries.forEach { category ->
+      Text(category.label.replaceFirstChar { it.uppercaseChar() }, style = MaterialTheme.typography.bodyMedium)
+      Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        InstinctAutonomy.entries.forEach { level ->
+          FilterChip(selected = policy.level(category) == level, onClick = { autonomy.set(category, level); onChange() },
+            label = { Text(autonomyLabel(level)) },
+            modifier = Modifier.testTag("instinct_autonomy_${category.name.lowercase()}_${level.name.lowercase()}"))
+        }
+      }
+      policy.adjusted[category]?.let { SettingsDescription("Ajustada automáticamente el ${day.format(java.util.Date(it))}.") }
+    }
+    if (InstinctCategory.AVISOS.let { policy.level(it) } != InstinctAutonomy.NUNCA)
+      SettingsDescription("«Avisos para vos» es «#insto avisarme …»: una notificación de Insto, solo desde el buzón firmado.")
+    SettingsSwitch("Horas de silencio para Instinct", policy.quiet != null, { on ->
+      if (!on) autonomy.setQuiet(null)
+      else autonomy.setQuiet(QuietHours(QuietHours.parse(start) ?: 0, QuietHours.parse(end) ?: 7 * 60))
+      onChange()
+    }, "En ese rango, lo que haría solo espera tu confirmación. Se evalúa cuando se ejecuta: una orden programada, cuando se dispara.")
+    if (policy.quiet != null) {
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(start, { start = it; notice = null }, label = { Text("Desde") }, singleLine = true,
+          isError = QuietHours.parse(start) == null, modifier = Modifier.weight(1f).testTag("instinct_quiet_start"))
+        OutlinedTextField(end, { end = it; notice = null }, label = { Text("Hasta") }, singleLine = true,
+          isError = QuietHours.parse(end) == null, modifier = Modifier.weight(1f).testTag("instinct_quiet_end"))
+      }
+      OutlinedButton(onClick = {
+        val from = QuietHours.parse(start); val to = QuietHours.parse(end)
+        notice = if (from == null || to == null || from == to) "Escribí dos horas distintas en formato 24 horas (00:00 a 23:59)."
+          else { autonomy.setQuiet(QuietHours(from, to)); onChange(); "Horas de silencio guardadas: ${QuietHours(from, to).label}." }
+      }, modifier = Modifier.testTag("instinct_quiet_save")) { Text("Guardar horas de silencio") }
+      SettingsSwitch("Permitir que silencie el teléfono durante las horas de silencio", policy.silenceInQuiet,
+        { autonomy.setSilenceInQuiet(it); onChange() }, "Silenciar, poner en vibración o activar No molestar se sigue haciendo solo.")
+    }
+    notice?.let { SettingsDescription(it) }
   }
 }
 

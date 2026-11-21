@@ -1,4 +1,4 @@
-# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.15.0)
+# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.16.0)
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
@@ -6,7 +6,9 @@ Desde 1.14.0, además: Insto le puede **responder** a Instinct con el resultado 
 
 Desde 1.15.0, los acuses pueden ir a una **bitácora** en Google Sheets en lugar del chat, para no llenarlo de mensajes ([Bitácora](#bitácora-1150)). Las órdenes siguen llegando por WhatsApp exactamente igual.
 
-La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. Con **«Pedirme confirmación antes de ejecutar»** encendido, cada orden espera tu toque o un «dale». Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
+Desde 1.16.0, qué hace Instinct solo se elige **por tipo de acción** ([Autonomía por acción](#autonomía-por-acción-1160)), con horas de silencio y un ajuste automático cuando deshacés mucho.
+
+La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. En **Autonomía** elegís, por categoría, si Instinct lo hace solo, espera tu confirmación o nunca. Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
 
 ## Protocolo
 
@@ -59,12 +61,59 @@ Los ejemplos salen de una sola fuente en el código (`InstinctProposalValidator.
    - **Flotante abierto y libre:** se ejecuta en la sesión del panel, como una orden local. **Flotante ocupado** (texto sin enviar, grabación, interpretación, confirmación, plan o elección): la orden espera y se ejecuta sola cuando el panel se libera. Un evento de calendario pasa por la vista previa de siempre.
    - **Diferida:** se guarda y se ejecuta por este mismo camino cuando llega su hora.
 5. **Cuándo espera tu toque en lugar de ejecutarse** (notificación «Instinct propone: …» con **Confirmar**/**Descartar**, en el canal «Insto · propuestas de Instinct»):
-   - encendiste «Pedirme confirmación antes de ejecutar»;
+   - la [autonomía](#autonomía-por-acción-1160) de esa categoría es **Confirmar**, o es la hora de silencio (desde 1.16.0; reemplaza a «Pedirme confirmación antes de ejecutar»);
    - el teléfono está bloqueado;
    - la orden (o algún paso de la rutina) abre otra app, el panel está cerrado y el servicio de Accesibilidad de Insto no está conectado (ver Límites);
    - Instinct ya pidió 6 acciones en los últimos 10 minutos (freno anti-bucle; una rutina cuenta como una);
    - una orden diferida se disparó con más de 15 minutos de atraso;
    - la acción necesita algo tuyo: confirmar «esa hora ya pasó», confirmar un modo temporal, un permiso o elegir entre varias apps.
+
+## Autonomía por acción (1.16.0)
+
+Hasta 1.15.0 había un solo interruptor, «Pedirme confirmación antes de ejecutar». Ahora hay una **política por categoría**, en **Ajustes → Propuestas de Instinct → Autonomía**.
+
+| Categoría | Qué incluye |
+| --- | --- |
+| Volumen | `Volume` |
+| Linterna | `Torch` |
+| Silencio y No molestar | silencio, vibración, No molestar y el `TemporaryMode` de silencio o No molestar |
+| Música | `Media` |
+| Alarmas y temporizadores | `Alarm`, `Timer`, `ClockList` |
+| Abrir apps y búsquedas | `OpenApp`, `MusicSearch`, `SpotifySearch`, `YouTubeSearch` |
+| Calendario | `CalendarEvent` (igual pasa siempre por la vista previa) |
+| Rutinas | `ROUTINE_RUN` |
+| Avisos para vos | `#insto avisarme …` (solo por el [buzón](#buzón-firmado-1160)) |
+
+Cada categoría tiene uno de tres niveles:
+
+- **Solo** (valor por defecto, el comportamiento de 1.15.0): lo ejecuta y avisa, con Deshacer si corresponde.
+- **Confirmar**: queda como «Instinct propone: …». El acuse dice el motivo concreto: `#insto-espera <orden> → la persona pide confirmación para alarmas y temporizadores`.
+- **Nunca**: se rechaza enseguida, también si es una diferida: `#insto-error <orden> → la persona no permite esta acción`.
+
+Una diferida usa la categoría de su orden interior. Una rutina usa **Rutinas** y además la más estricta de las categorías de sus pasos.
+
+**Migración.** Si en 1.15.0 tenías encendido «Pedirme confirmación antes de ejecutar» (`instinct-proposals-ask-first`), todas las categorías arrancan en **Confirmar** y ese archivo se borra. La política vive en `noBackupFilesDir` (`instinct-autonomy.json`, escritura atómica); nunca entra en copias de seguridad ni se restaura. Si el archivo no se puede leer, todo queda en Confirmar hasta que vuelvas a elegir.
+
+**La política solo puede endurecer.** Los bloqueos que ya existían (teléfono bloqueado, abrir otra app sin Accesibilidad, freno anti-bucle, diferida atrasada más de 15 minutos, la acción necesita algo tuyo) siguen mandando sobre **Solo**. Es estructural: `InstinctProposalCenter.gate` decide primero esos bloqueos y después la política (`InstinctAutonomyGate.combine`); el freno se consume último, solo si la orden de verdad se ejecuta. **Nunca** gana sobre todo.
+
+### Horas de silencio
+
+Un rango opcional (por ejemplo, de 00:00 a 07:00; apagado por defecto). Dentro del rango, cada **Solo** pasa a **Confirmar** con el motivo «horas de silencio». El interruptor **«Permitir que silencie el teléfono durante las horas de silencio»** (encendido por defecto) exceptúa las órdenes que **bajan** el ruido: silenciar, poner en vibración y activar No molestar (también como modo temporal). Se evalúa en el momento de ejecutar: una diferida, cuando se dispara. Los rangos que cruzan la medianoche (23:00 a 07:00) funcionan.
+
+### Ajuste adaptativo
+
+`InstinctTrustLedger` (lógica pura) lleva, por categoría y por día, los contadores `ejecutada`, `deshecha`, `confirmada`, `descartada` y `vencida`. Guarda 30 días como máximo en `instinct-trust.json` (`noBackupFilesDir`). **Solo contadores:** ni órdenes ni textos.
+
+- **Baja sola:** si una categoría está en **Solo** y en los últimos 7 días tiene 3 o más deshechas, o al menos 30 % de deshechas con 5 o más ejecutadas, pasa a **Confirmar**. Te llega «Instinct va a pedirte confirmación para <categoría>: deshiciste N de M» con **«Volver a automático»**. En Ajustes la categoría dice «Ajustada automáticamente el DD/MM». Si la volvés a **Solo** (desde ahí o desde Ajustes), sus contadores se reinician.
+- **Sugerir subir, nunca subir sola:** si una categoría está en **Confirmar** y en los últimos 14 días tiene 8 o más confirmadas y ninguna descartada, llega una sola sugerencia: «¿Dejar que Instinct haga <categoría> solo?», con **Sí** y **No**. Un «No» la silencia 30 días; sin respuesta, no se repite durante una semana.
+- **Nunca** jamás se toca solo.
+- Las acciones viajan en `PendingIntent` a `InstinctProposalReceiver` (no exportado) con un token aleatorio de un solo uso, guardado en el mismo archivo para que sobreviva a un reinicio del proceso (vence a los 7 días).
+
+Qué cuenta como qué: **ejecutada** es una orden que corrió sola (en segundo plano o en el panel abierto); **confirmada**, una que confirmaste vos; **descartada**, una que descartaste; **vencida**, una que pasó sus 10 minutos esperando; **deshecha**, un Deshacer que revirtió algo.
+
+### Para Instinct
+
+El catálogo suma la sección **«Qué hace Insto solo y qué espera confirmación»**, generada desde la política vigente: qué categorías hace solo, cuáles esperan, cuáles rechaza, las horas de silencio y los bloqueos que siempre esperan. Así Instinct sabe de antemano qué va a quedar esperando. Copiá de nuevo las instrucciones cuando cambies la autonomía.
 
 ## Respuestas a Instinct (1.14.0)
 

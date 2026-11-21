@@ -22,14 +22,14 @@ import java.io.File
 import org.json.JSONObject
 
 /**
- * The opt-in switch «Recibir propuestas de Instinct» and «Pedirme confirmación antes de ejecutar». Off by default,
- * stored in [Context.getNoBackupFilesDir] like Gemini's switch: never in preferences backups, configuration exports
- * or the cloud, so a restore never turns passive reading or automatic execution on.
+ * The opt-in switch «Recibir órdenes de Instinct» and its reply settings. Off by default, stored in
+ * [Context.getNoBackupFilesDir] like Gemini's switch: never in preferences backups, configuration exports or the
+ * cloud, so a restore never turns passive reading or automatic execution on. What runs alone is decided per category
+ * by [InstinctAutonomySettings] (1.16.0), which replaced «Pedirme confirmación antes de ejecutar».
  */
 class InstinctProposalSettings(context: Context) {
   private val app = context.applicationContext
   private val enabled = File(app.noBackupFilesDir, "instinct-proposals-enabled")
-  private val askFirst = File(app.noBackupFilesDir, "instinct-proposals-ask-first")
   private val replyMode = File(app.noBackupFilesDir, "instinct-proposals-reply-mode")
   private val ackChannel = File(app.noBackupFilesDir, "instinct-proposals-ack-channel")
 
@@ -48,10 +48,6 @@ class InstinctProposalSettings(context: Context) {
       InstinctProposalCenter.undos.clear()
     }
   }
-
-  /** With this on, nothing runs automatically: every proposal waits for Confirmar or «dale». */
-  fun asksFirst(): Boolean = runCatching { askFirst.readText() == "true" }.getOrDefault(false)
-  fun setAsksFirst(value: Boolean) { if (value) askFirst.writeText("true") else if (askFirst.exists()) askFirst.delete() }
 
   /** «Responderle a Instinct». Never by default; a restore never brings it, like the other switches. */
   fun replyMode(): InstinctReplyMode = runCatching { InstinctReplyMode.valueOf(replyMode.readText()) }.getOrDefault(InstinctReplyMode.NEVER)
@@ -162,6 +158,7 @@ object InstinctProposalIntake {
     OFFERED("Llegó al panel abierto."),
     EXECUTED("Se ejecutó."),
     CONFIRM("Quedó para confirmar."),
+    REFUSED("Se rechazó: elegiste que Instinct nunca haga esa acción."),
     FAILED("Se intentó, pero Android no lo permitió."),
     REPLIED("Se respondió a Instinct."),
     REPLY_FAILED("No se pudo responder."),
@@ -284,7 +281,10 @@ object InstinctProposalCenter {
         is ProposalCheck.Invalid -> reply(app, acks.resolve(ticket, index, InstinctAck.invalid(check)))
         // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
         is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index, AckEntry(AckKind.OK, check.order, answer(app, check.kind), informative = true)))
-        is ProposalCheck.Valid -> if (check.deferred != null) schedule(app, check, fingerprint, ticket, index, message) else {
+        // «Nunca» refuses at once, whatever the hour; Confirmar and the quiet hours are decided when it runs.
+        is ProposalCheck.Valid -> if (refusedByPolicy(app, check.command)) {
+          reply(app, acks.resolve(ticket, index, AckEntry(AckKind.ERROR, check.order, InstinctAutonomyPolicy.REFUSED)))
+        } else if (check.deferred != null) schedule(app, check, fingerprint, ticket, index, message) else {
           val proposal = book.offer(check.order, check.command, fingerprint)
           if (proposal == null) reply(app, acks.resolve(ticket, index,
             AckEntry(AckKind.ERROR, check.order, "ya había una orden igual esperando confirmación; no se duplica.")))
@@ -384,6 +384,7 @@ object InstinctProposalCenter {
       val order = book.pending().firstOrNull { it.id == id }?.order ?: return@forEach
       if (book.expireNow(id)) {
         cancelNotification(context, id)
+        book.find(id)?.let { InstinctTrust.record(context, it.command, TrustEvent.VENCIDA) }
         report(context, id, AckEntry(AckKind.EXPIRED, order, "venció sin que se confirmara; no se ejecutó."))
       }
     }
@@ -397,6 +398,7 @@ object InstinctProposalCenter {
       if (now < proposal.createdAt + ProposalBook.TTL_MILLIS - EXPIRY_MARGIN_MILLIS) return@forEach
       if (book.expireNow(id)) {
         cancelNotification(context, id)
+        InstinctTrust.record(context, proposal.command, TrustEvent.VENCIDA)
         report(context, id, AckEntry(AckKind.EXPIRED, proposal.order, "venció sin que se confirmara; no se ejecutó."))
       }
     }
@@ -437,6 +439,7 @@ object InstinctProposalCenter {
 
   /** A scheduled order that fired late waits for Confirmar. */
   internal fun askLate(context: Context, proposal: ProposalBook.Proposal, reason: String) {
+    if (refusedByPolicy(context, proposal.command)) { refuse(context, proposal, InstinctAutonomyPolicy.REFUSED); return }
     askConfirmation(context, proposal, reason)
     report(context, proposal.id, AckEntry(AckKind.WAITING, proposal.order, reason))
   }
@@ -449,7 +452,8 @@ object InstinctProposalCenter {
     val log = if (!InstinctProposalSettings(context).channel().usesLog) null
       else if (forChat) InstinctCatalogLog.HIDDEN
       else InstinctLogSettings(context).let { InstinctCatalogLog(it.url(), it.token()) }
-    return InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat, log)
+    return InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat, log,
+      InstinctAutonomySettings(context).policy())
   }
 
   /**
@@ -488,20 +492,30 @@ object InstinctProposalCenter {
   }
 
   /**
-   * Null: run now without asking. Otherwise the reason it waits for Confirmar. [foreground] is true inside the open
-   * panel, where opening another app is allowed. Acquires the anti-loop budget only when it returns null.
+   * Whether [command] runs now, waits for Confirmar or is refused. The blockers that already existed are decided
+   * first and the autonomy policy after ([InstinctAutonomyGate.combine]): the policy can only make an order stricter.
+   * [foreground] is true inside the open panel, where opening another app is allowed. The anti-loop budget is
+   * acquired only for an order that runs; a routine counts as one execution.
    */
-  fun autoRunBlocker(context: Context, command: PhoneCommand, foreground: Boolean): String? {
+  fun gate(context: Context, command: PhoneCommand, foreground: Boolean): InstinctAutonomyGate.Gate {
     // A routine is checked as a whole before its first step: one step that cannot run leaves all of it for Confirmar.
-    val steps = steps(context, command) ?: return "La rutina ya no está habilitada para Instinct o cambió."
-    steps.firstNotNullOfOrNull { blocker(context, it, foreground) }?.let { return it }
-    // A routine counts as one execution.
-    return if (!budget.tryAcquire()) "Instinct pidió muchas acciones seguidas; esta espera tu confirmación." else null
+    val steps = steps(context, command)
+    val structural = if (steps == null) "La rutina ya no está habilitada para Instinct o cambió."
+      else steps.firstNotNullOfOrNull { blocker(context, it, foreground) }
+    return InstinctAutonomyGate.combine(structural, policy(context, command, steps)) { budget.tryAcquire() }
   }
 
-  /** The checks of [autoRunBlocker] for one command, without the budget. */
+  /** The autonomy decision for [command] now, at the hour it runs (a deferred order: when it fires). */
+  internal fun policy(context: Context, command: PhoneCommand, steps: List<PhoneCommand>? = steps(context, command)): AutonomyDecision =
+    InstinctAutonomySettings(context).policy().decide(steps ?: emptyList(), isRoutine(command),
+      InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock()))
+
+  /** «Nunca» for some category of [command]: refused whatever the hour. */
+  internal fun refusedByPolicy(context: Context, command: PhoneCommand): Boolean =
+    InstinctAutonomySettings(context).policy().refuses(steps(context, command) ?: emptyList(), isRoutine(command))
+
+  /** The checks that existed before the autonomy policy, for one command, without the budget. */
   internal fun blocker(context: Context, command: PhoneCommand, foreground: Boolean): String? = when {
-    InstinctProposalSettings(context).asksFirst() -> "Elegiste confirmar cada propuesta."
     !foreground && keyguardLocked(context) -> "El teléfono estaba bloqueado."
     !foreground && opensActivity(command) && !accessibilityConnected() ->
       "Para abrir otra app sin tocar nada, Android necesita el servicio de Accesibilidad de Insto activo."
@@ -510,11 +524,14 @@ object InstinctProposalCenter {
 
   /** The panel is closed: runs the proposal now, or leaves it for Confirmar when it cannot or should not. */
   internal fun runInBackground(context: Context, proposal: ProposalBook.Proposal) {
-    val blocker = autoRunBlocker(context, proposal.command, foreground = false)
-    if (blocker != null) {
-      askConfirmation(context, proposal, blocker)
-      report(context, proposal.id, AckEntry(AckKind.WAITING, proposal.order, blocker))
-      return
+    when (val gate = gate(context, proposal.command, foreground = false)) {
+      is InstinctAutonomyGate.Gate.Refuse -> { refuse(context, proposal, gate.reason); return }
+      is InstinctAutonomyGate.Gate.Wait -> {
+        askConfirmation(context, proposal, gate.reason)
+        report(context, proposal.id, AckEntry(AckKind.WAITING, proposal.order, gate.reason))
+        return
+      }
+      InstinctAutonomyGate.Gate.Run -> Unit
     }
     val claim = book.claim(proposal.id, fingerprint(context))
     if (claim !is ProposalBook.Claim.Granted) { reportUnavailable(context, proposal, claim); return }
@@ -544,7 +561,9 @@ object InstinctProposalCenter {
       }
       else -> {
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.EXECUTED)
-        val undo = capture?.let { InstinctUndoActions.complete(context, it) }?.let { undos.offer(proposal.id, proposal.order, listOf(it)) }
+        InstinctTrust.record(context, proposal.command, TrustEvent.EJECUTADA)
+        val undo = capture?.let { InstinctUndoActions.complete(context, it) }
+          ?.let { undos.offer(proposal.id, proposal.order, listOf(it), category = InstinctTrust.category(proposal.command)) }
         notifyResult(context, proposal, "Instinct hizo: ${proposal.summary}", result.message, undo)
         report(context, proposal, result)
       }
@@ -580,7 +599,8 @@ object InstinctProposalCenter {
         }
       }
     }.run(routine)
-    val undo = undos.offer(proposal.id, proposal.order, reversals, irreversible)
+    val undo = undos.offer(proposal.id, proposal.order, reversals, irreversible, category = InstinctCategory.RUTINAS)
+    if (run.finished) InstinctTrust.record(context, InstinctCategory.RUTINAS, TrustEvent.EJECUTADA)
     InstinctProposalIntake.diagnose(if (run.finished) InstinctProposalIntake.Diagnosis.EXECUTED else InstinctProposalIntake.Diagnosis.FAILED,
       run.summary.takeUnless { run.finished })
     notifyResult(context, proposal, if (run.finished) "Instinct hizo: rutina ${routine.name}" else "Instinct pidió: rutina ${routine.name}", run.summary, undo)
@@ -596,22 +616,40 @@ object InstinctProposalCenter {
       ProposalBook.Claim.Expired -> AckEntry(AckKind.EXPIRED, proposal.order, "venció sin que se confirmara; no se ejecutó.")
       else -> return
     }
+    if (claim == ProposalBook.Claim.Expired) InstinctTrust.record(context, proposal.command, TrustEvent.VENCIDA)
     report(context, proposal.id, entry)
   }
 
-  private fun askConfirmation(context: Context, proposal: ProposalBook.Proposal, reason: String) {
-    InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.CONFIRM, reason)
-    notify(context, proposal, reason)
+  /** «Nunca»: the proposal is dropped without running, the person sees why and Instinct hears «#insto-error». */
+  internal fun refuse(context: Context, proposal: ProposalBook.Proposal, reason: String) {
+    book.discard(proposal.id)
+    cancelNotification(context, proposal.id)
+    InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.REFUSED)
+    notifyResult(context, proposal, "Instinct pidió: ${proposal.summary}",
+      "No se ejecutó: elegiste que Instinct nunca haga esto. Podés cambiarlo en Ajustes → Propuestas de Instinct → Autonomía.")
+    report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, reason))
   }
+
+  private fun askConfirmation(context: Context, proposal: ProposalBook.Proposal, reason: String) {
+    InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.CONFIRM, sentence(reason))
+    notify(context, proposal, sentence(reason))
+  }
+
+  /** A reason as the person reads it: capitalized and ending with a period («horas de silencio» → «Horas de silencio.»). */
+  internal fun sentence(reason: String): String =
+    reason.trim().replaceFirstChar { it.uppercaseChar() }.let { if (it.endsWith('.')) it else "$it." }
 
   /**
    * Confirmation from the floating assistant or, with its [token], from the notification: the only way a proposal is
    * executed. The fingerprint is recomputed now, so a proposal confirmed after the switch, the contact or the
    * WhatsApp flavor changed is refused and can no longer run.
    */
-  fun claim(context: Context, id: Long, token: String? = null, fromNotification: Boolean = false): ProposalBook.Claim {
+  fun claim(context: Context, id: Long, token: String? = null, fromNotification: Boolean = false, auto: Boolean = false): ProposalBook.Claim {
     val proposal = book.find(id)
     val claim = book.claim(id, fingerprint(context), token, requireToken = fromNotification)
+    // For the trust ledger: the open panel running it alone, or the person confirming it.
+    if (claim is ProposalBook.Claim.Granted) InstinctTrust.record(context, claim.proposal.command,
+      if (auto) TrustEvent.EJECUTADA else TrustEvent.CONFIRMADA)
     if (claim !is ProposalBook.Claim.Unknown || !fromNotification) cancelNotification(context, id)
     if (proposal != null && claim !is ProposalBook.Claim.Granted && claim !is ProposalBook.Claim.Unknown) reportUnavailable(context, proposal, claim)
     return claim
@@ -619,8 +657,10 @@ object InstinctProposalCenter {
 
   fun discard(context: Context, id: Long) {
     val proposal = book.pending().firstOrNull { it.id == id }
-    if (book.discard(id) && proposal != null)
+    if (book.discard(id) && proposal != null) {
+      InstinctTrust.record(context, proposal.command, TrustEvent.DESCARTADA)
       report(context, id, AckEntry(AckKind.DISCARDED, proposal.order, "la persona la descartó; no se ejecutó."))
+    }
     cancelNotification(context, id)
   }
 
@@ -633,7 +673,7 @@ object InstinctProposalCenter {
     if (book.isPending(proposal.id)) notify(context.applicationContext, proposal)
   }
 
-  private fun canNotify(context: Context, channel: String = CHANNEL_ID): Boolean {
+  internal fun canNotify(context: Context, channel: String = CHANNEL_ID): Boolean {
     val manager = context.getSystemService(NotificationManager::class.java) ?: return false
     if (Build.VERSION.SDK_INT >= 33 &&
       context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false
@@ -649,7 +689,7 @@ object InstinctProposalCenter {
     return true
   }
 
-  private fun builder(context: Context, channel: String = CHANNEL_ID): Notification.Builder =
+  internal fun builder(context: Context, channel: String = CHANNEL_ID): Notification.Builder =
     if (Build.VERSION.SDK_INT >= 26) Notification.Builder(context, channel) else @Suppress("DEPRECATION") Notification.Builder(context)
 
   private fun notify(context: Context, proposal: ProposalBook.Proposal, reason: String? = null) {
@@ -737,7 +777,10 @@ object InstinctProposalCenter {
         .setStyle(Notification.BigTextStyle().bigText(message)).setVisibility(Notification.VISIBILITY_PRIVATE).setAutoCancel(true).build()
       runCatching { app.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_BASE + entry.proposalId.toInt(), notification) }
     }
-    if (reverted.isNotEmpty()) reply(app, acks.note(entry.proposalId, AckEntry(AckKind.UNDONE, entry.order, message)))
+    if (reverted.isNotEmpty()) {
+      entry.category?.let { InstinctTrust.record(app, it, TrustEvent.DESHECHA) }
+      reply(app, acks.note(entry.proposalId, AckEntry(AckKind.UNDONE, entry.order, message)))
+    }
     return message
   }
 
@@ -774,9 +817,17 @@ object InstinctProposalCenter {
   fun notificationId(id: Long): Int = NOTIFICATION_BASE + id.toInt()
 }
 
-/** «Descartar» and «Deshacer» from the notifications. Not exported; only Insto's own PendingIntents reach it. */
+/**
+ * «Descartar», «Deshacer» and the trust actions («Volver a automático», «Sí», «No») from the notifications. Not
+ * exported; only Insto's own PendingIntents reach it.
+ */
 class InstinctProposalReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
+    if (intent.action == InstinctTrust.ACTION_RESTORE || intent.action == InstinctTrust.ACTION_RAISE_YES ||
+      intent.action == InstinctTrust.ACTION_RAISE_NO) {
+      InstinctTrust.answer(context, intent.action, intent.getStringExtra(InstinctTrust.EXTRA_TOKEN))
+      return
+    }
     if (intent.action == InstinctProposalCenter.ACTION_UNDO) {
       val id = intent.getLongExtra(InstinctProposalCenter.EXTRA_UNDO_ID, -1L)
       if (id > 0) InstinctProposalCenter.undo(context, id, intent.getStringExtra(InstinctProposalCenter.EXTRA_UNDO_TOKEN))
