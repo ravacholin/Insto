@@ -233,6 +233,21 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
     return true
   }
 
+  /**
+   * Expires [id] now, before its time: its reply handle is about to lapse and Instinct must still hear that it
+   * expired. Expiring early only ever runs less. True when it was pending.
+   */
+  @Synchronized fun expireNow(id: Long): Boolean {
+    expire()
+    val entry = entries[id] ?: return false
+    if (entry.state != State.PENDING) return false
+    entry.state = State.EXPIRED
+    return true
+  }
+
+  /** The proposal [id] whatever its state, to report on it; never to run it (only [claim] does). */
+  @Synchronized fun find(id: Long): Proposal? = entries[id]?.proposal
+
   @Synchronized fun isPending(id: Long): Boolean { expire(); return entries[id]?.state == State.PENDING }
 
   @Synchronized fun pending(): List<Proposal> { expire(); return entries.values.filter { it.state == State.PENDING }.map { it.proposal } }

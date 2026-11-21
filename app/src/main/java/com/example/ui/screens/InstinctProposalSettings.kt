@@ -29,6 +29,8 @@ import com.example.data.PinnedContact
 import com.example.data.WhatsAppFlavor
 import com.example.phone.InstinctProposalIntake
 import com.example.phone.InstinctProposalSettings
+import com.example.phone.InstinctReplyMode
+import com.example.ui.components.SettingsChoices
 import com.example.ui.components.SettingsDescription
 import com.example.ui.components.SettingsSwitch
 
@@ -51,6 +53,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
   var explain by remember { mutableStateOf(false) }
   val enabled = remember(revision) { settings.isEnabled() }
   val asksFirst = remember(revision) { settings.asksFirst() }
+  val replyMode = remember(revision) { settings.replyMode() }
   val listenerEnabled = remember(revision) {
     NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
   }
@@ -73,6 +76,12 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       }
       SettingsSwitch("Pedirme confirmación antes de ejecutar", asksFirst, { settings.setAsksFirst(it); revision++ },
         "Apagado: Insto ejecuta y avisa después. Encendido: cada orden espera tu toque o un «dale».")
+      Text("Responderle a Instinct", style = MaterialTheme.typography.bodyLarge)
+      SettingsDescription("Insto contesta en el mismo chat, con la acción «Responder» de la notificación de WhatsApp, " +
+        "una línea por orden (#insto-ok, #insto-espera, #insto-error, #insto-incierto). No abre WhatsApp. " +
+        "Solo usa el texto del resultado que ya te muestra a vos.")
+      SettingsChoices(InstinctReplyMode.entries, replyMode, { settings.setReplyMode(it); revision++ }, label = ::replyModeLabel,
+        itemModifier = { Modifier.testTag("instinct_reply_${it.name.lowercase()}") })
       ProposalDiagnostics(contact, revision) { revision++ }
       if (flavor == WhatsAppFlavor.AUTO) SettingsDescription("Se usa la app de WhatsApp que Insto elige para enviar.")
     }
@@ -99,6 +108,12 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
   }
 }
 
+internal fun replyModeLabel(mode: InstinctReplyMode): String = when (mode) {
+  InstinctReplyMode.NEVER -> "Nunca"
+  InstinctReplyMode.PROBLEMS -> "Solo errores y esperas"
+  InstinctReplyMode.ALWAYS -> "Siempre"
+}
+
 /** Why orders are or are not arriving. Shows states and the last result, never a message or a name read. */
 @Composable
 private fun ProposalDiagnostics(contact: PinnedContact?, revision: Int, onRefresh: () -> Unit) {
@@ -118,6 +133,12 @@ private fun ProposalDiagnostics(contact: PinnedContact?, revision: Int, onRefres
       else "Accesibilidad de Insto: inactiva. Volumen, linterna, silencio y música se ejecutan solos; lo que abre otra app (alarma, temporizador, Spotify…) espera tu toque, porque Android no deja abrir apps en segundo plano.")
     SettingsDescription(if (diagnosis == null) "Último mensaje de WhatsApp: ninguno desde que se inició Insto."
       else "Último mensaje de WhatsApp ($ago): ${diagnosis.label}" + (detail?.let { " $it" } ?: ""))
+    val reply = InstinctProposalIntake.lastReply
+    if (reply != null) {
+      val replyAgo = ((now - InstinctProposalIntake.lastReplyAt) / 60_000L).let { if (it < 1) "hace menos de un minuto" else "hace $it min" }
+      SettingsDescription("Última respuesta a Instinct ($replyAgo): ${reply.label}" +
+        (InstinctProposalIntake.lastReplyDetail?.let { " $it" } ?: ""))
+    }
     TextButton(onClick = onRefresh) { Text("Actualizar diagnóstico") }
   }
 }

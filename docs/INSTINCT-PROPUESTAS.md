@@ -1,4 +1,4 @@
-# Órdenes de Instinct («Instinct con manos», 1.13.0)
+# Órdenes de Instinct («Instinct con manos», 1.13.0 y 1.14.0)
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
@@ -54,6 +54,37 @@ La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct 
    - Instinct ya pidió 6 acciones en los últimos 10 minutos (freno anti-bucle);
    - la acción necesita algo tuyo: confirmar «esa hora ya pasó», un permiso o elegir entre varias apps.
 
+## Respuestas a Instinct (1.14.0)
+
+Hasta 1.13.0, Instinct nunca sabía qué había pasado con sus órdenes. Ahora Insto puede contestarle en el mismo chat.
+
+**Ajuste:** **Ajustes → Propuestas de Instinct → «Responderle a Instinct»**: **Nunca** (valor por defecto), **Solo errores y esperas** o **Siempre**. Vive en `noBackupFilesDir` (`instinct-proposals-reply-mode`), como los otros interruptores: una restauración nunca lo enciende ni lo trae. Apagar «Recibir órdenes de Instinct» también corta los acuses pendientes.
+
+**Mecanismo.** Insto responde con la acción **«Responder»** de la misma notificación de WhatsApp que trajo las órdenes (`Notification.Action` con un `RemoteInput` de texto libre, de WhatsApp o WhatsApp Business): `RemoteInput.addResultsToIntent` y `PendingIntent.send` desde el proceso de Insto. **No abre WhatsApp** ni usa el envío automático por Accesibilidad: no interrumpe la pantalla y funciona igual con el teléfono bloqueado.
+
+- `NotificationAccessService` guarda **solo** esa acción y la clave de su `RemoteInput` (`InstinctReplyHandle`), en memoria, asociada al mensaje aceptado y durante **10 minutos como máximo** (igual que `ProposalBook.TTL_MILLIS`). Nunca se persiste. Se lee solo de un mensaje que pasó todos los filtros y solo con las respuestas activas.
+- Si WhatsApp no ofrece «Responder», o el envío tira `CanceledException`, el acuse se descarta en silencio y el diagnóstico lo registra («No se pudo responder: WhatsApp no ofreció Responder»). **Nunca se reintenta** ni se abre WhatsApp en su lugar.
+- Después de responder, WhatsApp vuelve a publicar la notificación con nuestro mensaje. El filtro de contacto la descarta (el remitente del último mensaje sos vos) y, aunque no lo hiciera, el acuse no tiene ninguna línea que empiece con «#insto ».
+
+**Formato.** Un solo mensaje por mensaje de Instinct procesado, con una línea por orden, en el orden en que llegaron:
+
+```text
+#insto-ok <orden original> → <mensaje de resultado de Insto>
+#insto-espera <orden original> → <motivo por el que quedó para Confirmar>
+#insto-error <orden original> → <motivo>
+#insto-incierto <orden original> → <mensaje> · no se repite
+```
+
+- El mensaje es el texto de resultado que Insto ya produce para vos (`PhoneActionResult.message`) o un motivo fijo. No se agregan datos del teléfono.
+- Los motivos de `#insto-error` para una línea inválida: vacía («la línea no tenía ninguna orden»), insegura o pregunta, no entendida («no la entendí: usá una de las formas del catálogo»), incoherente con el control semántico y no permitida («esa acción no está permitida para Instinct»).
+- **Guardia anti-bucle:** ninguna línea puede empezar con «#insto » (con espacio). El formateador aplana saltos de línea y caracteres de control, y además pasa el acuse por el mismo lector de órdenes: si detectara una, no se envía.
+- Como máximo 3 líneas (igual que el máximo de órdenes) y 600 caracteres. La orden original se recorta a 80.
+- **Solo errores y esperas** omite las líneas `#insto-ok`; si todo salió bien, no se envía nada.
+
+**Seguimiento.** Si una orden quedó en espera y después la confirmás, la descartás o vence, Insto manda un segundo acuse breve con la misma acción guardada, **solo si sigue vigente**: `#insto-ok …` (o `#insto-error`/`#insto-incierto` si al confirmarla falló), `#insto-descartada …` o `#insto-vencida …`. Este seguimiento sale también en «Solo errores y esperas», porque cierra una espera que Instinct ya vio. Para que el aviso de vencimiento llegue antes de que caduque la acción, una orden en espera vence unos 2 segundos antes de sus 10 minutos.
+
+**Diagnóstico.** La pantalla de diagnóstico suma una línea propia, sin contenido: «Última respuesta a Instinct: Se respondió a Instinct» o «No se pudo responder» con el motivo. No reemplaza el estado del último mensaje.
+
 ## Idempotencia y vencimiento
 
 - Las órdenes viven solo en memoria (`ProposalBook`). Cada una se ejecuta como máximo una vez gracias a un `claim` atómico. Si WhatsApp vuelve a publicar la misma notificación, no pasa nada.
@@ -67,13 +98,14 @@ La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct 
 - El texto no se guarda, no se registra (Logcat muestra solo contadores, en debug), no sale del teléfono y no entra en copias de seguridad.
 - Los interruptores viven en `noBackupFilesDir`: una restauración nunca enciende ni la lectura ni la ejecución automática.
 - El diagnóstico de Ajustes muestra estados y el motivo del último resultado. Nunca muestra el contenido del mensaje.
+- Los acuses a Instinct (apagados por defecto) solo repiten la orden que Instinct mandó y el texto de resultado que Insto ya te muestra. La acción «Responder» que los envía vive en memoria como máximo 10 minutos y nunca se guarda.
 
 ## Lo que no hacen las órdenes
 
 - No alimentan el aprendizaje: no crean frases (`LearnedPhraseStore`) ni estructuras (`PhrasePatterns`).
 - No cuentan como turnos de `OperationalContext` ni lo modifican. Eso sí: al ejecutar un control multimedia sin app indicada, `PhoneActionExecutor` sigue eligiendo la sesión con el contexto vigente, como con cualquier pedido.
 - No se juntan en planes: cada línea es un comando independiente.
-- No agregan dependencias, servidores ni llamadas de red.
+- No agregan dependencias, servidores ni llamadas de red. Los acuses usan la acción «Responder» de WhatsApp, que ya existe en la notificación.
 
 ## Límites conocidos
 
@@ -134,4 +166,13 @@ Acciones permitidas (usá estas formas):
 #insto agendar reunión mañana a las 17:00 durante una hora
 
 Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni rutinas, ni navegación, ni varias acciones juntas. Insto los rechaza siempre.
+
+Respuestas de Insto (si la persona las activó):
+Insto puede contestarte en este chat con una línea por orden, en el mismo orden:
+#insto-ok <orden> → <resultado>          la orden se ejecutó
+#insto-espera <orden> → <motivo>         quedó esperando que la persona la confirme
+#insto-error <orden> → <motivo>          no se ejecutó (no se entendió, no está permitida o falló)
+#insto-incierto <orden> → <mensaje> · no se repite   pudo haberse hecho; Insto no la repite
+Después de una espera puede llegar #insto-ok, #insto-descartada o #insto-vencida.
+Esas líneas son informativas: no las respondas con nuevas órdenes, salvo una sola orden corregida después de un #insto-error. Nunca repitas una orden después de #insto-incierto ni de #insto-espera.
 ```

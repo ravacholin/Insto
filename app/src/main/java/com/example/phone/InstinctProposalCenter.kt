@@ -30,6 +30,7 @@ class InstinctProposalSettings(context: Context) {
   private val app = context.applicationContext
   private val enabled = File(app.noBackupFilesDir, "instinct-proposals-enabled")
   private val askFirst = File(app.noBackupFilesDir, "instinct-proposals-ask-first")
+  private val replyMode = File(app.noBackupFilesDir, "instinct-proposals-reply-mode")
 
   /** Read on every posted notification: one small file, before anything of the notification is touched. */
   fun isEnabled(): Boolean = Build.VERSION.SDK_INT >= MIN_SDK && runCatching { enabled.readText() == "true" }.getOrDefault(false)
@@ -38,6 +39,8 @@ class InstinctProposalSettings(context: Context) {
     if (value) enabled.writeText("true")
     else {
       if (enabled.exists()) enabled.delete()
+      // Replies are cut first: discarding below must not answer Instinct either.
+      InstinctProposalCenter.acks.clear()
       // Turning it off discards every pending proposal: nothing can run after this.
       InstinctProposalCenter.discardAll(app)
     }
@@ -46,6 +49,15 @@ class InstinctProposalSettings(context: Context) {
   /** With this on, nothing runs automatically: every proposal waits for Confirmar or «dale». */
   fun asksFirst(): Boolean = runCatching { askFirst.readText() == "true" }.getOrDefault(false)
   fun setAsksFirst(value: Boolean) { if (value) askFirst.writeText("true") else if (askFirst.exists()) askFirst.delete() }
+
+  /** «Responderle a Instinct». Never by default; a restore never brings it, like the other switches. */
+  fun replyMode(): InstinctReplyMode = runCatching { InstinctReplyMode.valueOf(replyMode.readText()) }.getOrDefault(InstinctReplyMode.NEVER)
+  fun setReplyMode(value: InstinctReplyMode) {
+    if (value == InstinctReplyMode.NEVER) {
+      if (replyMode.exists()) replyMode.delete()
+      InstinctProposalCenter.acks.clear()
+    } else replyMode.writeText(value.name)
+  }
 
   companion object {
     /** [Notification.EXTRA_IS_GROUP_CONVERSATION] exists from Android 9; without it a group cannot be excluded. */
@@ -88,6 +100,37 @@ internal class ExtrasProposalNotification(
 }
 
 /**
+ * WhatsApp's «Responder» action of the notification that brought the orders: the action and the key of its free-text
+ * [android.app.RemoteInput]. In memory only, inside [InstinctAckLedger], for at most ten minutes; never persisted.
+ * Sending fills the remote input and fires WhatsApp's own PendingIntent: WhatsApp is not opened, the screen is not
+ * touched and it works the same with the phone locked.
+ */
+class InstinctReplyHandle internal constructor(private val action: Notification.Action, private val resultKey: String) {
+  /** False when WhatsApp cancelled the action: the reply is dropped, never retried another way. */
+  fun send(context: Context, text: String): Boolean {
+    val inputs = action.remoteInputs ?: return false
+    val intent = Intent().addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+    android.app.RemoteInput.addResultsToIntent(inputs, intent, Bundle().apply { putCharSequence(resultKey, text) })
+    if (Build.VERSION.SDK_INT >= 28) android.app.RemoteInput.setResultsSource(intent, android.app.RemoteInput.SOURCE_FREE_FORM_INPUT)
+    return try { action.actionIntent.send(context, 0, intent); true } catch (_: PendingIntent.CanceledException) { false }
+  }
+
+  companion object {
+    /** The action whose remote input takes free text: WhatsApp's and WhatsApp Business's «Responder». */
+    fun from(notification: Notification): InstinctReplyHandle? {
+      val actions = (notification.actions.orEmpty().asList() +
+        runCatching { Notification.WearableExtender(notification).actions }.getOrDefault(emptyList()))
+      for (action in actions) {
+        if (action?.actionIntent == null) continue
+        val input = action.remoteInputs?.firstOrNull { it.allowFreeFormInput && it.resultKey.isNotEmpty() } ?: continue
+        return InstinctReplyHandle(action, input.resultKey)
+      }
+      return null
+    }
+  }
+}
+
+/**
  * Entry point from [NotificationAccessService]. With the switch off it returns before reading the notification. With
  * it on, the filters decide in order and every line that passes them is validated before it is offered. Logcat gets
  * stage counters only, never a title, a name or a text.
@@ -111,6 +154,8 @@ object InstinctProposalIntake {
     EXECUTED("Se ejecutó."),
     CONFIRM("Quedó para confirmar."),
     FAILED("Se intentó, pero Android no lo permitió."),
+    REPLIED("Se respondió a Instinct."),
+    REPLY_FAILED("No se pudo responder."),
   }
 
   @Volatile var lastDiagnosis: Diagnosis? = null
@@ -123,12 +168,25 @@ object InstinctProposalIntake {
     private set
 
   internal fun diagnose(value: Diagnosis, detail: String? = null) {
+    if (value == Diagnosis.REPLIED || value == Diagnosis.REPLY_FAILED) {
+      // Replies have their own line: they never hide what happened to the orders.
+      lastReply = value; lastReplyDetail = detail; lastReplyAt = SystemClock.elapsedRealtime(); return
+    }
     lastDiagnosis = value; lastDetail = detail; lastDiagnosisAt = SystemClock.elapsedRealtime()
   }
 
+  /** The last reply to Instinct: [Diagnosis.REPLIED] or [Diagnosis.REPLY_FAILED], without any content. */
+  @Volatile var lastReply: Diagnosis? = null
+    private set
+  @Volatile var lastReplyDetail: String? = null
+    private set
+  @Volatile var lastReplyAt: Long = 0L
+    private set
+
   private val whatsAppPackages = setOf("com.whatsapp", "com.whatsapp.w4b")
 
-  fun onPosted(context: Context, notification: () -> ProposalNotification?) {
+  /** [replyHandle] is read only for an accepted message, and only when replies are on. */
+  fun onPosted(context: Context, notification: () -> ProposalNotification?, replyHandle: () -> InstinctReplyHandle? = { null }) {
     if (!InstinctProposalSettings(context).isEnabled()) return
     val app = context.applicationContext
     val view = notification() ?: return
@@ -155,7 +213,8 @@ object InstinctProposalIntake {
     val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser) }
     if (checks.none { it is ProposalCheck.Valid }) diagnose(Diagnosis.NOT_UNDERSTOOD)
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
-    InstinctProposalCenter.deliver(app, checks, fingerprint)
+    val ticket = InstinctProposalCenter.openReply(app, checks.size, replyHandle)
+    InstinctProposalCenter.deliver(app, checks, fingerprint, ticket)
     log(counters() + " valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")
   }
 
@@ -204,10 +263,21 @@ object InstinctProposalCenter {
   fun attach(value: Listener) { listener = value }
   fun detach(value: Listener) { if (listener === value) listener = null }
 
-  internal fun deliver(context: Context, checks: List<ProposalCheck>, fingerprint: String) {
-    val offered = checks.filterIsInstance<ProposalCheck.Valid>().mapNotNull { book.offer(it.order, it.command, fingerprint) }
-    val notUnderstood = checks.any { it is ProposalCheck.Invalid }
+  internal fun deliver(context: Context, checks: List<ProposalCheck>, fingerprint: String, ticket: InstinctAckLedger.Ticket? = null) {
     val app = context.applicationContext
+    val offered = ArrayList<ProposalBook.Proposal>()
+    checks.forEachIndexed { index, check ->
+      when (check) {
+        is ProposalCheck.Invalid -> reply(app, acks.resolve(ticket, index, InstinctAck.invalid(check)))
+        is ProposalCheck.Valid -> {
+          val proposal = book.offer(check.order, check.command, fingerprint)
+          if (proposal == null) reply(app, acks.resolve(ticket, index,
+            AckEntry(AckKind.ERROR, check.order, "ya había una orden igual esperando confirmación; no se duplica.")))
+          else { acks.link(ticket, index, proposal.id); offered += proposal }
+        }
+      }
+    }
+    val notUnderstood = checks.any { it is ProposalCheck.Invalid }
     val run = Runnable {
       val target = listener
       if (target != null) {
@@ -219,6 +289,57 @@ object InstinctProposalCenter {
       }
     }
     if (Looper.myLooper() == Looper.getMainLooper()) run.run() else main.post(run)
+  }
+
+  /**
+   * Replies to Instinct: one per accepted message, through WhatsApp's «Responder» action. In memory only; cleared
+   * when «Recibir órdenes» is turned off.
+   */
+  val acks = InstinctAckLedger<InstinctReplyHandle>({ clock() }, { replyMode() })
+  @Volatile private var replyModeSource: () -> InstinctReplyMode = { InstinctReplyMode.NEVER }
+  private fun replyMode(): InstinctReplyMode = replyModeSource()
+  /** Sends one reply; a seam for tests. */
+  internal var replySender: (Context, InstinctReplyHandle, String) -> Boolean = { context, handle, text -> handle.send(context, text) }
+  /** Before its handle lapses, a waiting order is expired here so its «vencida» line can still go out. */
+  private const val EXPIRY_MARGIN_MILLIS = 2_000L
+
+  /** Opens the reply of an accepted message. The handle is read only when replies are on. */
+  internal fun openReply(context: Context, orders: Int, handle: () -> InstinctReplyHandle?): InstinctAckLedger.Ticket? {
+    val app = context.applicationContext
+    val settings = InstinctProposalSettings(app)
+    replyModeSource = { settings.replyMode() }
+    if (settings.replyMode() == InstinctReplyMode.NEVER) return null
+    val ticket = acks.open(runCatching(handle).getOrNull(), orders) ?: return null
+    main.postDelayed({ sweepReplies(app) }, ProposalBook.TTL_MILLIS - EXPIRY_MARGIN_MILLIS)
+    return ticket
+  }
+
+  /** Sends [outgoing], if any. Without a «Responder» action or when WhatsApp cancels it, it is dropped and diagnosed. */
+  internal fun reply(context: Context, outgoing: InstinctAckLedger.Outgoing<InstinctReplyHandle>?) {
+    outgoing ?: return
+    val handle = outgoing.handle ?: run {
+      InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.REPLY_FAILED, "WhatsApp no ofreció Responder."); return
+    }
+    val sent = runCatching { replySender(context.applicationContext, handle, outgoing.text) }.getOrDefault(false)
+    if (sent) InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.REPLIED)
+    else InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.REPLY_FAILED, "WhatsApp no aceptó la respuesta.")
+  }
+
+  /** The outcome of [proposal] for Instinct. Only the first outcome of each line and one follow-up are ever sent. */
+  fun report(context: Context, proposalId: Long, entry: AckEntry) = reply(context, acks.report(proposalId, entry))
+
+  fun report(context: Context, proposal: ProposalBook.Proposal, result: PhoneActionResult) =
+    report(context, proposal.id, InstinctAck.entry(proposal.order, result))
+
+  /** Waiting orders whose reply handle is about to lapse expire now and tell Instinct. */
+  internal fun sweepReplies(context: Context) {
+    acks.waitingDue(EXPIRY_MARGIN_MILLIS).forEach { id ->
+      val order = book.pending().firstOrNull { it.id == id }?.order ?: return@forEach
+      if (book.expireNow(id)) {
+        cancelNotification(context, id)
+        report(context, id, AckEntry(AckKind.EXPIRED, order, "venció sin que se confirmara; no se ejecutó."))
+      }
+    }
   }
 
   /** Anti-loop brake shared by both paths: 6 automatic executions per 10 minutes. */
@@ -251,32 +372,51 @@ object InstinctProposalCenter {
   /** The panel is closed: runs the proposal now, or leaves it for Confirmar when it cannot or should not. */
   internal fun runInBackground(context: Context, proposal: ProposalBook.Proposal) {
     val blocker = autoRunBlocker(context, proposal.command, foreground = false)
-    if (blocker != null) { askConfirmation(context, proposal, blocker); return }
+    if (blocker != null) {
+      askConfirmation(context, proposal, blocker)
+      report(context, proposal.id, AckEntry(AckKind.WAITING, proposal.order, blocker))
+      return
+    }
     val claim = book.claim(proposal.id, fingerprint(context))
-    if (claim !is ProposalBook.Claim.Granted) return
+    if (claim !is ProposalBook.Claim.Granted) { reportUnavailable(context, proposal, claim); return }
     val result = PhoneActionExecutor(context).execute(proposal.command)
     when {
       // Maybe it happened: never offered again, so it is never repeated.
       result.outcome == PhoneActionOutcome.UNCERTAIN -> {
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.FAILED, result.message)
         notifyResult(context, proposal, "Instinct pidió: ${proposal.summary}", "${result.message} Revisalo; no se repite.")
+        report(context, proposal, result)
       }
       result.outcome == PhoneActionOutcome.REJECTED -> {
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.FAILED, result.message)
         notifyResult(context, proposal, "Instinct pidió: ${proposal.summary}", "No se pudo: ${result.message}")
+        report(context, proposal, result)
       }
-      result.confirmation != null || result.outcome == PhoneActionOutcome.NEEDS_INPUT || result.stopwatchAutomation != null ||
-        result.appOptions.isNotEmpty() || result.contactOptions.isNotEmpty() || result.needsCamera ||
-        result.needsNotifications || result.needsContacts -> {
+      InstinctAck.needsUser(result) -> {
         // It did not happen: it goes back for a touch, which can open the panel, ask a permission or choose.
         val again = book.offer(proposal.order, proposal.command, proposal.fingerprint)
-        if (again != null) askConfirmation(context, again, result.message)
+        if (again != null) {
+          acks.relink(proposal.id, again.id)
+          askConfirmation(context, again, result.message)
+          report(context, again.id, AckEntry(AckKind.WAITING, proposal.order, result.message))
+        } else report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, "ya había una orden igual esperando confirmación; no se duplica."))
       }
       else -> {
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.EXECUTED)
         notifyResult(context, proposal, "Instinct hizo: ${proposal.summary}", result.message)
+        report(context, proposal, result)
       }
     }
+  }
+
+  /** A proposal that can no longer run, said once to Instinct. */
+  internal fun reportUnavailable(context: Context, proposal: ProposalBook.Proposal, claim: ProposalBook.Claim) {
+    val entry = when (claim) {
+      ProposalBook.Claim.Changed -> AckEntry(AckKind.ERROR, proposal.order, "cambió la configuración de Insto; no se ejecutó.")
+      ProposalBook.Claim.Expired -> AckEntry(AckKind.EXPIRED, proposal.order, "venció sin que se confirmara; no se ejecutó.")
+      else -> return
+    }
+    report(context, proposal.id, entry)
   }
 
   private fun askConfirmation(context: Context, proposal: ProposalBook.Proposal, reason: String) {
@@ -290,13 +430,17 @@ object InstinctProposalCenter {
    * WhatsApp flavor changed is refused and can no longer run.
    */
   fun claim(context: Context, id: Long, token: String? = null, fromNotification: Boolean = false): ProposalBook.Claim {
+    val proposal = book.find(id)
     val claim = book.claim(id, fingerprint(context), token, requireToken = fromNotification)
     if (claim !is ProposalBook.Claim.Unknown || !fromNotification) cancelNotification(context, id)
+    if (proposal != null && claim !is ProposalBook.Claim.Granted && claim !is ProposalBook.Claim.Unknown) reportUnavailable(context, proposal, claim)
     return claim
   }
 
   fun discard(context: Context, id: Long) {
-    book.discard(id)
+    val proposal = book.pending().firstOrNull { it.id == id }
+    if (book.discard(id) && proposal != null)
+      report(context, id, AckEntry(AckKind.DISCARDED, proposal.order, "la persona la descartó; no se ejecutó."))
     cancelNotification(context, id)
   }
 
