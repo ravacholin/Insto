@@ -19,7 +19,7 @@ data class InstinctCatalogLog(val url: String?, val token: String?) {
 }
 
 object InstinctProtocolCatalog {
-  const val VERSION = 4
+  const val VERSION = 5
   const val TITLE = "Protocolo Insto v$VERSION"
   const val ROUTINE_FORM = "ejecutar la rutina"
   /** Marks example lines in a copy sent through WhatsApp, so that copy never reads as orders for Insto. */
@@ -35,7 +35,7 @@ object InstinctProtocolCatalog {
    * token in the copy to paste ([InstinctCatalogLog.HIDDEN] in the chat copy). Never the key, in any copy.
    */
   fun text(routines: List<String>, forChat: Boolean = false, log: InstinctCatalogLog? = null,
-    autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(), mailbox: InstinctCatalogLog? = null): String {
+    autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(), mailbox: InstinctCatalogLog? = null, doorbell: Boolean = false): String {
     fun example(order: String) = (if (forChat) CHAT_MARK else "") + "${InstinctProposalProtocol.PREFIX} $order"
     return buildString {
       appendLine("Órdenes para Insto ($TITLE)")
@@ -58,6 +58,10 @@ object InstinctProtocolCatalog {
       appendLine("- Insto solo lee esas líneas: el resto de tu mensaje no se interpreta. Si una línea no se entiende o no está permitida, se descarta.")
       appendLine("- Para más tarde, envolvé la orden: \"a las HH:MM: <orden>\" (24 horas; si esa hora ya pasó hoy, es mañana) o \"en N minutos: <orden>\" / \"en N horas: <orden>\" (de 1 minuto a 24 horas). Los dos puntos después del tiempo son obligatorios. Como máximo ${InstinctDeferral.MAX_SCHEDULED} órdenes programadas.")
       appendLine("- Solo con una hora, podés agregar una única condición del clima antes de los dos puntos: \"si llueve\", \"si no llueve\", \"si hace menos de N grados\" o \"si hace más de N grados\". «Llueve» es una probabilidad de lluvia de ${WeatherConditions.RAIN_THRESHOLD_PERCENT} % o más para las 6 horas siguientes; la temperatura es la medición actual. Sin datos del clima, la orden no se ejecuta.")
+      appendLine("- Disparadores, para que el teléfono haga algo solo cuando pase algo: \"al terminar el evento: <orden>\" (el evento del calendario en curso), \"al empezar el próximo evento: <orden>\" (el próximo en las 12 horas siguientes), \"al conectar auriculares: <orden>\", \"al desconectar auriculares: <orden>\" y \"al desbloquear: <orden>\". Cada uno se usa una sola vez. Vencen a las 12 horas; con \"hasta las HH:MM\" antes de los dos puntos, a esa hora (como mucho 24 horas). Un disparador que vence sin dispararse se informa como vencida. Los eventos de todo el día no cuentan.")
+      appendLine("- Recurrentes: \"todos los días a las HH:MM hasta el DD/MM: <orden>\", \"los días hábiles a las HH:MM hasta el DD/MM: <orden>\" (de lunes a viernes) o \"los fines de semana a las HH:MM hasta el DD/MM: <orden>\". \"hasta el DD/MM\" es obligatorio y como mucho ${InstinctTriggers.MAX_RECURRING_DAYS} días; podés agregar una condición del clima antes de \"hasta el\". Como máximo ${InstinctTriggers.MAX_RECURRING} recurrentes, aparte de las ${InstinctDeferral.MAX_SCHEDULED} programadas. Cada ocurrencia se informa por separado.")
+      appendLine("- Una sola condición por línea: un disparador, una hora o una recurrencia, sin \"y\", \"o\" ni anidamiento.")
+      appendLine("- Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después.")
       appendLine()
       appendLine("Acciones permitidas (usá estas formas):")
       InstinctProposalValidator.examples.forEach { appendLine(example(it)) }
@@ -84,11 +88,11 @@ object InstinctProtocolCatalog {
         appendLine()
       }
       if (mailbox != null) {
-        appendLine(InstinctMailboxCatalog.text(mailbox, forChat))
+        appendLine(InstinctMailboxCatalog.text(mailbox, forChat, doorbell))
         appendLine()
       }
-      appendLine("Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas):")
-      ProposalCheck.QueryKind.entries.forEach { appendLine(example(it.phrase)) }
+      appendLine("Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas). «ver programadas» muestra cada una con un id de ${InstinctTriggers.SHORT_ID_LENGTH} caracteres; con ese id, «cancelar programada <id>» cancela esa orden o la recurrente entera:")
+      ProposalCheck.QueryKind.entries.forEach { appendLine(example(it.form)) }
       appendLine()
       appendLine("Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.")
       appendLine()
@@ -99,7 +103,7 @@ object InstinctProtocolCatalog {
         appendLine("${AckKind.WAITING.prefix} <orden> → <motivo>: quedó esperando que la persona la confirme.")
         appendLine("${AckKind.ERROR.prefix} <orden> → <motivo>: no se ejecutó (no se entendió, no está permitida o falló).")
         appendLine("${AckKind.UNCERTAIN.prefix} <orden> → <mensaje> · no se repite: pudo haberse hecho; Insto no la repite.")
-        appendLine("${AckKind.SCHEDULED.prefix} <orden> → a las HH:MM: quedó programada.")
+        appendLine("${AckKind.SCHEDULED.prefix} <orden> → <cuándo>: quedó programada (la hora, el disparador o la recurrencia, con su próxima ocurrencia).")
         appendLine("Después de una espera o de una orden programada puede llegar una línea más: ${AckKind.OK.prefix}, ${AckKind.ERROR.prefix}, ${AckKind.DISCARDED.prefix} o ${AckKind.EXPIRED.prefix}. Si la persona deshace lo que hiciste, llega ${AckKind.UNDONE.prefix} <orden>.")
         append("Esas líneas son informativas: no las respondas con nuevas órdenes, salvo una sola orden corregida después de un ${AckKind.ERROR.prefix}. Nunca repitas una orden después de ${AckKind.UNCERTAIN.prefix} ni de ${AckKind.WAITING.prefix}.")
       } else {
@@ -116,7 +120,7 @@ object InstinctProtocolCatalog {
         appendLine("${AckKind.WAITING.code}: quedó esperando que la persona la confirme.")
         appendLine("${AckKind.ERROR.code}: no se ejecutó (no se entendió, no está permitida o falló).")
         appendLine("${AckKind.UNCERTAIN.code}: pudo haberse hecho; Insto no la repite.")
-        appendLine("${AckKind.SCHEDULED.code}: quedó programada.")
+        appendLine("${AckKind.SCHEDULED.code}: quedó programada; detalle dice cuándo (la hora, el disparador o la recurrencia).")
         appendLine("${InstinctState.KIND}: el estado del teléfono (ver «Estado del teléfono»); no es el resultado de una orden.")
         appendLine("Después de una espera o de una orden programada puede llegar otro evento de la misma orden: ${AckKind.OK.code}, ${AckKind.ERROR.code}, ${AckKind.DISCARDED.code} o ${AckKind.EXPIRED.code}, aunque haya pasado mucho tiempo. Si la persona deshace lo que hiciste, llega ${AckKind.UNDONE.code}.")
         appendLine("orden es tu orden (recortada a ${InstinctAck.MAX_ORDER_CHARS} caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).")

@@ -198,7 +198,7 @@ private fun InstinctAutonomySection(revision: Int, onChange: () -> Unit) {
   }
 }
 
-/** Orders Instinct scheduled for later, with their time and a button to cancel each one. */
+/** Orders Instinct scheduled for later, with their trigger or recurrence and a button to cancel each one. */
 @Composable
 private fun InstinctScheduledList(revision: Int, onChange: () -> Unit) {
   val context = LocalContext.current
@@ -206,12 +206,11 @@ private fun InstinctScheduledList(revision: Int, onChange: () -> Unit) {
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_scheduled")) {
     Text("Órdenes programadas por Instinct", style = MaterialTheme.typography.bodyLarge)
     if (pending.isEmpty()) SettingsDescription("No hay órdenes programadas.")
-    val zone = java.util.Calendar.getInstance()
-    pending.forEach { order ->
-      SettingsDescription("${com.example.phone.InstinctDeferral.clock(order.fireAt, zone)}" +
-        (order.condition?.let { " ${it.label}" } ?: "") + ": ${order.inner}")
-      TextButton(onClick = { com.example.phone.InstinctScheduler.cancel(context, order.id); onChange() },
-        modifier = Modifier.testTag("instinct_scheduled_cancel")) { Text("Cancelar esta orden") }
+    // One row per order, a recurrence once (its next occurrence): the trigger or recurrence in words, and its id.
+    pending.distinctBy { it.series }.forEach { order ->
+      SettingsDescription(com.example.phone.InstinctScheduler.line(order))
+      TextButton(onClick = { com.example.phone.InstinctScheduler.cancelShort(context, order.shortId); onChange() },
+        modifier = Modifier.testTag("instinct_scheduled_cancel")) { Text(if (order.recurring) "Cancelar la recurrente" else "Cancelar esta orden") }
     }
   }
 }
@@ -444,8 +443,60 @@ private fun InstinctMailboxSection(replyMode: InstinctReplyMode, revision: Int, 
     }, enabled = !busy && logReady && hasKey, modifier = Modifier.testTag("instinct_mailbox_test")) { Text("Probar buzón") }
     SettingsDescription(diagnosis, modifier = Modifier.testTag("instinct_mailbox_line"))
     notice?.let { SettingsDescription(it) }
+    InstinctDoorbellSection(revision, onChange)
   }
 }
+
+/**
+ * «Timbre instantáneo (ntfy)» (1.17.0): a UnifiedPush push that only says «hay algo en el buzón». Off by default; it
+ * needs the mailbox on and a distributor. The endpoint is only ever shown masked.
+ */
+@Composable
+private fun InstinctDoorbellSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val doorbell = com.example.phone.InstinctDoorbell
+  val settings = remember { doorbell.settings(context) }
+  val enabled = remember(revision) { settings.enabled() }
+  val installed = remember(revision) { doorbell.distributors(context) }
+  val current = remember(revision) { doorbell.distributor(context) }
+  val blocker = remember(revision) { doorbell.blocker(context) }
+  val status = remember(revision) { doorbell.status(context) }
+  var notice by remember { mutableStateOf<String?>(null) }
+  var busy by remember { mutableStateOf(false) }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_doorbell")) {
+    SettingsSwitch("Timbre instantáneo (ntfy)", enabled, { doorbell.setEnabled(context, it); onChange() },
+      blocker ?: "Cuando Instinct deja una orden, el Apps Script toca el timbre y Insto la toma en segundos. El timbre no lleva la " +
+        "orden: Insto la lee y verifica la firma como siempre. Si ntfy no está vivo, queda la revisión de siempre.",
+      enabled = enabled || blocker == null)
+    if (installed.isEmpty()) SettingsDescription(com.example.phone.InstinctDoorbellText.NO_DISTRIBUTOR + ".")
+    if (installed.size > 1) {
+      Text("Distribuidor", style = MaterialTheme.typography.bodyMedium)
+      Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        installed.forEach { pkg ->
+          FilterChip(selected = current == pkg, onClick = { doorbell.choose(context, pkg); onChange() },
+            label = { Text(distributorLabel(context, pkg)) }, modifier = Modifier.testTag("instinct_doorbell_distributor_$pkg"))
+        }
+      }
+    }
+    if (enabled) {
+      SettingsDescription(status, modifier = Modifier.testTag("instinct_doorbell_status"))
+      OutlinedButton(onClick = {
+        busy = true; notice = "Pidiéndole al script que toque el timbre…"
+        scope.launch {
+          notice = withContext(Dispatchers.IO) { doorbell.test(context) }
+          busy = false; onChange()
+        }
+      }, enabled = !busy, modifier = Modifier.testTag("instinct_doorbell_test")) { Text("Probar timbre") }
+    }
+    notice?.let { SettingsDescription(it) }
+  }
+}
+
+/** The app's name, or its package when it has none. */
+private fun distributorLabel(context: android.content.Context, pkg: String): String = runCatching {
+  context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString()
+}.getOrDefault(pkg)
 
 internal fun replyModeLabel(mode: InstinctReplyMode): String = when (mode) {
   InstinctReplyMode.NEVER -> "Nunca"
@@ -489,6 +540,10 @@ private fun ProposalDiagnostics(contact: PinnedContact?, revision: Int, onRefres
       if (com.example.phone.InstinctMailboxSettings(context).enabled()) com.example.phone.InstinctMailbox.diagnosis(context) else null
     }
     mailboxLine?.let { SettingsDescription(it, modifier = Modifier.testTag("instinct_mailbox_diagnosis")) }
+    val doorbellLine = remember(revision) {
+      if (com.example.phone.InstinctDoorbell.settings(context).enabled()) com.example.phone.InstinctDoorbell.diagnosis(context) else null
+    }
+    doorbellLine?.let { SettingsDescription(it, modifier = Modifier.testTag("instinct_doorbell_diagnosis")) }
     TextButton(onClick = onRefresh) { Text("Actualizar diagnóstico") }
   }
 }

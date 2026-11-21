@@ -16,7 +16,8 @@ class InstinctRoutinesTest {
     InstinctRoutineAccess(enabled.associate { InstinctRoutines.key(it.name) to InstinctRoutines.hash(it) }) { routines }
 
   private fun check(order: String, access: InstinctRoutineAccess = InstinctRoutineAccess.NONE) =
-    InstinctProposalValidator.check(order, parser, Calendar.getInstance(), access)
+    // A fixed day (21/11/2026): the recurring examples end on 13/12 and 15/12, within 30 days.
+    InstinctProposalValidator.check(order, parser, Calendar.getInstance().apply { set(2026, Calendar.NOVEMBER, 21, 10, 0, 0) }, access)
 
   // Enabling and the validator
 
@@ -156,7 +157,7 @@ class InstinctRoutinesTest {
       assertTrue(example, check(example) is ProposalCheck.Valid)
     val catalog = InstinctProtocolCatalog.text(emptyList())
     val orders = catalog.lines().filter { it.startsWith("#insto ") && it != "#insto <orden>" }.map { it.removePrefix("#insto ") }
-    val queries = ProposalCheck.QueryKind.entries.map { it.phrase }
+    val queries = ProposalCheck.QueryKind.entries.map { it.form }
     assertEquals(InstinctProposalValidator.examples + queries, orders)
   }
 
@@ -184,8 +185,8 @@ class InstinctRoutinesTest {
   @Test fun `ver catálogo is a read-only query`() {
     assertEquals(ProposalCheck.Query("ver catálogo", ProposalCheck.QueryKind.CATALOG), check("ver catálogo"))
     assertEquals(ProposalCheck.QueryKind.CATALOG, (check("Ver catalogo.") as ProposalCheck.Query).kind)
-    assertEquals("Protocolo Insto v4 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
-    assertEquals("Protocolo Insto v4 · rutinas habilitadas: Estudio, Noche.", InstinctProtocolCatalog.summary(listOf("Estudio", "Noche")))
+    assertEquals("Protocolo Insto v5 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
+    assertEquals("Protocolo Insto v5 · rutinas habilitadas: Estudio, Noche.", InstinctProtocolCatalog.summary(listOf("Estudio", "Noche")))
     assertTrue(check("ver catálogo completo") is ProposalCheck.Invalid)
   }
 

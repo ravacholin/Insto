@@ -6,6 +6,7 @@ Pass JUnit class names to select tests; by default discovers Android-free tests.
 """
 import concurrent.futures
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -58,7 +59,8 @@ def main():
              "DocumentNamePolicy", "ConfiguredRoutineStore", "PhrasePatterns", "OperationalContext",
              "PhraseCanonicalizer", "LearnedPhraseIndex", "WeatherIntentParser", "SemanticCommandGuard", "InstinctProposals",
              "InstinctReplies", "InstinctRoutines", "InstinctProtocolCatalog",
-             "InstinctSchedule", "InstinctUndo", "InstinctLog", "InstinctAutonomy", "InstinctState", "InstinctMailbox"]
+             "InstinctSchedule", "InstinctUndo", "InstinctLog", "InstinctAutonomy", "InstinctState", "InstinctMailbox",
+             "InstinctDoorbell", "InstinctTriggers"]
     sources = [str(source / (name + ".kt")) for name in names if (source / (name + ".kt")).exists()]
     # SMN weather clients: pure JVM (OkHttp, org.json, coroutines), no Android types.
     sources += [str(path) for path in sorted((source / "weather").glob("*.kt"))]
@@ -104,6 +106,9 @@ def main():
         resources = str(ROOT / "app/src/test/resources")
         subprocess.run(["java", "-cp", classes + os.pathsep + resources + os.pathsep + classpath,
                         "org.junit.runner.JUnitCore"] + selected, check=True, cwd=ROOT)
+    # The Apps Script of the log (docs/instinct-bitacora.gs) with fakes of Google's services, when Node is installed.
+    if not sys.argv[1:] and shutil.which("node"):
+        subprocess.run(["node", str(ROOT / "scripts/test-bitacora-gs.js")], check=True, cwd=ROOT)
 
 
 if __name__ == "__main__":

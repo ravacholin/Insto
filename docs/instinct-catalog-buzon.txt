@@ -1,4 +1,4 @@
-Órdenes para Insto (Protocolo Insto v4)
+Órdenes para Insto (Protocolo Insto v5)
 
 Insto es el asistente del teléfono de quien te escribe. Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
 
@@ -16,6 +16,10 @@ Reglas:
 - Insto solo lee esas líneas: el resto de tu mensaje no se interpreta. Si una línea no se entiende o no está permitida, se descarta.
 - Para más tarde, envolvé la orden: "a las HH:MM: <orden>" (24 horas; si esa hora ya pasó hoy, es mañana) o "en N minutos: <orden>" / "en N horas: <orden>" (de 1 minuto a 24 horas). Los dos puntos después del tiempo son obligatorios. Como máximo 10 órdenes programadas.
 - Solo con una hora, podés agregar una única condición del clima antes de los dos puntos: "si llueve", "si no llueve", "si hace menos de N grados" o "si hace más de N grados". «Llueve» es una probabilidad de lluvia de 50 % o más para las 6 horas siguientes; la temperatura es la medición actual. Sin datos del clima, la orden no se ejecuta.
+- Disparadores, para que el teléfono haga algo solo cuando pase algo: "al terminar el evento: <orden>" (el evento del calendario en curso), "al empezar el próximo evento: <orden>" (el próximo en las 12 horas siguientes), "al conectar auriculares: <orden>", "al desconectar auriculares: <orden>" y "al desbloquear: <orden>". Cada uno se usa una sola vez. Vencen a las 12 horas; con "hasta las HH:MM" antes de los dos puntos, a esa hora (como mucho 24 horas). Un disparador que vence sin dispararse se informa como vencida. Los eventos de todo el día no cuentan.
+- Recurrentes: "todos los días a las HH:MM hasta el DD/MM: <orden>", "los días hábiles a las HH:MM hasta el DD/MM: <orden>" (de lunes a viernes) o "los fines de semana a las HH:MM hasta el DD/MM: <orden>". "hasta el DD/MM" es obligatorio y como mucho 30 días; podés agregar una condición del clima antes de "hasta el". Como máximo 5 recurrentes, aparte de las 10 programadas. Cada ocurrencia se informa por separado.
+- Una sola condición por línea: un disparador, una hora o una recurrencia, sin "y", "o" ni anidamiento.
+- Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después.
 
 Acciones permitidas (usá estas formas):
 › #insto poner una alarma a las 07:00
@@ -47,6 +51,15 @@ Acciones permitidas (usá estas formas):
 › #insto a las 06:30 si no llueve: poner música de Soda Stereo
 › #insto a las 07:00 si hace menos de 10 grados: poner un temporizador de 10 minutos
 › #insto a las 14:00 si hace más de 30 grados: activar no molestar
+› #insto al terminar el evento: desactivar no molestar
+› #insto al empezar el próximo evento: activar no molestar
+› #insto al conectar auriculares hasta las 20:00: abrir spotify
+› #insto al desconectar auriculares: pausar la música
+› #insto al desbloquear: mostrar las alarmas
+› #insto todos los días a las 07:30 hasta el 15/12: poner el volumen al 20 por ciento
+› #insto los días hábiles a las 08:00 hasta el 15/12: activar no molestar
+› #insto los fines de semana a las 10:00 hasta el 13/12: poner música de Soda Stereo
+› #insto todos los días a las 06:30 si llueve hasta el 15/12: poner una alarma a las 06:45
 
 Rutinas que la persona te habilitó (usá el nombre exacto; se ejecutan paso por paso, se detienen en el primer paso que falla y cuentan como una sola orden):
 (ninguna por ahora)
@@ -84,11 +97,12 @@ Los resultados de las órdenes del buzón van siempre a la bitácora; su mensaje
 Solo por el buzón podés usar "#insto avisarme <texto>": una notificación de Insto para la persona, de 1 a 200 caracteres, texto plano, como máximo 3 por hora. No es un mensaje a nadie más. Desde WhatsApp se rechaza.
 Pseudocódigo: cadena = "\n".join(["insto-v4", id, at] + lineas); sig = hmac_sha256(clave.utf8, cadena.utf8).hex()
 
-Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas):
+Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas). «ver programadas» muestra cada una con un id de 6 caracteres; con ese id, «cancelar programada <id>» cancela esa orden o la recurrente entera:
 › #insto ver catálogo
 › #insto ver programadas
 › #insto cancelar programadas
 › #insto ver estado
+› #insto cancelar programada <id>
 
 Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
 
@@ -102,7 +116,7 @@ ok: la orden se ejecutó (también la respuesta a una consulta).
 espera: quedó esperando que la persona la confirme.
 error: no se ejecutó (no se entendió, no está permitida o falló).
 incierto: pudo haberse hecho; Insto no la repite.
-programada: quedó programada.
+programada: quedó programada; detalle dice cuándo (la hora, el disparador o la recurrencia).
 estado: el estado del teléfono (ver «Estado del teléfono»); no es el resultado de una orden.
 Después de una espera o de una orden programada puede llegar otro evento de la misma orden: ok, error, descartada o vencida, aunque haya pasado mucho tiempo. Si la persona deshace lo que hiciste, llega deshecho.
 orden es tu orden (recortada a 80 caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).

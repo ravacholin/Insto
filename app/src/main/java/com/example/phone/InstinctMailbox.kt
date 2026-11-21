@@ -227,7 +227,8 @@ object InstinctMailboxCatalog {
   const val EXAMPLE_AT = "2026-11-21T09:30:00-03:00"
   val EXAMPLE_LINES = listOf("#insto poner el volumen al 30 por ciento", "#insto avisarme Te bajé el volumen para la clase.")
 
-  fun text(log: InstinctCatalogLog?, forChat: Boolean): String = buildString {
+  /** [doorbell] (1.17.0): the doorbell is on, so Instinct does not need to announce an order through WhatsApp. */
+  fun text(log: InstinctCatalogLog?, forChat: Boolean, doorbell: Boolean = false): String = buildString {
     fun example(line: String) = (if (forChat) InstinctProtocolCatalog.CHAT_MARK else "") + line
     appendLine("Buzón firmado (además de WhatsApp):")
     appendLine("También podés mandarle órdenes a Insto por la misma planilla, sin escribir en el chat. Cada orden va firmada con una clave que tenés vos y Insto; la planilla no la conoce. Sin firma válida, Insto la descarta en silencio.")
@@ -245,6 +246,7 @@ object InstinctMailboxCatalog {
     else appendLine(InstinctCatalogLog.ASK)
     appendLine("La clave nunca va en este texto: la persona te la pasa aparte.")
     appendLine("Reglas: un UUID nuevo por orden (uno repetido se descarta); at con no más de 15 minutos de antigüedad ni 2 minutos en el futuro; Insto lee como máximo ${InstinctMailboxPoll.MAX_ORDERS} órdenes por vez. Revisa el buzón cada pocos minutos (Android puede demorarlo) y apenas llega un mensaje tuyo por WhatsApp.")
+    if (doorbell) appendLine(InstinctDoorbellText.CATALOG_LINE)
     appendLine("Los resultados de las órdenes del buzón van siempre a la bitácora; su mensaje_id sale del SHA-256 del id de la orden.")
     appendLine("Solo por el buzón podés usar \"${InstinctProposalProtocol.PREFIX} ${InstinctNotice.PHRASE} <texto>\": una notificación de Insto para la persona, de 1 a ${InstinctNotice.MAX_CHARS} caracteres, texto plano, como máximo ${InstinctNotice.PER_HOUR} por hora. No es un mensaje a nadie más. Desde WhatsApp se rechaza.")
     append("Pseudocódigo: cadena = \"\\n\".join([\"insto-v4\", id, at] + lineas); sig = hmac_sha256(clave.utf8, cadena.utf8).hex()")

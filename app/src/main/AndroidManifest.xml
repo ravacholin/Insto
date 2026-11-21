@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -64,6 +65,8 @@
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="audio/*" />
         </intent>
+        <!-- UnifiedPush distributors (ntfy) for the mailbox doorbell, 1.17.0. -->
+        <intent><action android:name="org.unifiedpush.android.distributor.REGISTER" /></intent>
     </queries>
 
     <application
@@ -95,6 +98,21 @@
         <service android:name=".phone.InstinctLogJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".phone.InstinctStateJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".phone.InstinctMailboxJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <!-- Mailbox doorbell (1.17.0): UnifiedPush AND_3 connector. Exported because the distributor is another app;
+             every request with an unknown token is ignored and a MESSAGE only ever polls the mailbox. -->
+        <receiver android:name=".phone.InstinctDoorbellReceiver" android:exported="true" tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
+                <action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" />
+                <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
+                <action android:name="org.unifiedpush.android.connector.MESSAGE" />
+                <action android:name="org.unifiedpush.android.connector.TEMP_UNAVAILABLE" />
+            </intent-filter>
+        </receiver>
+        <service android:name=".phone.InstinctDoorbellRaiseService" android:exported="true" tools:ignore="ExportedService">
+            <intent-filter><action android:name="org.unifiedpush.android.connector.RAISE_TO_FOREGROUND" /></intent-filter>
+        </service>
+        <service android:name=".phone.InstinctDoorbellJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <receiver android:name=".phone.InstinctLogBootReceiver" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
         </receiver>

@@ -316,7 +316,7 @@ object InstinctProposalCenter {
         // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
         is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index,
           if (check.kind == ProposalCheck.QueryKind.STATE) stateAnswer(app, check.order)
-          else AckEntry(AckKind.OK, check.order, answer(app, check.kind), informative = true)))
+          else AckEntry(AckKind.OK, check.order, answer(app, check.kind, check.argument), informative = true)))
         is ProposalCheck.Notice -> reply(app, acks.resolve(ticket, index, notice(app, check, source)))
         // «Nunca» refuses at once, whatever the hour; Confirmar and the quiet hours are decided when it runs.
         is ProposalCheck.Valid -> if (refusedByPolicy(app, check.command)) {
@@ -465,7 +465,7 @@ object InstinctProposalCenter {
   const val STATE_ONLY_LOG = "el estado solo se publica en la bitácora"
 
   /** The answer to a query. Names of enabled routines only, never their steps. */
-  internal fun answer(context: Context, kind: ProposalCheck.QueryKind): String = when (kind) {
+  internal fun answer(context: Context, kind: ProposalCheck.QueryKind, argument: String? = null): String = when (kind) {
     ProposalCheck.QueryKind.CATALOG -> InstinctProtocolCatalog.summary(InstinctRoutineGrants(context).access().enabledNames())
     ProposalCheck.QueryKind.SCHEDULED -> InstinctScheduler.describe(context)
     ProposalCheck.QueryKind.CANCEL_SCHEDULED -> when (val n = InstinctScheduler.cancelAll(context)) {
@@ -474,6 +474,7 @@ object InstinctProposalCenter {
       else -> "Se cancelaron $n órdenes programadas."
     }
     ProposalCheck.QueryKind.STATE -> stateAnswer(context, kind.phrase).message
+    ProposalCheck.QueryKind.CANCEL_ONE -> InstinctScheduler.cancelShortAnswer(context, argument.orEmpty())
   }
 
   /** A deferred order: stored for later, never run now. Instinct hears «#insto-programada» or why not. */
@@ -533,7 +534,7 @@ object InstinctProposalCenter {
       else if (forChat) InstinctCatalogLog.HIDDEN
       else InstinctLogSettings(context).let { InstinctCatalogLog(it.url(), it.token()) }
     return InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat, log,
-      InstinctAutonomySettings(context).policy(), mailbox)
+      InstinctAutonomySettings(context).policy(), mailbox, doorbell = mailbox != null && InstinctDoorbell.active(context))
   }
 
   /**

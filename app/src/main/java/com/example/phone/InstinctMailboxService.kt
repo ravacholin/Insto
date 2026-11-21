@@ -105,6 +105,11 @@ object InstinctMailbox {
   private val lock = Any()
   /** Elapsed-realtime millis of the last immediate poll; tests reset it. */
   @Volatile internal var lastPollAt = 0L
+  /**
+   * Every poll begins and ends here (1.17.0), so a doorbell ring knows whether one is running or just started:
+   * a ring during a poll polls once more after it, one within 5 seconds of the last start waits for the window.
+   */
+  val gate = InstinctMailboxGate { SystemClock.elapsedRealtime() }
 
   fun seen(context: Context) = InstinctMailboxSeen(File(context.applicationContext.noBackupFilesDir, InstinctMailboxSeen.FILE)) { clock() }
 
@@ -112,7 +117,8 @@ object InstinctMailbox {
   fun rearm(context: Context) {
     val app = context.applicationContext
     val settings = InstinctMailboxSettings(app)
-    schedule(app, if (settings.blocker() == null) settings.intervalMinutes() * 60_000L else null)
+    // While the doorbell rings, the backup poll is every 15 minutes, whatever was chosen (1.17.0).
+    schedule(app, if (settings.blocker() == null) InstinctDoorbell.backupMinutes(app, settings.intervalMinutes()) * 60_000L else null)
   }
 
   /** At once, off the main thread, unless one ran in the last 20 seconds. */
@@ -130,8 +136,20 @@ object InstinctMailbox {
     data class Failed(val reason: String) : Result
   }
 
-  /** One cycle. Blocking: call it from a job's thread or [background]. */
+  /**
+   * One cycle, and one more while a doorbell ring arrived during it (that cycle may have read the sheet before the
+   * order was written). Blocking: call it from a job's thread or [background].
+   */
   fun poll(context: Context): Result = synchronized(lock) {
+    var result: Result
+    do {
+      gate.begin()
+      result = try { pollOnce(context) } catch (error: Throwable) { gate.end(); throw error }
+    } while (gate.end() && result is Result.Done)
+    result
+  }
+
+  private fun pollOnce(context: Context): Result {
     val app = context.applicationContext
     val settings = InstinctMailboxSettings(app)
     val log = InstinctLogSettings(app)
@@ -150,7 +168,7 @@ object InstinctMailbox {
     // Every id read, also the refused ones, so they never come back. If this fails nothing repeats: they are seen.
     if (outcome.taken.isNotEmpty()) runCatching { client().take(url, token, outcome.taken) }
     outcome.valid.forEach { order -> runCatching { InstinctProposalIntake.onMailbox(app, order) } }
-    status(app, Result.Done(outcome.valid.size, outcome.badSignatures, outcome.expired))
+    return status(app, Result.Done(outcome.valid.size, outcome.badSignatures, outcome.expired))
   }
 
   /** «Probar buzón»: how many orders are pending, without taking, verifying or running anything. */

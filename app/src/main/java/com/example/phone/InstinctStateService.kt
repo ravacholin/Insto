@@ -66,7 +66,8 @@ class InstinctStateReader(context: Context) {
       dnd = InstinctState.yesNo(dnd),
       alarma = alarm,
       evento = runCatching { event(now, ::clock) }.getOrDefault(InstinctState.NO_DATA),
-      audio = if (devices == null) InstinctState.NO_DATA else InstinctState.audio(devices.any { it in WIRED }, devices.any { it in BLUETOOTH }),
+      audio = if (devices == null) InstinctState.NO_DATA
+        else InstinctState.audio(devices.any { it in InstinctAudioDevices.WIRED }, devices.any { it in InstinctAudioDevices.BLUETOOTH }),
       bloqueado = InstinctState.yesNo(runCatching { InstinctProposalCenter.keyguardLocked(app) }.getOrNull()),
       modoTemporal = temporary,
       programadas = scheduled,
@@ -93,13 +94,39 @@ class InstinctStateReader(context: Context) {
     return InstinctState.events(current, next, clock)
   }
 
-  private companion object {
-    // Inlined constants: on an older Android those device types simply never appear, so nothing breaks.
-    @android.annotation.SuppressLint("InlinedApi")
-    val WIRED = setOf(AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET)
-    @android.annotation.SuppressLint("InlinedApi")
-    val BLUETOOTH = setOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET,
-      AudioDeviceInfo.TYPE_BLE_SPEAKER)
+}
+
+/** The output types that count as headphones: wired or Bluetooth. Types only, never names. */
+internal object InstinctAudioDevices {
+  // Inlined constants: on an older Android those device types simply never appear, so nothing breaks.
+  @android.annotation.SuppressLint("InlinedApi")
+  val WIRED = setOf(AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET)
+  @android.annotation.SuppressLint("InlinedApi")
+  val BLUETOOTH = setOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET,
+    AudioDeviceInfo.TYPE_BLE_SPEAKER)
+  fun headphones(type: Int): Boolean = type in WIRED || type in BLUETOOTH
+}
+
+/**
+ * The calendar for event triggers (1.17.0): ids and times of the instances from a day before to a day and a half
+ * after [now], from [CalendarContract.Instances]. Never a title. Null without READ_CALENDAR.
+ */
+class InstinctCalendarReader(context: Context) {
+  private val app = context.applicationContext
+
+  fun instances(now: Long): List<CalendarInstance>? {
+    if (app.checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) return null
+    val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
+      android.content.ContentUris.appendId(it, now - 24 * 60 * 60_000L)
+      android.content.ContentUris.appendId(it, now + 36 * 60 * 60_000L)
+    }.build()
+    val projection = arrayOf(CalendarContract.Instances._ID, CalendarContract.Instances.EVENT_ID, CalendarContract.Instances.BEGIN,
+      CalendarContract.Instances.END, CalendarContract.Instances.ALL_DAY)
+    val found = ArrayList<CalendarInstance>()
+    app.contentResolver.query(uri, projection, null, null, "${CalendarContract.Instances.BEGIN} ASC")?.use { c ->
+      while (c.moveToNext() && found.size < 500) found += CalendarInstance(c.getLong(0), c.getLong(1), c.getLong(2), c.getLong(3), c.getInt(4) != 0)
+    } ?: return null
+    return found
   }
 }
 
@@ -211,16 +238,39 @@ class InstinctStateJobService : JobService() {
 
 /**
  * The system broadcasts and callbacks that change a field of the snapshot, registered at runtime from the
- * notification listener (already alive). Each one only signals [InstinctStatePublisher.changed]: nothing is read here.
+ * notification listener (already alive). Each one signals [InstinctStatePublisher.changed]; since 1.17.0 headphones and
+ * unlocking also fire the state triggers ([InstinctScheduler.onPhoneEvent]). No receiver of its own: triggers by state
+ * only work while «Insto · notificaciones» is alive.
  */
 internal class InstinctStateWatcher(private val context: Context) {
   private val handler = Handler(Looper.getMainLooper())
   private val receiver = object : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) = InstinctStatePublisher.changed(context)
+    override fun onReceive(context: Context, intent: Intent) {
+      InstinctStatePublisher.changed(context)
+      // Triggers by state (1.17.0). The sticky headset broadcast delivered on registering is the current state, not a change.
+      if (isInitialStickyBroadcast) return
+      when (intent.action) {
+        Intent.ACTION_USER_PRESENT -> InstinctScheduler.onPhoneEvent(context, PhoneEvent.UNLOCK)
+        AudioManager.ACTION_HEADSET_PLUG -> when (intent.getIntExtra("state", -1)) {
+          1 -> InstinctScheduler.onPhoneEvent(context, PhoneEvent.HEADPHONES_ON)
+          0 -> InstinctScheduler.onPhoneEvent(context, PhoneEvent.HEADPHONES_OFF)
+        }
+      }
+    }
   }
+  /** Headphones connected now, by device id: the callback's first call (the devices already there) fires nothing. */
+  private val headphones = HashSet<Int>()
   private val devices = object : AudioDeviceCallback() {
-    override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) = InstinctStatePublisher.changed(context)
-    override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) = InstinctStatePublisher.changed(context)
+    override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) {
+      InstinctStatePublisher.changed(context)
+      val new = added.orEmpty().filter { InstinctAudioDevices.headphones(it.type) && headphones.add(it.id) }
+      if (new.isNotEmpty()) InstinctScheduler.onPhoneEvent(context, PhoneEvent.HEADPHONES_ON)
+    }
+    override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) {
+      InstinctStatePublisher.changed(context)
+      val gone = removed.orEmpty().filter { InstinctAudioDevices.headphones(it.type) && headphones.remove(it.id) }
+      if (gone.isNotEmpty()) InstinctScheduler.onPhoneEvent(context, PhoneEvent.HEADPHONES_OFF)
+    }
   }
   private val calendar = object : ContentObserver(handler) {
     override fun onChange(selfChange: Boolean) = InstinctStatePublisher.changed(context)
@@ -242,7 +292,12 @@ internal class InstinctStateWatcher(private val context: Context) {
       if (android.os.Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
       else context.registerReceiver(receiver, filter)
     }
-    runCatching { context.getSystemService(AudioManager::class.java)?.registerAudioDeviceCallback(devices, handler) }
+    runCatching {
+      val audio = context.getSystemService(AudioManager::class.java)
+      headphones.clear()
+      audio?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.filter { InstinctAudioDevices.headphones(it.type) }?.forEach { headphones += it.id }
+      audio?.registerAudioDeviceCallback(devices, handler)
+    }
     // The calendar provider, Instances included; only with the permission, otherwise the field is «sin permiso».
     if (context.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED)
       runCatching { context.contentResolver.registerContentObserver(CalendarContract.CONTENT_URI, true, calendar) }
