@@ -66,10 +66,6 @@ fun AutoSendCoordinator.finishReport(context: Context, request: Long, outcome: A
   val report = reportFor(request) ?: return
   if (!report.finish()) return
   AutoSendMetricsStore(context).record(report.packageName, report.kind, report.strategy, outcome)
-  // Only a confirmed send opens the window in which Instinct's proposals are read (opt-in, see InstinctProposalIntake).
-  if (outcome == AutoSendMetrics.Outcome.CONFIRMED) runCatching {
-    com.example.phone.InstinctSendCorrelation(context).record(report.recipientDigits)
-  }
 }
 
 /** A request that ended without a touch keeps the last reason it could not proceed. */

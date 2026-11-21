@@ -125,8 +125,7 @@ class InstinctProposalsTest {
     override fun text(): String? { reads += "text"; return textValue }
   }
 
-  private fun config(sentAt: Long? = 1_000L, now: Long = 1_000L + 60_000L, window: Int = 15) =
-    ProposalFilterConfig("com.whatsapp", "Instinct", { sentAt }, window * 60_000L, now)
+  private fun config(now: Long = 61_000L) = ProposalFilterConfig("com.whatsapp", "Instinct", now)
 
   @Test fun `another package is dropped without reading anything of the notification`() {
     val filter = InstinctProposalFilter()
@@ -158,17 +157,20 @@ class InstinctProposalsTest {
     assertEquals(InstinctProposalFilter.Stage.ACCEPTED, filter.evaluate(FakeNotification(titleValue = "Instinct", latest = null), config()).stage)
   }
 
-  @Test fun `outside the correlation window nothing is read`() {
-    val filter = InstinctProposalFilter()
-    for (cfg in listOf(config(sentAt = null), config(sentAt = 1_000L, now = 1_000L + 16 * 60_000L), config(sentAt = 5_000L, now = 1_000L))) {
-      val notification = FakeNotification()
-      assertEquals(InstinctProposalFilter.Stage.WINDOW, filter.evaluate(notification, cfg).stage)
-      assertFalse("text" in notification.reads)
-    }
-    assertEquals(InstinctProposalFilter.Stage.ACCEPTED, filter.evaluate(FakeNotification(), config(sentAt = 1_000L, now = 1_000L + 59 * 60_000L, window = 60)).stage)
-    assertEquals(5, InstinctProposalFilter.windowMinutes(1))
-    assertEquals(60, InstinctProposalFilter.windowMinutes(120))
-    assertEquals(15, InstinctProposalFilter.windowMinutes(null))
+  @Test fun `Instinct can write on its own initiative`() {
+    // No previous message from Insto is needed: the newest message of the contact is enough.
+    val notification = FakeNotification()
+    assertEquals(InstinctProposalFilter.Stage.ACCEPTED, InstinctProposalFilter().evaluate(notification, config()).stage)
+    assertEquals(listOf("group", "sender", "text"), notification.reads)
+  }
+
+  @Test fun `the anti-loop brake allows six automatic runs every ten minutes`() {
+    val clock = Clock()
+    val budget = AutoRunBudget({ clock.now })
+    repeat(6) { assertTrue(budget.tryAcquire()) }
+    assertFalse(budget.tryAcquire())
+    clock.now = 10 * 60_000L
+    assertTrue(budget.tryAcquire())
   }
 
   @Test fun `the same message is processed once and a new one again`() {

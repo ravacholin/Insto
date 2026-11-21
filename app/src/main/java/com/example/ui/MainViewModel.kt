@@ -1058,12 +1058,21 @@ class MainViewModel @JvmOverloads constructor(
   private fun presentProposal(proposal: ProposalBook.Proposal) {
     if (!InstinctProposalCenter.book.isPending(proposal.id)) return
     learningPreview = null; patternExample = null
+    InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.OFFERED)
+    // Instinct acts on its own: with the panel free, the proposal runs now, like a local order.
+    val blocker = InstinctProposalCenter.autoRunBlocker(getApplication(), proposal.command, foreground = true)
+    if (blocker == null) {
+      sessions.begin(com.example.session.SessionState.IDLE)
+      floatingState.value = floatingState.value.copy(status = "Instinct pidió: ${proposal.summary}.", error = null)
+      executeInstinctProposal(proposal.id)
+      return
+    }
     sessions.begin(com.example.session.SessionState.AWAITING_CONFIRMATION)
     activeProposal = proposal
     confirmation = proposal.command
     floatingState.value = floatingState.value.copy(needsConfirmation = true, queryPreview = false, error = null,
       proposalsWaiting = waitingProposals.size,
-      status = "Instinct propone: ${proposal.summary}. Confirmá o decí dale para hacerlo; si no, cancelala.")
+      status = "Instinct propone: ${proposal.summary}. $blocker Confirmá o decí dale para hacerlo; si no, cancelala.")
   }
 
   /** «Confirmar» in an Instinct proposal notification. Never replaces a request in progress. */
