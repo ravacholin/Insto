@@ -148,6 +148,22 @@ class InstinctProposalFlowTest {
     assertTrue(posted().isEmpty())
   }
 
+  @Test fun `the diagnosis says why the last WhatsApp message was not offered, without content`() {
+    enable()
+    post(CountingSbn("com.whatsapp", whatsApp("#insto mostrar las alarmas", sender = "Instinct IA")))
+    assertEquals(InstinctProposalIntake.Diagnosis.CONTACT, InstinctProposalIntake.lastDiagnosis)
+    post(CountingSbn("com.example.chat", whatsApp("#insto mostrar las alarmas")))
+    assertEquals("other apps never change it", InstinctProposalIntake.Diagnosis.CONTACT, InstinctProposalIntake.lastDiagnosis)
+    InstinctSendCorrelation(app).clear()
+    post(CountingSbn("com.whatsapp", whatsApp("#insto mostrar los temporizadores")))
+    assertEquals(InstinctProposalIntake.Diagnosis.WINDOW, InstinctProposalIntake.lastDiagnosis)
+    enable()
+    post(CountingSbn("com.whatsapp", whatsApp("#insto llamar a Ana")))
+    assertEquals(InstinctProposalIntake.Diagnosis.NOT_UNDERSTOOD, InstinctProposalIntake.lastDiagnosis)
+    post(CountingSbn("com.whatsapp", whatsApp("#insto mostrar los temporizadores")))
+    assertEquals(InstinctProposalIntake.Diagnosis.OFFERED, InstinctProposalIntake.lastDiagnosis)
+  }
+
   @Test fun `a send to another number does not open the window`() {
     InstinctProposalSettings(app).setEnabled(true)
     InstinctSendCorrelation(app).record("5491100000000")

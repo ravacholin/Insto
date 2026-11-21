@@ -136,23 +136,58 @@ object InstinctProposalIntake {
   internal var log: (String) -> Unit = { if (com.example.BuildConfig.DEBUG) android.util.Log.d(TAG, it) }
   private const val TAG = "InstoProposals"
 
+  /** Why the last WhatsApp notification was not offered, without any content. In memory only, for Settings. */
+  enum class Diagnosis(val label: String) {
+    PREFS("Insto todavía no había cargado los ajustes (el proceso recién arrancaba)."),
+    NO_CONTACT("No hay contacto de Instinct configurado."),
+    PACKAGE("Llegó de una app de WhatsApp distinta de la que Insto usa para enviar."),
+    GROUP("Era una conversación grupal."),
+    CONTACT("El remitente no coincide exactamente con el nombre del contacto configurado en Insto."),
+    WINDOW("No hubo un envío confirmado por el auto-envío a ese contacto dentro de la ventana."),
+    DUPLICATE("Ese mensaje ya se había procesado."),
+    NO_PROPOSAL("El mensaje no tenía líneas que empiecen con «#insto »."),
+    NOT_UNDERSTOOD("Había líneas #insto, pero ninguna se entendió o estaba permitida."),
+    OFFERED("Se ofreció para confirmar."),
+  }
+
+  @Volatile var lastDiagnosis: Diagnosis? = null
+    private set
+  @Volatile var lastDiagnosisAt: Long = 0L
+    private set
+
+  private fun diagnose(value: Diagnosis) { lastDiagnosis = value; lastDiagnosisAt = SystemClock.elapsedRealtime() }
+
+  private val whatsAppPackages = setOf("com.whatsapp", "com.whatsapp.w4b")
+
   fun onPosted(context: Context, notification: () -> ProposalNotification?) {
     if (!InstinctProposalSettings(context).isEnabled()) return
     val app = context.applicationContext
-    val prefs = AssistantPreferencesCache.of(app).current ?: return
-    val contact = prefs.pinnedContact ?: return
     val view = notification() ?: return
+    // Only WhatsApp's own notifications update the diagnosis: the package name is not content.
+    val fromWhatsApp = view.packageName in whatsAppPackages
+    val prefs = AssistantPreferencesCache.of(app).current ?: run { if (fromWhatsApp) diagnose(Diagnosis.PREFS); return }
+    val contact = prefs.pinnedContact ?: run { if (fromWhatsApp) diagnose(Diagnosis.NO_CONTACT); return }
     val settings = InstinctProposalSettings(app)
     val packageName = WhatsAppDispatcher.resolveTargetPackage(app, prefs.preferredFlavor)
     val config = ProposalFilterConfig(packageName, contact.displayName,
       { InstinctSendCorrelation(app).lastSendTo(contact.phoneNumber) }, settings.windowMinutes() * 60_000L, SystemClock.elapsedRealtime())
     val outcome = filter.evaluate(view, config)
+    if (fromWhatsApp) when (outcome.stage) {
+      InstinctProposalFilter.Stage.PACKAGE -> diagnose(Diagnosis.PACKAGE)
+      InstinctProposalFilter.Stage.GROUP -> diagnose(Diagnosis.GROUP)
+      InstinctProposalFilter.Stage.CONTACT -> diagnose(Diagnosis.CONTACT)
+      InstinctProposalFilter.Stage.WINDOW -> diagnose(Diagnosis.WINDOW)
+      InstinctProposalFilter.Stage.DUPLICATE -> diagnose(Diagnosis.DUPLICATE)
+      InstinctProposalFilter.Stage.NO_PROPOSAL -> diagnose(Diagnosis.NO_PROPOSAL)
+      InstinctProposalFilter.Stage.ACCEPTED -> Unit
+    }
     if (outcome !is InstinctProposalFilter.Outcome.Accepted) {
       if (outcome.stage != InstinctProposalFilter.Stage.PACKAGE) log(counters())
       return
     }
     val parser = PhoneCommandParser()
     val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser) }
+    diagnose(if (checks.any { it is ProposalCheck.Valid }) Diagnosis.OFFERED else Diagnosis.NOT_UNDERSTOOD)
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
     InstinctProposalCenter.deliver(app, checks, fingerprint)
     log(counters() + " valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")

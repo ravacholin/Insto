@@ -70,6 +70,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
           modifier = Modifier.testTag("instinct_proposals_listener")) { Text("Habilitar acceso en Ajustes") }
       }
+      ProposalDiagnostics(contact, minutes, revision) { revision++ }
       Text("Ventana después de cada envío", style = MaterialTheme.typography.titleMedium)
       SettingsChoices(WINDOW_CHOICES, minutes, { settings.setWindowMinutes(it); revision++ }, label = { "$it min" })
       if (flavor == WhatsAppFlavor.AUTO) SettingsDescription("Se usa la app de WhatsApp que Insto elige para enviar.")
@@ -98,3 +99,31 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
 }
 
 private val WINDOW_CHOICES = listOf(5, 10, 15, 30, 60)
+
+/** Why proposals are or are not arriving. Shows states and the last discard reason, never a message or a name read. */
+@Composable
+private fun ProposalDiagnostics(contact: PinnedContact?, minutes: Int, revision: Int, onRefresh: () -> Unit) {
+  val context = LocalContext.current
+  val now = android.os.SystemClock.elapsedRealtime()
+  val connected = remember(revision) { com.example.phone.NotificationAccessService.connected != null }
+  val lastSend = remember(revision, contact) {
+    contact?.let { com.example.phone.InstinctSendCorrelation(context).lastSendTo(it.phoneNumber) }
+  }
+  val diagnosis = com.example.phone.InstinctProposalIntake.lastDiagnosis
+  val diagnosisAt = com.example.phone.InstinctProposalIntake.lastDiagnosisAt
+  fun ago(at: Long) = ((now - at) / 60_000L).let { if (it < 1) "hace menos de un minuto" else "hace $it min" }
+  Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.testTag("instinct_proposals_diagnostics")) {
+    Text("Diagnóstico", style = MaterialTheme.typography.titleMedium)
+    SettingsDescription(if (connected) "«Insto · notificaciones»: conectado."
+      else "«Insto · notificaciones»: no conectado. Desactivalo y volvé a activarlo en Ajustes de Android.")
+    SettingsDescription("Contacto esperado: «${contact?.displayName ?: "sin configurar"}». Tiene que ser exactamente el nombre que muestra WhatsApp.")
+    SettingsDescription(when {
+      lastSend == null -> "Ventana cerrada: no hay un envío confirmado por el auto-envío a Instinct desde el último reinicio."
+      now - lastSend <= minutes * 60_000L -> "Ventana abierta: último envío confirmado ${ago(lastSend)}."
+      else -> "Ventana cerrada: el último envío confirmado fue ${ago(lastSend)} (la ventana es de $minutes min)."
+    })
+    SettingsDescription(if (diagnosis == null) "Último mensaje de WhatsApp: ninguno desde que se inició Insto."
+      else "Último mensaje de WhatsApp (${ago(diagnosisAt)}): ${diagnosis.label}")
+    TextButton(onClick = onRefresh) { Text("Actualizar diagnóstico") }
+  }
+}
