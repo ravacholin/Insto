@@ -167,6 +167,10 @@ fun AssistOverlayScreen(
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
         state.error?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold,
           modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }) }
+        if (state.proposalsWaiting > 0) Text(
+          if (state.proposalsWaiting == 1) "Instinct propuso una acción. Aparece cuando termines o canceles este pedido."
+          else "Instinct propuso ${state.proposalsWaiting} acciones. Aparecen de a una cuando termines o canceles este pedido.",
+          color = secondary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("overlay_proposals_waiting"))
         if (state.workflowLines.isNotEmpty()) {
           Text(state.workflowLines.joinToString("\n"), style = MaterialTheme.typography.bodySmall)
         }

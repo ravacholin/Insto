@@ -1,0 +1,272 @@
+package com.example.phone
+
+import java.security.MessageDigest
+import java.util.Calendar
+
+/**
+ * «Instinct con manos»: Instinct may answer in WhatsApp with fixed-format proposal lines. This file holds the pure,
+ * Android-free part: the line protocol, the validation every line goes through, the notification filters and the
+ * in-memory book of proposals awaiting a user's touch or «dale». Nothing here executes anything, reads
+ * notifications by itself, logs, persists or reaches the network. See docs/INSTINCT-PROPUESTAS.md.
+ */
+object InstinctProposalProtocol {
+  const val PREFIX = "#insto"
+  const val MAX_LINES = 3
+
+  /**
+   * The orders of the first [MAX_LINES] proposal lines: lines that start with «#insto» and a space. An «#insto»
+   * inside a sentence is ordinary text. A proposal line without an order is returned empty, so it is reported as
+   * not understood instead of being silently dropped. Everything else in the message is never interpreted.
+   */
+  fun orders(message: String): List<String> = message.lineSequence()
+    .map { it.trim() }
+    .filter { it == PREFIX || it.startsWith("$PREFIX ") || it.startsWith("$PREFIX\t") }
+    .take(MAX_LINES)
+    .map { it.removePrefix(PREFIX).trim() }
+    .toList()
+}
+
+/** The result of checking one proposal line. Only [Valid] can ever reach the user as something to confirm. */
+sealed interface ProposalCheck {
+  val order: String
+  data class Valid(override val order: String, val command: PhoneCommand) : ProposalCheck
+  data class Invalid(override val order: String, val reason: Reason) : ProposalCheck
+  enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN }
+}
+
+/**
+ * The same checks as any order, with the explicit grammar only: [RequestSafetyPolicy], [PhoneCommandParser] (which
+ * never consults learned phrases, structures, the operational context or a model), [SemanticCommandGuard] with the
+ * line as the request text and, last, the v1 allowlist. A line that does not resolve to exactly one
+ * [PhoneRoute.Local] is discarded.
+ */
+object InstinctProposalValidator {
+  private val silenceActions = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
+    PlatformAction.DND_ON, PlatformAction.DND_OFF)
+
+  fun check(order: String, parser: PhoneCommandParser, now: Calendar = Calendar.getInstance()): ProposalCheck =
+    check(order, parser::parse, now)
+
+  /** [parse] is the explicit grammar; a seam for tests that the semantic guard still reviews its output. */
+  internal fun check(order: String, parse: (String) -> PhoneRoute, now: Calendar): ProposalCheck {
+    if (order.isBlank()) return ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY)
+    if (RequestSafetyPolicy.refusal(order) != null || RequestSafetyPolicy.isQuestion(order))
+      return ProposalCheck.Invalid(order, ProposalCheck.Reason.UNSAFE)
+    val command = (parse(order) as? PhoneRoute.Local)?.command
+      ?: return ProposalCheck.Invalid(order, ProposalCheck.Reason.NOT_LOCAL)
+    val reviewed = SemanticCommandGuard.review(InterpretationRequest(order, now = now), InterpretationResult.Direct(command))
+    if (reviewed !is InterpretationResult.Direct || reviewed.command != command)
+      return ProposalCheck.Invalid(order, ProposalCheck.Reason.SEMANTIC)
+    if (!allowed(command)) return ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
+    return ProposalCheck.Valid(order, command)
+  }
+
+  /**
+   * Allowlist v1. Everything not named is forbidden, in particular calls ([PhoneCommand.Dial] and every
+   * [PlatformAction.CALL_DIRECT]), messages, files and sharing, [PhoneCommand.SavePlace], routines and workflows.
+   * A proposal is always one command: plans of several steps are never built from proposals.
+   */
+  fun allowed(command: PhoneCommand): Boolean = when (command) {
+    is PhoneCommand.Alarm, is PhoneCommand.Timer, is PhoneCommand.Volume, is PhoneCommand.Torch,
+    is PhoneCommand.Media, is PhoneCommand.OpenApp, is PhoneCommand.ClockList,
+    is PhoneCommand.MusicSearch, is PhoneCommand.SpotifySearch, is PhoneCommand.YouTubeSearch,
+    is PhoneCommand.CalendarEvent -> true
+    // Silence, vibrate and Do not disturb, with or without a restoration time. A temporary media volume is not.
+    is PhoneCommand.TemporaryMode -> command.kind == ModeKind.SILENT || command.kind == ModeKind.DND
+    // The grammar expresses silence, vibrate and Do not disturb without a duration as platform actions.
+    is PhoneCommand.Platform -> command.action in silenceActions
+    else -> false
+  }
+}
+
+/**
+ * A notification as the filters see it. Every accessor reads only what it names, and the filters call them in order,
+ * stopping at the first that fails, so a notification from another app is never read beyond its package.
+ */
+interface ProposalNotification {
+  val packageName: String
+  val key: String
+  fun isGroup(): Boolean
+  /** The notification title. */
+  fun title(): String?
+  /** Whether the notification carries MessagingStyle messages, and the sender of the newest one (null: the user). */
+  fun latestMessage(): LatestMessage?
+  /** The text of the newest message, or the notification text without MessagingStyle. Content: read last. */
+  fun text(): String?
+
+  data class LatestMessage(val sender: String?)
+}
+
+data class ProposalFilterConfig(
+  /** The package of the configured WhatsApp flavor, resolved as Insto sends; null when none is installed. */
+  val expectedPackage: String?,
+  /** The configured contact name, compared exactly. */
+  val contactName: String?,
+  /** Monotonic time of the last confirmed send from Insto to that contact, or null. Read only after the contact matched. */
+  val lastSendAt: () -> Long?,
+  val windowMillis: Long,
+  val now: Long,
+)
+
+/**
+ * Filters, in order, stopping at the first that fails: package, not a group, exact contact name, a confirmed send to
+ * Instinct inside the correlation window, a message never seen before. A message that fails is dropped: nothing about
+ * it is kept, not even its hash. Only stage counters exist, for diagnostics.
+ */
+class InstinctProposalFilter(private val dedupe: MessageDedupe = MessageDedupe()) {
+  enum class Stage { PACKAGE, GROUP, CONTACT, WINDOW, DUPLICATE, NO_PROPOSAL, ACCEPTED }
+
+  sealed interface Outcome {
+    val stage: Stage
+    data class Dropped(override val stage: Stage) : Outcome
+    data class Accepted(val orders: List<String>) : Outcome { override val stage get() = Stage.ACCEPTED }
+  }
+
+  private val counters = java.util.EnumMap<Stage, Int>(Stage::class.java)
+  @Synchronized fun counters(): Map<Stage, Int> = HashMap(counters)
+
+  fun evaluate(notification: ProposalNotification, config: ProposalFilterConfig): Outcome {
+    val outcome = decide(notification, config)
+    synchronized(this) { counters[outcome.stage] = (counters[outcome.stage] ?: 0) + 1 }
+    return outcome
+  }
+
+  private fun decide(n: ProposalNotification, config: ProposalFilterConfig): Outcome {
+    if (config.expectedPackage == null || n.packageName != config.expectedPackage) return Outcome.Dropped(Stage.PACKAGE)
+    if (n.isGroup()) return Outcome.Dropped(Stage.GROUP)
+    val contact = config.contactName?.takeIf { it.isNotBlank() } ?: return Outcome.Dropped(Stage.CONTACT)
+    // With MessagingStyle the newest message must come from the contact; without it, the title must be the contact.
+    val latest = n.latestMessage()
+    val fromContact = if (latest != null) latest.sender == contact else n.title() == contact
+    if (!fromContact) return Outcome.Dropped(Stage.CONTACT)
+    val sentAt = config.lastSendAt()
+    if (sentAt == null || config.now < sentAt || config.now - sentAt > config.windowMillis) return Outcome.Dropped(Stage.WINDOW)
+    val text = n.text()?.takeIf { it.isNotBlank() } ?: return Outcome.Dropped(Stage.NO_PROPOSAL)
+    val orders = InstinctProposalProtocol.orders(text)
+    if (orders.isEmpty()) return Outcome.Dropped(Stage.NO_PROPOSAL)
+    if (!dedupe.firstTime(n.key, text, config.now)) return Outcome.Dropped(Stage.DUPLICATE)
+    return Outcome.Accepted(orders)
+  }
+
+  companion object {
+    const val MIN_WINDOW_MINUTES = 5
+    const val DEFAULT_WINDOW_MINUTES = 15
+    const val MAX_WINDOW_MINUTES = 60
+    fun windowMinutes(value: Int?): Int = (value ?: DEFAULT_WINDOW_MINUTES).coerceIn(MIN_WINDOW_MINUTES, MAX_WINDOW_MINUTES)
+  }
+}
+
+/**
+ * Remembers which proposal messages were already processed, by notification key and a hash of the text, in memory
+ * only and for a bounded time. A WhatsApp update of the same notification with the same newest message is a
+ * duplicate; a new message from the contact is not. The text itself is never kept.
+ */
+class MessageDedupe(private val retentionMillis: Long = 6 * 60 * 60_000L, private val capacity: Int = 256) {
+  private val seen = LinkedHashMap<String, Long>()
+
+  @Synchronized fun firstTime(key: String, text: String, now: Long): Boolean {
+    seen.entries.removeAll { now - it.value > retentionMillis || now < it.value }
+    val id = sha256("$key\u0000$text")
+    if (id in seen) return false
+    seen[id] = now
+    while (seen.size > capacity) seen.remove(seen.keys.first())
+    return true
+  }
+
+  @Synchronized fun clear() = seen.clear()
+}
+
+internal fun sha256(value: String): String =
+  MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+
+/**
+ * Proposals awaiting the user, in memory only. Each one can be executed at most once: a claim moves it out of the
+ * pending state atomically, so a second Confirmar, a repeated «dale» or a notification action delivered twice gets
+ * [Claim.Used]. A proposal expires [ttlMillis] after it arrived. [fingerprint] identifies the configuration the
+ * proposal was validated under (switch, contact, WhatsApp package); a claim under another configuration fails and
+ * the proposal can no longer run.
+ */
+class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = TTL_MILLIS) {
+  data class Proposal(
+    val id: Long,
+    val order: String,
+    val command: PhoneCommand,
+    val createdAt: Long,
+    val fingerprint: String,
+    /** Random, carried only by Insto's own notification action: an id alone, which another app could guess, confirms nothing. */
+    val token: String = java.util.UUID.randomUUID().toString(),
+  ) {
+    val summary: String get() = PhoneCommandCodec.summary(command)
+  }
+
+  sealed interface Claim {
+    data class Granted(val proposal: Proposal) : Claim
+    data object Expired : Claim
+    data object Used : Claim
+    data object Changed : Claim
+    data object Unknown : Claim
+  }
+
+  private enum class State { PENDING, CLAIMED, DISCARDED, EXPIRED }
+  private class Entry(val proposal: Proposal, var state: State)
+
+  private var nextId = 1L
+  private val entries = LinkedHashMap<Long, Entry>()
+
+  /** Adds a validated proposal. Null when the same command is already pending: the same proposal is never offered twice. */
+  @Synchronized fun offer(order: String, command: PhoneCommand, fingerprint: String): Proposal? {
+    expire()
+    if (entries.values.any { it.state == State.PENDING && it.proposal.command == command }) return null
+    val proposal = Proposal(nextId++, order, command, clock(), fingerprint)
+    entries[proposal.id] = Entry(proposal, State.PENDING)
+    while (entries.size > CAPACITY) entries.remove(entries.keys.first())
+    return proposal
+  }
+
+  /** [token] is required when the claim comes from outside the process-local panel (the notification action). */
+  @Synchronized fun claim(id: Long, fingerprint: String?, token: String? = null, requireToken: Boolean = false): Claim {
+    expire()
+    val entry = entries[id] ?: return Claim.Unknown
+    if (requireToken && token != entry.proposal.token) return Claim.Unknown
+    return when (entry.state) {
+      State.EXPIRED -> Claim.Expired
+      State.CLAIMED, State.DISCARDED -> Claim.Used
+      State.PENDING -> if (fingerprint == null || fingerprint != entry.proposal.fingerprint) {
+        entry.state = State.DISCARDED; Claim.Changed
+      } else { entry.state = State.CLAIMED; Claim.Granted(entry.proposal) }
+    }
+  }
+
+  /** True when [id] was pending; a discarded proposal can never be claimed. */
+  @Synchronized fun discard(id: Long): Boolean {
+    val entry = entries[id] ?: return false
+    if (entry.state != State.PENDING) return false
+    entry.state = State.DISCARDED
+    return true
+  }
+
+  @Synchronized fun isPending(id: Long): Boolean { expire(); return entries[id]?.state == State.PENDING }
+
+  @Synchronized fun pending(): List<Proposal> { expire(); return entries.values.filter { it.state == State.PENDING }.map { it.proposal } }
+
+  /** Discards every pending proposal, for example when the switch is turned off. Returns the ids discarded. */
+  @Synchronized fun discardAll(): List<Long> {
+    val ids = entries.values.filter { it.state == State.PENDING }.map { it.proposal.id }
+    ids.forEach { entries.getValue(it).state = State.DISCARDED }
+    return ids
+  }
+
+  private fun expire() {
+    val now = clock()
+    entries.values.forEach { if (it.state == State.PENDING && (now - it.proposal.createdAt > ttlMillis || now < it.proposal.createdAt)) it.state = State.EXPIRED }
+  }
+
+  companion object {
+    const val TTL_MILLIS = 10 * 60_000L
+    private const val CAPACITY = 64
+
+    /** The configuration a proposal is valid under. Hashed: neither the name nor the number is kept in clear. */
+    fun fingerprint(contactName: String, contactPhone: String, packageName: String): String =
+      sha256("$contactName\u0000$contactPhone\u0000$packageName")
+  }
+}

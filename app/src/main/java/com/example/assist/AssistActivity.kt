@@ -63,6 +63,7 @@ class AssistActivity : ComponentActivity() {
       return
     }
     viewModel.prepareFloatingAssistant()
+    val launchedForProposal = savedInstanceState == null && receiveProposalConfirmation(intent)
     if (com.example.BuildConfig.DEBUG) {
       com.example.phone.ProviderHttp.connectionLogger = { android.util.Log.d("InstoVoiceLatency", it) }
     }
@@ -135,7 +136,9 @@ class AssistActivity : ComponentActivity() {
           if (uri != null) viewModel.selectFloatingAttachment(uri)
         }
         LaunchedEffect(Unit) {
-          if (savedInstanceState == null && hasMic && !showGeminiSetup && !state.workflowActive) viewModel.startFloatingListening { finish() }
+          // Confirming an Instinct proposal opens the panel to run it, never the microphone.
+          if (savedInstanceState == null && hasMic && !showGeminiSetup && !state.workflowActive && !launchedForProposal)
+            viewModel.startFloatingListening { finish() }
         }
         if (showGeminiSetup) {
           AlertDialog(
@@ -235,7 +238,27 @@ class AssistActivity : ComponentActivity() {
     super.onNewIntent(intent)
     setIntent(intent)
     receiveSharedText(intent)
+    receiveProposalConfirmation(intent)
     // A repeated hotkey brings the existing panel forward without destroying its draft.
+  }
+
+  override fun onStart() {
+    super.onStart()
+    viewModel.attachInstinctProposals()
+  }
+
+  /**
+   * «Confirmar» in an Instinct proposal notification: a user action, so opening this panel is allowed. The id and
+   * token are checked by the proposal book; anything else (expired, used, changed, forged) runs nothing.
+   */
+  private fun receiveProposalConfirmation(incoming: Intent?): Boolean {
+    if (incoming?.action != com.example.phone.InstinctProposalCenter.ACTION_CONFIRM) return false
+    val id = incoming.getLongExtra(com.example.phone.InstinctProposalCenter.EXTRA_PROPOSAL_ID, -1L)
+    val token = incoming.getStringExtra(com.example.phone.InstinctProposalCenter.EXTRA_PROPOSAL_TOKEN)
+    // Consumed once: a recreated activity or a repeated delivery of this intent does not confirm again.
+    setIntent(Intent(this, AssistActivity::class.java))
+    if (id > 0) viewModel.confirmInstinctProposalFromNotification(id, token)
+    return true
   }
 
   private fun receiveSharedText(incoming: Intent?) {
@@ -249,6 +272,7 @@ class AssistActivity : ComponentActivity() {
     warmup?.cancel()
     warmup = null
     viewModel.pauseFloatingAssistant()
+    viewModel.detachInstinctProposals()
     super.onStop()
   }
 
