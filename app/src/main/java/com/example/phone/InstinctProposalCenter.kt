@@ -210,8 +210,9 @@ object InstinctProposalIntake {
       return
     }
     val parser = PhoneCommandParser()
-    val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser) }
-    if (checks.none { it is ProposalCheck.Valid }) diagnose(Diagnosis.NOT_UNDERSTOOD)
+    val routines = InstinctRoutineGrants(app).access()
+    val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser, routines = routines) }
+    if (checks.none { it !is ProposalCheck.Invalid }) diagnose(Diagnosis.NOT_UNDERSTOOD)
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
     val ticket = InstinctProposalCenter.openReply(app, checks.size, replyHandle)
     InstinctProposalCenter.deliver(app, checks, fingerprint, ticket)
@@ -269,6 +270,8 @@ object InstinctProposalCenter {
     checks.forEachIndexed { index, check ->
       when (check) {
         is ProposalCheck.Invalid -> reply(app, acks.resolve(ticket, index, InstinctAck.invalid(check)))
+        // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
+        is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index, AckEntry(AckKind.OK, check.order, answer(app, check.kind), informative = true)))
         is ProposalCheck.Valid -> {
           val proposal = book.offer(check.order, check.command, fingerprint)
           if (proposal == null) reply(app, acks.resolve(ticket, index,
@@ -342,6 +345,34 @@ object InstinctProposalCenter {
     }
   }
 
+  /** The answer to a read-only query. Names of enabled routines only, never their steps. */
+  internal fun answer(context: Context, kind: ProposalCheck.QueryKind): String = when (kind) {
+    ProposalCheck.QueryKind.CATALOG -> InstinctProtocolCatalog.summary(InstinctRoutineGrants(context).access().enabledNames())
+  }
+
+  /** The catalog to give Instinct, with the routines enabled now. */
+  fun catalog(context: Context, forChat: Boolean = false): String =
+    InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat)
+
+  /**
+   * Sends the catalog to Instinct through the newest valid «Responder» action. False when replies are off, there is
+   * no valid action or WhatsApp refused it. The chat copy marks every example, so it never reads as orders.
+   */
+  fun sendCatalog(context: Context): Boolean {
+    val handle = acks.latestHandle() ?: return false
+    val text = catalog(context, forChat = true).takeIf(InstinctAck::safe) ?: return false
+    val sent = runCatching { replySender(context.applicationContext, handle, text) }.getOrDefault(false)
+    InstinctProposalIntake.diagnose(if (sent) InstinctProposalIntake.Diagnosis.REPLIED else InstinctProposalIntake.Diagnosis.REPLY_FAILED,
+      if (sent) null else "WhatsApp no aceptó el mensaje.")
+    return sent
+  }
+
+  /** The steps a command stands for: a routine Instinct may run expands to its steps; anything else is itself. */
+  internal fun steps(context: Context, command: PhoneCommand): List<PhoneCommand>? =
+    if (command is PhoneCommand.Platform && command.action == PlatformAction.ROUTINE_RUN)
+      command.argument?.let { InstinctRoutineGrants(context).access().resolve(it)?.commands }
+    else listOf(command)
+
   /** Anti-loop brake shared by both paths: 6 automatic executions per 10 minutes. */
   val budget = AutoRunBudget({ clock() })
   internal var accessibilityConnected: () -> Boolean = { com.example.assist.PingAutoSendAccessibilityService.isConnected() }
@@ -360,12 +391,20 @@ object InstinctProposalCenter {
    * Null: run now without asking. Otherwise the reason it waits for Confirmar. [foreground] is true inside the open
    * panel, where opening another app is allowed. Acquires the anti-loop budget only when it returns null.
    */
-  fun autoRunBlocker(context: Context, command: PhoneCommand, foreground: Boolean): String? = when {
+  fun autoRunBlocker(context: Context, command: PhoneCommand, foreground: Boolean): String? {
+    // A routine is checked as a whole before its first step: one step that cannot run leaves all of it for Confirmar.
+    val steps = steps(context, command) ?: return "La rutina ya no está habilitada para Instinct o cambió."
+    steps.firstNotNullOfOrNull { blocker(context, it, foreground) }?.let { return it }
+    // A routine counts as one execution.
+    return if (!budget.tryAcquire()) "Instinct pidió muchas acciones seguidas; esta espera tu confirmación." else null
+  }
+
+  /** The checks of [autoRunBlocker] for one command, without the budget. */
+  internal fun blocker(context: Context, command: PhoneCommand, foreground: Boolean): String? = when {
     InstinctProposalSettings(context).asksFirst() -> "Elegiste confirmar cada propuesta."
     !foreground && keyguardLocked(context) -> "El teléfono estaba bloqueado."
     !foreground && opensActivity(command) && !accessibilityConnected() ->
       "Para abrir otra app sin tocar nada, Android necesita el servicio de Accesibilidad de Insto activo."
-    !budget.tryAcquire() -> "Instinct pidió muchas acciones seguidas; esta espera tu confirmación."
     else -> null
   }
 
@@ -379,6 +418,7 @@ object InstinctProposalCenter {
     }
     val claim = book.claim(proposal.id, fingerprint(context))
     if (claim !is ProposalBook.Claim.Granted) { reportUnavailable(context, proposal, claim); return }
+    if (isRoutine(proposal.command)) { runRoutineInBackground(context, proposal); return }
     val result = PhoneActionExecutor(context).execute(proposal.command)
     when {
       // Maybe it happened: never offered again, so it is never repeated.
@@ -408,6 +448,33 @@ object InstinctProposalCenter {
       }
     }
   }
+
+  internal fun isRoutine(command: PhoneCommand) = command is PhoneCommand.Platform && command.action == PlatformAction.ROUTINE_RUN
+
+  /**
+   * A claimed routine, step by step on its own [WorkflowRunner] file (never the panel's). Re-resolved now: a routine
+   * disabled or changed since the order arrived does not run. Steps never retry by themselves.
+   */
+  private fun runRoutineInBackground(context: Context, proposal: ProposalBook.Proposal) {
+    val name = (proposal.command as PhoneCommand.Platform).argument.orEmpty()
+    val routine = InstinctRoutineGrants(context).access().resolve(name)
+    if (routine == null) {
+      notifyResult(context, proposal, "Instinct pidió la rutina $name", "Ya no está habilitada para Instinct o cambió. No se ejecutó nada.")
+      report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, "la rutina ya no está habilitada o cambió; no se ejecutó nada."))
+      return
+    }
+    val store = WorkflowStore(context, ROUTINE_WORKFLOW_FILE)
+    // A routine interrupted by a process death is never resumed: its uncertain step is not repeated.
+    val runner = WorkflowRunner(runCatching { store.read() }.getOrNull(), store::write)
+    val executor = PhoneActionExecutor(context)
+    val run = InstinctRoutineRun(runner, { blocker(context, it, foreground = false) }, executor::execute).run(routine)
+    InstinctProposalIntake.diagnose(if (run.finished) InstinctProposalIntake.Diagnosis.EXECUTED else InstinctProposalIntake.Diagnosis.FAILED,
+      run.summary.takeUnless { run.finished })
+    notifyResult(context, proposal, if (run.finished) "Instinct hizo: rutina ${routine.name}" else "Instinct pidió: rutina ${routine.name}", run.summary)
+    report(context, proposal.id, AckEntry(run.kind, proposal.order, run.summary))
+  }
+
+  const val ROUTINE_WORKFLOW_FILE = "instinct-routine-workflow.json"
 
   /** A proposal that can no longer run, said once to Instinct. */
   internal fun reportUnavailable(context: Context, proposal: ProposalBook.Proposal, claim: ProposalBook.Claim) {

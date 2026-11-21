@@ -31,7 +31,10 @@ sealed interface ProposalCheck {
   val order: String
   data class Valid(override val order: String, val command: PhoneCommand) : ProposalCheck
   data class Invalid(override val order: String, val reason: Reason) : ProposalCheck
+  /** A read-only question about the protocol itself: it never does anything on the phone. */
+  data class Query(override val order: String, val kind: QueryKind) : ProposalCheck
   enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN }
+  enum class QueryKind(val phrase: String) { CATALOG("ver catálogo") }
 }
 
 /**
@@ -44,12 +47,19 @@ object InstinctProposalValidator {
   private val silenceActions = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
     PlatformAction.DND_ON, PlatformAction.DND_OFF)
 
-  fun check(order: String, parser: PhoneCommandParser, now: Calendar = Calendar.getInstance()): ProposalCheck =
-    check(order, parser::parse, now)
+  /** [routines] are the routines the user let Instinct run; with none, every routine is forbidden. */
+  fun check(order: String, parser: PhoneCommandParser, now: Calendar = Calendar.getInstance(),
+    routines: InstinctRoutineAccess = InstinctRoutineAccess.NONE): ProposalCheck =
+    check(order, parser::parse, now, routines)
 
   /** [parse] is the explicit grammar; a seam for tests that the semantic guard still reviews its output. */
-  internal fun check(order: String, parse: (String) -> PhoneRoute, now: Calendar): ProposalCheck {
+  internal fun check(order: String, parse: (String) -> PhoneRoute, now: Calendar,
+    routines: InstinctRoutineAccess = InstinctRoutineAccess.NONE): ProposalCheck {
     if (order.isBlank()) return ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY)
+    // Read-only questions about the protocol: exact phrases, before the grammar.
+    val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
+    ProposalCheck.QueryKind.entries.firstOrNull { PhoneCommandParser.normalize(it.phrase) == folded }
+      ?.let { return ProposalCheck.Query(order, it) }
     if (RequestSafetyPolicy.refusal(order) != null || RequestSafetyPolicy.isQuestion(order))
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.UNSAFE)
     val command = (parse(order) as? PhoneRoute.Local)?.command
@@ -57,14 +67,52 @@ object InstinctProposalValidator {
     val reviewed = SemanticCommandGuard.review(InterpretationRequest(order, now = now), InterpretationResult.Direct(command))
     if (reviewed !is InterpretationResult.Direct || reviewed.command != command)
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.SEMANTIC)
-    if (!allowed(command)) return ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
+    if (!allowed(command) && !allowedRoutine(command, routines)) return ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
     return ProposalCheck.Valid(order, command)
   }
 
   /**
-   * Allowlist v1. Everything not named is forbidden, in particular calls ([PhoneCommand.Dial] and every
-   * [PlatformAction.CALL_DIRECT]), messages, files and sharing, [PhoneCommand.SavePlace], routines and workflows.
-   * A proposal is always one command: plans of several steps are never built from proposals.
+   * A routine passes only when its name matches exactly (normalized as `routine_run` does) a routine the user
+   * enabled for Instinct, whose steps have not changed since. No other routine, and never a plan built from text.
+   */
+  fun allowedRoutine(command: PhoneCommand, routines: InstinctRoutineAccess): Boolean =
+    command is PhoneCommand.Platform && command.action == PlatformAction.ROUTINE_RUN &&
+      command.argument?.let(routines::resolve) != null
+
+  /**
+   * One canonical form per allowed type: the single source of the examples in the generated catalog
+   * ([InstinctProtocolCatalog]). A test checks that each one is [ProposalCheck.Valid].
+   */
+  val examples: List<String> = listOf(
+    "poner una alarma a las 07:00",
+    "poner una alarma a las 07:00 todos los días",
+    "poner un temporizador de 25 minutos",
+    "poner el volumen al 30 por ciento",
+    "subir el volumen",
+    "bajar el volumen",
+    "prender la linterna",
+    "apagar la linterna",
+    "silenciar el teléfono",
+    "silenciar el teléfono durante una hora",
+    "activar no molestar",
+    "desactivar no molestar",
+    "poner en vibración",
+    "pausar la música",
+    "siguiente canción",
+    "abrir spotify",
+    "mostrar las alarmas",
+    "mostrar los temporizadores",
+    "poner música de Soda Stereo",
+    "buscar jazz en YouTube",
+    "buscar Cerati en Spotify",
+    "agendar reunión mañana a las 17:00 durante una hora",
+  )
+
+  /**
+   * Allowlist v1 for single commands and routine steps. Everything not named is forbidden, in particular calls
+   * ([PhoneCommand.Dial] and every [PlatformAction.CALL_DIRECT]), messages, files and sharing, [PhoneCommand.SavePlace]
+   * and workflows. A routine is never allowed here: only [allowedRoutine] lets an enabled one through. A proposal is
+   * always one command: plans of several steps are never built from proposals.
    */
   fun allowed(command: PhoneCommand): Boolean = when (command) {
     is PhoneCommand.Alarm, is PhoneCommand.Timer, is PhoneCommand.Volume, is PhoneCommand.Torch,

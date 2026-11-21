@@ -82,6 +82,8 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         "Solo usa el texto del resultado que ya te muestra a vos.")
       SettingsChoices(InstinctReplyMode.entries, replyMode, { settings.setReplyMode(it); revision++ }, label = ::replyModeLabel,
         itemModifier = { Modifier.testTag("instinct_reply_${it.name.lowercase()}") })
+      InstinctRoutineSwitches(revision) { revision++ }
+      InstinctCatalogActions(replyMode, revision) { revision++ }
       ProposalDiagnostics(contact, revision) { revision++ }
       if (flavor == WhatsAppFlavor.AUTO) SettingsDescription("Se usa la app de WhatsApp que Insto elige para enviar.")
     }
@@ -105,6 +107,52 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         }, modifier = Modifier.testTag("instinct_proposals_accept")) { Text("Activar") }
       },
     )
+  }
+}
+
+/** «Instinct puede ejecutarla», one switch per configured routine. Off by default; disabled with the reason when not eligible. */
+@Composable
+private fun InstinctRoutineSwitches(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val grants = remember { com.example.phone.InstinctRoutineGrants(context) }
+  val routines = remember(revision) { grants.configured() }
+  val access = remember(revision) { grants.access() }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_routines")) {
+    Text("Rutinas para Instinct", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription(if (routines.isEmpty()) "No hay rutinas configuradas. Importá una para que Instinct pueda pedirla por su nombre."
+      else "Instinct puede pedir «#insto ejecutar la rutina <nombre>» solo para las que enciendas acá. Si la rutina cambia, se apaga sola.")
+    routines.forEach { routine ->
+      val blocker = com.example.phone.InstinctRoutines.blocker(routine)
+      val on = access.resolve(routine.name) != null
+      SettingsSwitch("Instinct puede ejecutar «${routine.name}»", on, { value -> grants.set(routine, value); onChange() },
+        blocker ?: "${routine.commands.size} pasos. Cuenta como una sola orden.", enabled = blocker == null || on)
+    }
+  }
+}
+
+/** Copy the generated catalog, or send it to Instinct while a «Responder» action is valid. */
+@Composable
+private fun InstinctCatalogActions(replyMode: InstinctReplyMode, revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  var notice by remember { mutableStateOf<String?>(null) }
+  val canSend = remember(revision, replyMode) {
+    replyMode != InstinctReplyMode.NEVER && com.example.phone.InstinctProposalCenter.acks.latestHandle() != null
+  }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_catalog")) {
+    Text("Instrucciones para Instinct", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("Se generan con la gramática de Insto (${com.example.phone.InstinctProtocolCatalog.TITLE}) y las rutinas que habilitaste. Pegalas en el prompt de Instinct.")
+    OutlinedButton(onClick = {
+      val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+      clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Instrucciones para Instinct",
+        com.example.phone.InstinctProposalCenter.catalog(context)))
+      notice = "Instrucciones copiadas."
+    }, modifier = Modifier.testTag("instinct_catalog_copy")) { Text("Copiar instrucciones para Instinct") }
+    if (canSend) OutlinedButton(onClick = {
+      notice = if (com.example.phone.InstinctProposalCenter.sendCatalog(context)) "Instrucciones enviadas a Instinct."
+        else "No se pudieron enviar: WhatsApp no aceptó la respuesta o venció."
+      onChange()
+    }, modifier = Modifier.testTag("instinct_catalog_send")) { Text("Enviarlas a Instinct") }
+    notice?.let { SettingsDescription(it) }
   }
 }
 

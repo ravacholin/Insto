@@ -313,6 +313,15 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   private fun finishWorkflow() {
+    runningProposal?.takeIf { InstinctProposalCenter.isRoutine(it.command) }?.let { proposal ->
+      runningProposal = null
+      val steps = workflow.snapshot?.steps.orEmpty()
+      val done = steps.count { it.status == StepStatus.COMPLETED || it.status == StepStatus.HANDED_OFF }
+      val name = (proposal.command as PhoneCommand.Platform).argument.orEmpty()
+      InstinctProposalCenter.report(getApplication(), proposal.id, com.example.phone.AckEntry(
+        if (done == steps.size) com.example.phone.AckKind.OK else com.example.phone.AckKind.ERROR, proposal.order,
+        "Instinct ejecutó la rutina $name: $done de ${steps.size} pasos."))
+    }
     conversation.clear(); semanticDraft = null; clarification = null; clarificationRequest = null
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
       status = "Secuencia finalizada. Las entregas a otras apps se revisan allí.",
@@ -576,8 +585,10 @@ class MainViewModel @JvmOverloads constructor(
       }
     }
     // A proposal from Instinct is not the user's turn: it never becomes a reference for the next order.
-    if (command != proposalCommand) operationalContext.record(command, result)
-    else runningProposal?.let { proposal ->
+    // The steps of a routine Instinct asked for are not the user's turns either.
+    val instinctRoutine = runningProposal?.let { InstinctProposalCenter.isRoutine(it.command) } == true
+    if (command != proposalCommand && !instinctRoutine) operationalContext.record(command, result)
+    else if (!instinctRoutine) runningProposal?.let { proposal ->
       InstinctProposalCenter.report(getApplication(), proposal, result)
       if (com.example.phone.InstinctAck.kindOf(result).final) runningProposal = null
     }
@@ -1023,12 +1034,37 @@ class MainViewModel @JvmOverloads constructor(
     floatingState.value = floatingState.value.copy(proposalsWaiting = 0)
   }
 
+  /**
+   * A routine Instinct may run, through the assistant's own routine flow: re-resolved now (enabled and unchanged),
+   * prepared as a workflow and started at once, since the proposal was already confirmed or allowed to run alone.
+   */
+  private fun runInstinctRoutine(proposal: ProposalBook.Proposal) {
+    val name = (proposal.command as PhoneCommand.Platform).argument.orEmpty()
+    val routine = com.example.phone.InstinctRoutineGrants(getApplication()).access().resolve(name)
+    if (routine == null) {
+      runningProposal = null
+      InstinctProposalCenter.report(getApplication(), proposal.id, com.example.phone.AckEntry(com.example.phone.AckKind.ERROR,
+        proposal.order, "la rutina ya no está habilitada o cambió; no se ejecutó nada."))
+      sessions.transition(floatingGeneration, com.example.session.SessionState.FAILED)
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, status = null,
+        error = "Instinct pidió la rutina $name, pero ya no está habilitada o cambió. No se ejecutó nada.")
+      return
+    }
+    previewWorkflow(routine.commands)
+    if (activeWorkflow()?.confirmed == false) {
+      try { workflow.confirm() } catch (_: Exception) { retainDecisionRequest("No se pudo guardar el plan. No se ejecutó ninguna acción."); return }
+      advanceWorkflow()
+    }
+  }
+
   /** A claimed proposal that ends without running: Instinct hears it once, if it was still waiting. */
   private fun endRunningProposal(reason: String) {
     val proposal = runningProposal ?: return
     runningProposal = null
-    InstinctProposalCenter.report(getApplication(), proposal.id,
-      com.example.phone.AckEntry(com.example.phone.AckKind.DISCARDED, proposal.order, reason))
+    val entry = if (InstinctProposalCenter.isRoutine(proposal.command))
+      com.example.phone.AckEntry(com.example.phone.AckKind.ERROR, proposal.order, "la rutina se detuvo antes de terminar; los pasos hechos no se repiten.")
+      else com.example.phone.AckEntry(com.example.phone.AckKind.DISCARDED, proposal.order, reason)
+    InstinctProposalCenter.report(getApplication(), proposal.id, entry)
   }
 
   /** A shown proposal that the user replaced with another order is discarded: it never runs later. */
@@ -1120,7 +1156,8 @@ class MainViewModel @JvmOverloads constructor(
           previewWorkflow(listOf(command))
           InstinctProposalCenter.report(getApplication(), claim.proposal.id, com.example.phone.AckEntry(
             com.example.phone.AckKind.WAITING, claim.proposal.order, "el evento espera que la persona lo revise antes de guardarlo."))
-        } else runPhoneCommand(command)
+        } else if (InstinctProposalCenter.isRoutine(command)) runInstinctRoutine(claim.proposal)
+        else runPhoneCommand(command)
       }
       else -> {
         sessions.transition(floatingGeneration, com.example.session.SessionState.FAILED)

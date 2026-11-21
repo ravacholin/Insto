@@ -6,8 +6,9 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
-class WorkflowStore(context: Context) {
- private val file = AtomicFile(File(context.noBackupFilesDir, "phone-workflow.json"))
+/** [name] separates the panel's workflow from a routine Instinct runs in the background. */
+class WorkflowStore(context: Context, name: String = "phone-workflow.json") {
+ private val file = AtomicFile(File(context.noBackupFilesDir, name))
  @Synchronized fun read(): WorkflowSnapshot? {
   if (!file.baseFile.exists()) return null
   return try {

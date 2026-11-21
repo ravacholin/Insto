@@ -15,7 +15,7 @@ La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct 
 - No hay JSON ni parámetros libres: la línea pasa por el mismo parser que un pedido escrito. No usa Gemini, Groq, frases aprendidas, estructuras aprendidas ni el contexto operativo. **Solo la gramática explícita.**
 - Si una línea no se resuelve como un único `PhoneRoute.Local` permitido, se descarta y aparece un aviso discreto: «Instinct propuso algo que no entiendo». Eso incluye las aclaraciones (por ejemplo, «a las 7» sin mañana ni tarde), varios pasos, condiciones, negaciones y preguntas.
 
-## Acciones permitidas (lista blanca v1)
+## Acciones permitidas (lista blanca)
 
 | Tipo | Ejemplo | ¿Abre otra app? |
 | --- | --- | --- |
@@ -29,8 +29,12 @@ La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct 
 | `OpenApp` | `#insto abrir spotify` | Sí |
 | `MusicSearch`, `SpotifySearch`, `YouTubeSearch` | `#insto buscar jazz en YouTube` | Sí |
 | `CalendarEvent` | `#insto agendar reunión mañana a las 17:00 durante una hora` | Sí (el calendario muestra el evento para guardarlo) |
+| `ROUTINE_RUN` de una rutina **habilitada para Instinct** (1.14.0) | `#insto ejecutar la rutina Estudio` | Según sus pasos |
+| Consulta de solo lectura (1.14.0) | `#insto ver catálogo` | No: no hace nada en el teléfono |
 
-**Prohibidas siempre:** llamadas (`Dial`, `CALL_DIRECT`), cualquier envío de mensajes o archivos, compartir texto, `SavePlace`, navegación, rutinas y workflows, planes de varios pasos y volumen multimedia temporal.
+Los ejemplos de esta tabla salen de una sola fuente en el código (`InstinctProposalValidator.examples`, junto a la lista blanca) y un test comprueba que cada uno es una orden válida.
+
+**Prohibidas siempre:** llamadas (`Dial`, `CALL_DIRECT`), cualquier envío de mensajes o archivos, compartir texto, `SavePlace`, navegación, rutinas que no habilitaste (o que cambiaron desde que las habilitaste), workflows y planes de varios pasos armados a partir del texto, y volumen multimedia temporal.
 
 ## Cómo llega y se ejecuta
 
@@ -85,6 +89,27 @@ Hasta 1.13.0, Instinct nunca sabía qué había pasado con sus órdenes. Ahora I
 
 **Diagnóstico.** La pantalla de diagnóstico suma una línea propia, sin contenido: «Última respuesta a Instinct: Se respondió a Instinct» o «No se pudo responder» con el motivo. No reemplaza el estado del último mensaje.
 
+## Rutinas para Instinct (1.14.0)
+
+Instinct puede pedir `#insto ejecutar la rutina <nombre>` para correr una rutina que **vos** configuraste (`ConfiguredRoutineStore`), sin habilitar planes libres.
+
+- **Permiso por rutina.** En **Ajustes → Propuestas de Instinct → Rutinas para Instinct** cada rutina tiene un interruptor «Instinct puede ejecutar «…»», apagado por defecto. Se guarda en `noBackupFilesDir` (`instinct-routines.json`, escritura atómica) el nombre normalizado y un **hash de los pasos** al momento de habilitarla. Si la rutina cambia (por ejemplo, la reimportás), el hash no coincide y queda deshabilitada hasta que la vuelvas a encender. Una restauración nunca trae estos permisos.
+- **Qué rutinas se pueden habilitar.** Solo las que tienen **como máximo 6 pasos** y en las que **todos** los pasos pasan la lista blanca de órdenes sueltas (`InstinctProposalValidator.allowed`). Si no, el interruptor está deshabilitado y dice qué paso lo impide («El paso 2 («Llamar…») no está permitido para Instinct»).
+- **Validación.** `ROUTINE_RUN` pasa la lista blanca solo si el nombre coincide **exactamente** (normalizado como lo hace `routine_run`) con una rutina habilitada y con hash vigente. «Estudios» o «Estudio intensivo» no valen por «Estudio». Se vuelve a comprobar al ejecutar: si la deshabilitaste o cambió en el medio, no corre.
+- **Antes del primer paso.** Cada paso pasa por los mismos controles que una orden (confirmación pedida, teléfono bloqueado, apertura de otra app sin Accesibilidad). Si alguno no puede correr solo, **la rutina entera** queda para Confirmar antes de empezar. La rutina cuenta como **una sola** ejecución en el freno anti-bucle.
+- **En segundo plano** se ejecuta con `WorkflowRunner` y su escritura previa al despacho, en un archivo propio (`instinct-routine-workflow.json`), separado del flujo del panel. Se detiene en el primer paso que falla, necesita algo tuyo, queda bloqueado o tiene resultado incierto. Los pasos restantes quedan `CANCELLED` y **nunca** se reintentan solos. Un paso entregado a otra app cuenta como hecho. Si el proceso muere en el medio, el paso en curso queda incierto y la rutina no se retoma.
+- **Con el panel abierto** se ejecuta por el flujo de rutinas que ya tiene el asistente (la lista de pasos visible), arrancando sola porque la orden ya estaba confirmada o permitida.
+- **Aviso:** «Instinct ejecutó la rutina Estudio: 3 de 3 pasos» o «…: se detuvo en el paso 2: <motivo>». **Acuse** (si está activo): `#insto-ok` con ese resumen, `#insto-error` si se detuvo, y `#insto-incierto … · no se repite` si se detuvo por un resultado incierto (para que Instinct no la vuelva a pedir).
+
+## Catálogo para Instinct (1.14.0)
+
+El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses y la versión del protocolo («Protocolo Insto v2»).
+
+- **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** lo copia al portapapeles. Si las respuestas están activas y hay una acción «Responder» vigente (de un mensaje de Instinct de los últimos 10 minutos), aparece **«Enviarlas a Instinct»**: lo manda por ese chat.
+- La copia que viaja por WhatsApp marca cada ejemplo con «› » delante y lo explica, porque Insto lee ese chat y nunca debe tomar su propio mensaje por órdenes. Igual que un acuse, se comprueba que no tenga ninguna línea que empiece con «#insto ».
+- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v2 · rutinas habilitadas: Estudio.` (no el catálogo entero).
+- Copia de referencia, generada sin rutinas: [`instinct-catalog.txt`](instinct-catalog.txt). Un test compara esa copia con lo que genera el código; para regenerarla, corré `INSTO_WRITE_CATALOG=1 python3 scripts/test-phone-core.py com.example.phone.InstinctRoutinesTest`.
+
 ## Idempotencia y vencimiento
 
 - Las órdenes viven solo en memoria (`ProposalBook`). Cada una se ejecuta como máximo una vez gracias a un `claim` atómico. Si WhatsApp vuelve a publicar la misma notificación, no pasa nada.
@@ -126,53 +151,6 @@ Hasta 1.13.0, Instinct nunca sabía qué había pasado con sus órdenes. Ahora I
 
 ## Instrucciones para pegar en el prompt de Instinct
 
-```text
-Órdenes para Insto (el asistente del teléfono de quien te escribe)
+Desde 1.14.0 el bloque se genera desde el código y se obtiene en **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** (o «Enviarlas a Instinct»). Así nunca se desincroniza de la gramática ni de tus rutinas habilitadas. Copiá el bloque de nuevo cada vez que habilites o deshabilites una rutina, o cuando Insto se actualice.
 
-Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
-
-#insto <orden>
-
-Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa. Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.
-
-Reglas:
-- Cada orden va sola en su propia línea y la línea empieza con "#insto " (en minúsculas, seguido de un espacio). Nunca pongas "#insto" en medio de una oración ni lo uses como ejemplo en el texto.
-- Como máximo 3 líneas de orden por mensaje. Insto ignora las demás. Más de 6 órdenes en 10 minutos quedan esperando confirmación.
-- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin condiciones ("si…"), sin negaciones, sin preguntas, sin "y" para encadenar acciones.
-- Horas en formato de 24 horas (07:00, 17:30). Duraciones con número y unidad (25 minutos, una hora). Volumen en porcentaje (30 por ciento).
-- Insto solo lee esas líneas: el resto de tu mensaje no se interpreta. Si una línea no se entiende o no está permitida, se descarta.
-
-Acciones permitidas (usá estas formas):
-#insto poner una alarma a las 07:00
-#insto poner una alarma a las 07:00 todos los días
-#insto poner un temporizador de 25 minutos
-#insto poner el volumen al 30 por ciento
-#insto subir el volumen
-#insto bajar el volumen
-#insto prender la linterna
-#insto apagar la linterna
-#insto silenciar el teléfono
-#insto silenciar el teléfono durante una hora
-#insto activar no molestar
-#insto poner en vibración
-#insto pausar la música
-#insto siguiente canción
-#insto abrir spotify
-#insto mostrar las alarmas
-#insto mostrar los temporizadores
-#insto poner música de Soda Stereo
-#insto buscar jazz en YouTube
-#insto buscar Cerati en Spotify
-#insto agendar reunión mañana a las 17:00 durante una hora
-
-Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni rutinas, ni navegación, ni varias acciones juntas. Insto los rechaza siempre.
-
-Respuestas de Insto (si la persona las activó):
-Insto puede contestarte en este chat con una línea por orden, en el mismo orden:
-#insto-ok <orden> → <resultado>          la orden se ejecutó
-#insto-espera <orden> → <motivo>         quedó esperando que la persona la confirme
-#insto-error <orden> → <motivo>          no se ejecutó (no se entendió, no está permitida o falló)
-#insto-incierto <orden> → <mensaje> · no se repite   pudo haberse hecho; Insto no la repite
-Después de una espera puede llegar #insto-ok, #insto-descartada o #insto-vencida.
-Esas líneas son informativas: no las respondas con nuevas órdenes, salvo una sola orden corregida después de un #insto-error. Nunca repitas una orden después de #insto-incierto ni de #insto-espera.
-```
+La copia de referencia, sin rutinas, está en [`instinct-catalog.txt`](instinct-catalog.txt). Incluye los prefijos de los acuses (`#insto-ok`, `#insto-espera`, `#insto-error`, `#insto-incierto`, más `#insto-descartada` y `#insto-vencida` como seguimiento) y la regla para Instinct: **esas líneas son informativas; no se responden con nuevas órdenes, salvo una sola orden corregida después de un `#insto-error`, y nunca se repite una orden después de `#insto-incierto` o `#insto-espera`.**
