@@ -1,8 +1,10 @@
-# Órdenes de Instinct («Instinct con manos», 1.13.0 y 1.14.0)
+# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.15.0)
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
 Desde 1.14.0, además: Insto le puede **responder** a Instinct con el resultado de cada orden, Instinct puede pedir **rutinas** que vos le habilitaste, el bloque de instrucciones para Instinct se **genera desde el código**, las órdenes pueden quedar **programadas** para más tarde (con una única condición de clima) y lo que se puede revertir trae **Deshacer**.
+
+Desde 1.15.0, los acuses pueden ir a una **bitácora** en Google Sheets en lugar del chat, para no llenarlo de mensajes ([Bitácora](#bitácora-1150)). Las órdenes siguen llegando por WhatsApp exactamente igual.
 
 La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. Con **«Pedirme confirmación antes de ejecutar»** encendido, cada orden espera tu toque o un «dale». Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
 
@@ -93,6 +95,8 @@ Hay dos prefijos más: `#insto-programada <orden> → a las 22:00` (una orden di
 - Como máximo 3 líneas (igual que el máximo de órdenes) y 600 caracteres. La orden original se recorta a 80.
 - **Solo errores y esperas** omite las líneas `#insto-ok`; si todo salió bien, no se envía nada. Las respuestas a consultas (`ver catálogo`, `ver programadas`, `cancelar programadas`) salen en los dos modos activos.
 
+Desde 1.15.0, el **«Canal de estados»** decide si estos acuses van al chat (como acá), a la [bitácora](#bitácora-1150) o a los dos. El modo de arriba sigue decidiendo qué se informa.
+
 **Seguimiento.** Si una orden quedó en espera (o programada) y después la confirmás, la descartás, vence o se dispara, Insto manda un segundo acuse breve con la misma acción guardada, **solo si sigue vigente**: `#insto-ok …` (o `#insto-error`/`#insto-incierto` si al confirmarla falló), `#insto-descartada …` o `#insto-vencida …`. Este seguimiento sale también en «Solo errores y esperas», porque cierra una espera que Instinct ya vio. Para que el aviso de vencimiento llegue antes de que caduque la acción, una orden en espera vence unos 2 segundos antes de sus 10 minutos.
 
 **Diagnóstico.** La pantalla de diagnóstico suma una línea propia, sin contenido: «Última respuesta a Instinct: Se respondió a Instinct» o «No se pudo responder» con el motivo. No reemplaza el estado del último mensaje.
@@ -111,12 +115,12 @@ Instinct puede pedir `#insto ejecutar la rutina <nombre>` para correr una rutina
 
 ## Catálogo para Instinct (1.14.0)
 
-El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses y la versión del protocolo («Protocolo Insto v2»).
+El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses (o, con la bitácora, cómo leerla) y la versión del protocolo («Protocolo Insto v3» desde 1.15.0).
 
 - **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** lo copia al portapapeles. Si las respuestas están activas y hay una acción «Responder» vigente (de un mensaje de Instinct de los últimos 10 minutos), aparece **«Enviarlas a Instinct»**: lo manda por ese chat.
 - La copia que viaja por WhatsApp marca cada ejemplo con «› » delante y lo explica, porque Insto lee ese chat y nunca debe tomar su propio mensaje por órdenes. Igual que un acuse, se comprueba que no tenga ninguna línea que empiece con «#insto ».
-- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v2 · rutinas habilitadas: Estudio.` (no el catálogo entero).
-- Copia de referencia, generada sin rutinas: [`instinct-catalog.txt`](instinct-catalog.txt). Un test compara esa copia con lo que genera el código; para regenerarla, corré `INSTO_WRITE_CATALOG=1 python3 scripts/test-phone-core.py com.example.phone.InstinctRoutinesTest`.
+- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v3 · rutinas habilitadas: Estudio.` (no el catálogo entero).
+- Copias de referencia, generadas sin rutinas: [`instinct-catalog.txt`](instinct-catalog.txt) (canal WhatsApp) y [`instinct-catalog-bitacora.txt`](instinct-catalog-bitacora.txt) (con bitácora, la copia que viaja por WhatsApp, sin URL ni token). Un test compara las dos con lo que genera el código; para regenerarla, corré `INSTO_WRITE_CATALOG=1 python3 scripts/test-phone-core.py com.example.phone.InstinctRoutinesTest`.
 
 ## Órdenes diferidas (1.14.0)
 
@@ -138,7 +142,7 @@ El envoltorio solo dice **cuándo**; la orden interior pasa por el validador int
   4. Si llegó con **más de 15 minutos de atraso** (Doze, teléfono apagado), no se ejecuta sola: queda para Confirmar con el motivo «Llegó tarde».
   5. Si no, pasa por `autoRunBlocker` y `runInBackground` como cualquier orden (o al panel, si está abierto).
 - **Gestión:** `#insto ver programadas` (solo lectura, responde por el acuse con la hora y la orden de cada una) y `#insto cancelar programadas` (cancela todas las que vinieron de Instinct). En **Ajustes → Propuestas de Instinct → Órdenes programadas por Instinct** ves la lista con hora y resumen y podés cancelar cada una. Apagar «Recibir órdenes de Instinct» las cancela todas.
-- **Acuse al dispararse:** solo si la acción «Responder» del mensaje original sigue vigente (10 minutos), es decir, en la práctica para demoras cortas. Si no, el resultado solo te llega a vos.
+- **Acuse al dispararse:** por el chat, solo si la acción «Responder» del mensaje original sigue vigente (10 minutos), es decir, en la práctica para demoras cortas. Con la [bitácora](#bitácora-1150) se registra siempre, aunque hayan pasado horas o se haya reiniciado el teléfono (la programada guarda el identificador corto del mensaje).
 
 ## Condiciones por clima (1.14.0)
 
@@ -174,6 +178,72 @@ La notificación «Instinct hizo: …» trae la acción **«Deshacer»** solo pa
 - Si los acuses están activos y la acción «Responder» sigue vigente, se responde `#insto-deshecho <orden> → <qué se deshizo>`.
 - Un modo temporal pedido por Instinct siempre espera tu confirmación (como cualquier modo temporal), así que en la práctica no se ejecuta en segundo plano ni trae este botón; el soporte queda listo para cuando se ejecute por ese camino.
 
+## Bitácora (1.15.0)
+
+Con los acuses en el chat, cada orden suma un mensaje a la conversación con Instinct. La bitácora los anota en una planilla de Google, a través de un Apps Script tuyo, y el chat queda solo para la conversación. **El camino de entrada no cambia:** las órdenes `#insto` siguen llegando por WhatsApp y pasan por los mismos filtros, la misma lista blanca y la misma ejecución.
+
+**Ajuste:** **Ajustes → Propuestas de Instinct → «Canal de estados»**: **WhatsApp** (valor por defecto, el comportamiento de 1.14.0), **Bitácora** o **Ambos**. Vive en `noBackupFilesDir` (`instinct-proposals-ack-channel`): una restauración nunca lo trae. «Responderle a Instinct» (Nunca / Solo errores y esperas / Siempre) sigue decidiendo **qué** se informa; el canal decide **por dónde**. Con «Nunca» no se anota nada.
+
+- Con **Bitácora**, Insto **nunca** lee ni usa la acción «Responder» de WhatsApp: ni siquiera la guarda en memoria. «Enviarlas a Instinct» no aparece.
+- Con **Ambos**, el chat recibe lo mismo que en 1.14.0 (mientras la acción «Responder» siga vigente) y la bitácora recibe todo.
+
+### Configuración
+
+1. Creá una planilla de Google y abrí **Extensiones → Apps Script**. Pegá [`instinct-bitacora.gs`](instinct-bitacora.gs) y cambiá `TOKEN` por un texto largo y aleatorio.
+2. **Implementar → Nueva implementación → Aplicación web**, «Ejecutar como: yo», «Quién tiene acceso: cualquier usuario». Copiá la URL.
+3. En Insto, **Ajustes → Propuestas de Instinct → Bitácora**: pegá la URL (tiene que empezar con `https://script.google.com/macros/s/` y terminar en `/exec`; si no, no se guarda) y el token (de 8 a 200 caracteres, sin espacios). **«Guardar bitácora»**.
+4. **«Probar bitácora»** manda un evento `kind=prueba` y muestra el resultado.
+
+La URL y el token viven en `noBackupFilesDir` (`instinct-log-url`, `instinct-log-token`) y nunca entran en copias de seguridad. El token nunca se muestra entero (solo los últimos 4 caracteres: «••••abcd»), el campo para escribirlo arranca vacío (dejarlo vacío conserva el guardado) y nunca se registra en Logcat ni en el diagnóstico.
+
+### Evento
+
+Cada acuse es un evento JSON:
+
+```json
+{"id": "6f1c…", "at": "2026-11-21T09:30:12-03:00", "kind": "ok", "order": "poner el volumen al 30 por ciento",
+ "detail": "Volumen multimedia ajustado.", "message": "3fa94c0b12de", "protocol": "Protocolo Insto v3"}
+```
+
+- `id`: UUID aleatorio generado al crear el evento. El script descarta los ids repetidos y los confirma igual: un reintento nunca duplica una fila.
+- `at`: el instante, ISO-8601 con zona.
+- `kind`: el prefijo del acuse sin `#insto-`: `ok`, `espera`, `error`, `incierto`, `programada`, `descartada`, `vencida`, `deshecho` (y `prueba`, solo desde el botón).
+- `order`: la orden original recortada a 80 caracteres, como en el chat.
+- `detail`: el mismo texto de resultado del acuse en el chat (`InstinctAck`), con los mismos recortes y el mismo aplanado de saltos de línea y caracteres de control.
+- `message`: los primeros 12 dígitos hexadecimales del SHA-256 que ya usa el dedupe (clave de la notificación más texto). Identifica el mensaje de Instinct que originó la orden; **nunca es el texto**.
+- `protocol`: «Protocolo Insto v3».
+
+**Guardia anti-bucle:** ningún campo puede empezar con «#insto » ni tener una línea que el lector de órdenes tome por una orden. Un evento que no pase la guardia no se crea y la bandeja tampoco lo acepta. Las respuestas a consultas (`ver catálogo`, `ver programadas`, `cancelar programadas`) también son eventos (`kind=ok`).
+
+### Envío
+
+- **Bandeja de salida persistente:** `instinct-outbox.json` en `noBackupFilesDir`, con escritura atómica como `ConfiguredRoutineStore`. Como máximo **200 eventos**; si se llena, se descarta el más viejo y el diagnóstico lo dice («se descartaron N por bandeja llena»).
+- **Un POST por lote** de hasta 50 eventos, con OkHttp, cuerpo `{token, events}`. Apps Script responde con un **302** a `script.googleusercontent.com`: Insto lo sigue con un **GET** (solo a los hosts de Google y por HTTPS, como máximo 2 saltos) y lee el JSON final `{ok, accepted:[ids]}`. **Solo los ids aceptados** salen de la bandeja.
+- **Reintentos** con `JobScheduler` del sistema (sin dependencias nuevas): restricción de red y *backoff* exponencial desde 30 segundos. Un token rechazado o una configuración faltante no se reintenta solo: espera a que la corrijas (guardarla vuelve a programar el envío). En `BOOT_COMPLETED` se reprograma si quedan pendientes.
+- **Timeout:** 15 segundos para todo el intercambio.
+- **Un fallo nunca bloquea** la ejecución de una orden: el evento solo se agrega a la bandeja. Tampoco dispara un envío por WhatsApp como reemplazo.
+
+### Seguimientos sin límite de tiempo
+
+Con la acción «Responder», los seguimientos solo salen durante 10 minutos. Con la bitácora ese límite no existe: confirmada, descartada, vencida, el disparo de una diferida y Deshacer se registran siempre que el modo los incluya, aunque haya pasado más tiempo. Las líneas de cada mensaje se recuerdan en memoria hasta 25 horas (una diferida se dispara como mucho 24 horas después); la acción «Responder», en cambio, se olvida a los 10 minutos como siempre. Una diferida guarda el identificador corto de su mensaje, así que su resultado se registra aunque el proceso se haya reiniciado. Una orden en espera se registra como `vencida` al cumplir sus 10 minutos.
+
+### Para Instinct
+
+Con Bitácora o Ambos, el catálogo («Protocolo Insto v3») reemplaza la explicación de los prefijos por cómo leer la bitácora:
+
+```text
+GET <URL>?token=<token>&since=<ISO>&limit=50
+→ {ok, events:[{recibido, evento_id, ocurrido, tipo, orden, detalle, mensaje_id, protocolo}]}
+```
+
+- **«Copiar instrucciones para Instinct»** incluye la URL y el token reales, porque Instinct los necesita para leerla.
+- **«Enviarlas a Instinct»** por WhatsApp **no** los incluye: en su lugar dice «(URL y token: pedíselos a Pablo)». Antes de enviarla, Insto comprueba además que el texto no contenga ni la URL ni el token.
+- Se mantienen las reglas: los eventos son informativos, una sola orden corregida después de un `error`, nunca repetir después de `incierto` o `espera`. Se agrega: **antes de repetir o corregir una orden, consultá la bitácora.**
+
+### Diagnóstico
+
+Una línea más, sin contenido: «Bitácora: última escritura HH:MM · pendientes N» o «Bitácora: no se pudo escribir (motivo: sin red / token rechazado / respuesta inválida / HTTP NNN / falta la URL o el token) · pendientes N». Aparece con Bitácora o Ambos, o mientras queden eventos en la bandeja.
+
 ## Idempotencia y vencimiento
 
 - Las órdenes inmediatas viven solo en memoria (`ProposalBook`). Cada una se ejecuta como máximo una vez gracias a un `claim` atómico. Si WhatsApp vuelve a publicar la misma notificación, no pasa nada.
@@ -190,7 +260,8 @@ La notificación «Instinct hizo: …» trae la acción **«Deshacer»** solo pa
 - Los interruptores, el modo de respuesta, los permisos de rutinas y las programadas viven en `noBackupFilesDir`: una restauración nunca enciende ni trae nada de esto.
 - El diagnóstico de Ajustes muestra estados y el motivo del último resultado. Nunca muestra el contenido del mensaje.
 - Los acuses a Instinct (apagados por defecto) solo repiten la orden que Instinct mandó y el texto de resultado que Insto ya te muestra. La acción «Responder» que los envía vive en memoria como máximo 10 minutos y nunca se guarda. A Instinct le llegan los nombres de las rutinas habilitadas, nunca sus pasos.
-- La única red nueva en uso es la del clima que ya existía (SMN y Open-Meteo), y solo cuando se dispara una orden con condición.
+- **Bitácora (1.15.0, apagada por defecto):** con «Bitácora» o «Ambos», ahora sí sale algo del teléfono, solo hacia el Apps Script que vos configuraste: la orden recortada a 80 caracteres, el texto de resultado que Insto ya te muestra, el tipo de acuse, la hora y un hash corto del mensaje (12 dígitos hexadecimales). **Nunca** el texto del mensaje de Instinct ni datos del teléfono (contactos, número, ubicación, notificaciones). La URL, el token y la bandeja de salida viven en `noBackupFilesDir`: nunca entran en copias de seguridad. La bitácora queda en tu planilla de Google, con los permisos que le des.
+- Fuera de la bitácora, la única red en uso es la del clima que ya existía (SMN y Open-Meteo), y solo cuando se dispara una orden con condición.
 
 ## Lo que no hacen las órdenes
 
@@ -198,7 +269,7 @@ La notificación «Instinct hizo: …» trae la acción **«Deshacer»** solo pa
 - No cuentan como turnos de `OperationalContext` ni lo modifican, tampoco los pasos de una rutina pedida por Instinct. Eso sí: al ejecutar un control multimedia sin app indicada, `PhoneActionExecutor` sigue eligiendo la sesión con el contexto vigente, como con cualquier pedido.
 - No se juntan en planes: cada línea es un comando independiente. Una rutina es un plan que **vos** configuraste y habilitaste; Instinct solo la nombra.
 - **Condiciones:** la única forma admitida es la del clima, con hora y una sola por línea ([Condiciones por clima](#condiciones-por-clima-1140)). Cualquier otra condición («si estoy en casa», «si llueve y hace frío») se descarta.
-- No agregan dependencias ni servidores. Los acuses usan la acción «Responder» de WhatsApp, que ya existe en la notificación.
+- No agregan dependencias ni servidores propios. Los acuses usan la acción «Responder» de WhatsApp, que ya existe en la notificación, o tu propio Apps Script (con OkHttp y `JobScheduler`, que ya estaban).
 
 ## Límites conocidos
 
@@ -208,6 +279,7 @@ La notificación «Instinct hizo: …» trae la acción **«Deshacer»** solo pa
 - Si Android acaba de iniciar el proceso de Insto y todavía no cargó los ajustes, esa notificación se descarta.
 - Si tenés abierto el chat de Instinct en WhatsApp, WhatsApp no genera notificación y no llega nada.
 - **Acuses:** dependen de que WhatsApp ofrezca «Responder» en la notificación. Si no lo hace, no se responde (lo dice el diagnóstico). Un acuse de una diferida que se dispara después de 10 minutos no sale.
+- **Bitácora:** depende de la red y de que Apps Script responda. Sin red, los eventos esperan en la bandeja (hasta 200) y se reintentan solos; si Google cambia la redirección de Apps Script, el diagnóstico dirá «respuesta inválida». Las cuotas diarias de Apps Script (ejecuciones y URL Fetch) alcanzan de sobra para uso personal: cada lote de hasta 50 eventos es una sola ejecución. Las líneas en memoria se pierden si el proceso muere, salvo las de las diferidas: un seguimiento de una orden inmediata que estaba en espera durante un reinicio no se registra.
 - **Diferidas:** sin permiso de alarmas exactas (Insto no lo pide), Android puede demorar el disparo; si la demora pasa de 15 minutos, la orden espera tu confirmación.
 - Requiere Android 9 o posterior.
 
@@ -219,9 +291,10 @@ La notificación «Instinct hizo: …» trae la acción **«Deshacer»** solo pa
 4. Con la Accesibilidad de Insto activa, `#insto poner un temporizador de 1 minuto` se crea solo. Sin ella, llega «Instinct propone: …» con Confirmar.
 5. Elegí «Responderle a Instinct: Siempre» y repetí el paso 3: en el chat aparece `#insto-ok poner el volumen al 30 por ciento → Volumen multimedia ajustado.`
 6. Si algo no pasa, mirá **Diagnóstico** en la misma pantalla y tocá «Actualizar diagnóstico».
+7. Bitácora: configurá el Apps Script ([Bitácora](#bitácora-1150)), elegí «Canal de estados: Bitácora», guardá la URL y el token y tocá «Probar bitácora»: aparece una fila `prueba` en la planilla. Repetí el paso 3: el chat no recibe nada y la planilla suma una fila `ok`.
 
 ## Instrucciones para pegar en el prompt de Instinct
 
 El bloque se genera desde el código y se obtiene en **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** (o «Enviarlas a Instinct»). Así nunca se desincroniza de la gramática ni de tus rutinas habilitadas. Copialo de nuevo cada vez que habilites o deshabilites una rutina, o cuando Insto se actualice.
 
-La copia de referencia, sin rutinas, está en [`instinct-catalog.txt`](instinct-catalog.txt). Incluye las formas diferidas y condicionales, los prefijos de los acuses (`#insto-ok`, `#insto-espera`, `#insto-error`, `#insto-incierto`, `#insto-programada`, y `#insto-descartada`, `#insto-vencida` y `#insto-deshecho` como seguimiento) y la regla para Instinct: **esas líneas son informativas; no se responden con nuevas órdenes, salvo una sola orden corregida después de un `#insto-error`, y nunca se repite una orden después de `#insto-incierto` o `#insto-espera`.**
+La copia de referencia, sin rutinas, está en [`instinct-catalog.txt`](instinct-catalog.txt). Con la bitácora, la copia de referencia es [`instinct-catalog-bitacora.txt`](instinct-catalog-bitacora.txt). Incluye las formas diferidas y condicionales, los prefijos de los acuses (`#insto-ok`, `#insto-espera`, `#insto-error`, `#insto-incierto`, `#insto-programada`, y `#insto-descartada`, `#insto-vencida` y `#insto-deshecho` como seguimiento) y la regla para Instinct: **esas líneas son informativas; no se responden con nuevas órdenes, salvo una sola orden corregida después de un `#insto-error`, y nunca se repite una orden después de `#insto-incierto` o `#insto-espera`.**

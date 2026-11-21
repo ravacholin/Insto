@@ -106,7 +106,7 @@ class InstinctRepliesTest {
     val out = ledger.report(10L, ok("subir el volumen"))!!
     assertEquals("h", out.handle)
     assertEquals(listOf("#insto-ok subir el volumen → Listo.", "#insto-error llamar a Ana → no", "#insto-ok pausar la música → Listo."),
-      out.text.lines())
+      out.text!!.lines())
     // Anything later about the same lines is not sent again.
     assertNull(ledger.report(10L, ok("subir el volumen")))
     assertNull(ledger.report(11L, AckEntry(AckKind.ERROR, "pausar la música", "x")))

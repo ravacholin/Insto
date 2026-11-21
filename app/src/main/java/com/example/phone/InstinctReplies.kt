@@ -8,6 +8,17 @@ package com.example.phone
  */
 enum class InstinctReplyMode { NEVER, PROBLEMS, ALWAYS }
 
+/**
+ * «Canal de estados»: where acknowledgements go. [InstinctReplyMode] decides WHAT is reported; this decides WHERE.
+ * With [BITACORA] WhatsApp's «Responder» action is never read nor used.
+ */
+enum class InstinctAckChannel {
+  WHATSAPP, BITACORA, AMBOS;
+
+  val usesChat: Boolean get() = this != BITACORA
+  val usesLog: Boolean get() = this != WHATSAPP
+}
+
 /** What happened to one order, as Instinct reads it. [prefix] is fixed: Instinct parses it. */
 enum class AckKind(val prefix: String) {
   OK("#insto-ok"),
@@ -21,6 +32,9 @@ enum class AckKind(val prefix: String) {
   /** The user undid what the order did. */
   UNDONE("#insto-deshecho"),
   ;
+
+  /** The kind as the log writes it: the prefix without «#insto-» (ok, espera, error…). */
+  val code: String get() = prefix.removePrefix("#insto-")
 
   /** Kinds that end an order: after one of them nothing more is reported for it. */
   val final: Boolean get() = this != WAITING && this != SCHEDULED
@@ -80,7 +94,7 @@ object InstinctAck {
 
   /** One line: «<prefix> <order> → <message>», on a single line, with the order cut to [MAX_ORDER_CHARS]. */
   fun line(entry: AckEntry): String {
-    val order = cut(flat(entry.order), MAX_ORDER_CHARS)
+    val order = order(entry)
     val message = flat(entry.message)
     return buildString {
       append(entry.kind.prefix)
@@ -110,11 +124,17 @@ object InstinctAck {
   fun safe(text: String): Boolean = InstinctProposalProtocol.orders(text).isEmpty() &&
     text.lineSequence().none { it.trimStart().startsWith("${InstinctProposalProtocol.PREFIX} ") }
 
+  /** The order as every channel shows it: on one line and cut to [MAX_ORDER_CHARS]. */
+  fun order(entry: AckEntry): String = cut(flat(entry.order), MAX_ORDER_CHARS)
+
+  /** The result text as every channel shows it: on one line and never longer than a whole reply. */
+  fun detail(entry: AckEntry): String = cut(flat(entry.message), MAX_CHARS)
+
   /** Line breaks, tabs and other control characters become spaces: a value can never start a line of its own. */
-  private fun flat(value: String): String = value.map { if (it.isISOControl() || it == ' ' || it == ' ') ' ' else it }
+  internal fun flat(value: String): String = value.map { if (it.isISOControl() || it == ' ' || it == ' ') ' ' else it }
     .joinToString("").replace(Regex(" {2,}"), " ").trim()
 
-  private fun cut(value: String, max: Int): String = if (value.length <= max) value else value.take(max - 1).trimEnd() + "…"
+  internal fun cut(value: String, max: Int): String = if (value.length <= max) value else value.take(max - 1).trimEnd() + "…"
 }
 
 /**
@@ -123,18 +143,27 @@ object InstinctAck {
  * proposal; after that nothing is sent with it. Each message gets one reply once all its orders have an outcome;
  * an order that waited gets one more line when it is confirmed, discarded or expires, while the handle is valid.
  * Nothing is ever retried.
+ *
+ * The [channel] decides where each reply goes. On the chat, as above. On the log (1.15.0) the same entries become
+ * events with no time limit: a message's lines are kept for [logTtlMillis], so a follow-up hours later (a deferred
+ * order that fires, for example) is still recorded. With [InstinctAckChannel.BITACORA] no handle is ever kept.
  */
 class InstinctAckLedger<R : Any>(
   private val clock: () -> Long,
   private val mode: () -> InstinctReplyMode,
   private val ttlMillis: Long = ProposalBook.TTL_MILLIS,
+  private val channel: () -> InstinctAckChannel = { InstinctAckChannel.WHATSAPP },
+  private val logTtlMillis: Long = LOG_TTL_MILLIS,
 ) {
-  /** A reply to send now. A null [handle] means WhatsApp offered no «Responder» action: it is dropped, and diagnosed. */
-  data class Outgoing<R>(val handle: R?, val text: String)
+  /**
+   * What to send now. [text] goes to the chat with [handle] (a null handle means WhatsApp offered no «Responder»
+   * action: it is dropped, and diagnosed); [events] go to the log, about message [message] (a short hash, never text).
+   */
+  data class Outgoing<R>(val handle: R?, val text: String?, val events: List<AckEntry> = emptyList(), val message: String = "")
 
   class Ticket internal constructor(internal val id: Long)
 
-  private class Batch<R>(val id: Long, val handle: R?, val acceptedAt: Long, val slots: Array<AckEntry?>) {
+  private class Batch<R>(val id: Long, var handle: R?, val acceptedAt: Long, val slots: Array<AckEntry?>, val chat: Boolean, val message: String) {
     var sent = false
     val complete: Boolean get() = slots.all { it != null }
   }
@@ -143,15 +172,36 @@ class InstinctAckLedger<R : Any>(
   private val batches = LinkedHashMap<Long, Batch<R>>()
   private val proposals = HashMap<Long, Pair<Long, Int>>()
 
-  /** Opens the reply of one accepted message with [orders] lines. Null under [InstinctReplyMode.NEVER]: nothing is kept. */
-  @Synchronized fun open(handle: R?, orders: Int): Ticket? {
+  /**
+   * Opens the reply of one accepted message with [orders] lines; [message] identifies it in the log. Null under
+   * [InstinctReplyMode.NEVER]: nothing is kept. Without the chat channel [handle] is dropped right here.
+   */
+  @Synchronized fun open(handle: R?, orders: Int, message: String = ""): Ticket? {
     prune()
     if (mode() == InstinctReplyMode.NEVER || orders <= 0) return null
-    val batch = Batch(nextId++, handle, clock(), arrayOfNulls<AckEntry>(orders))
+    val chat = channel().usesChat
+    val batch = Batch(nextId++, if (chat) handle else null, clock(), arrayOfNulls<AckEntry>(orders), chat, message)
     batches[batch.id] = batch
     while (batches.size > CAPACITY) drop(batches.keys.first())
     return Ticket(batch.id)
   }
+
+  /**
+   * Tracks proposal [proposalId] for the log only, already past [entry] (for example a deferred order whose message
+   * this process no longer remembers). False when the log is off or nothing is reported.
+   */
+  @Synchronized fun adopt(proposalId: Long, message: String, entry: AckEntry): Boolean {
+    prune()
+    if (mode() == InstinctReplyMode.NEVER || !channel().usesLog) return false
+    val batch = Batch<R>(nextId++, null, clock(), arrayOf(entry), chat = false, message = message).apply { sent = true }
+    batches[batch.id] = batch
+    proposals[proposalId] = batch.id to 0
+    while (batches.size > CAPACITY) drop(batches.keys.first())
+    return true
+  }
+
+  /** Whether proposal [proposalId] still has a line here. */
+  @Synchronized fun tracks(proposalId: Long): Boolean = proposals[proposalId]?.let { batches[it.first] } != null
 
   /** Records the outcome of line [index] that never became a proposal (an invalid line, for example). */
   @Synchronized fun resolve(ticket: Ticket?, index: Int, entry: AckEntry): Outgoing<R>? {
@@ -188,7 +238,7 @@ class InstinctAckLedger<R : Any>(
     return single(batch, entry)
   }
 
-  /** One extra line about proposal [proposalId] (for example an undo), while its handle is valid. */
+  /** One extra line about proposal [proposalId] (for example an undo), while its handle is valid or to the log. */
   @Synchronized fun note(proposalId: Long, entry: AckEntry): Outgoing<R>? {
     val (batchId, _) = proposals[proposalId] ?: return null
     val batch = batches[batchId] ?: return null
@@ -199,14 +249,14 @@ class InstinctAckLedger<R : Any>(
   @Synchronized fun canAnswer(proposalId: Long): Boolean {
     val (batchId, _) = proposals[proposalId] ?: return false
     val batch = batches[batchId] ?: return false
-    return batch.handle != null && valid(batch) && mode() != InstinctReplyMode.NEVER
+    return chatOpen(batch) && batch.handle != null && mode() != InstinctReplyMode.NEVER
   }
 
   /** The newest valid handle, for sending something that is not about one order (the instructions, for example). */
   @Synchronized fun latestHandle(): R? {
     prune()
     if (mode() == InstinctReplyMode.NEVER) return null
-    return batches.values.lastOrNull { it.handle != null && valid(it) }?.handle
+    return batches.values.lastOrNull { it.handle != null && chatOpen(it) }?.handle
   }
 
   /**
@@ -217,36 +267,49 @@ class InstinctAckLedger<R : Any>(
     val now = clock()
     return proposals.entries.filter { (_, place) ->
       val batch = batches[place.first] ?: return@filter false
-      batch.slots[place.second]?.kind == AckKind.WAITING && now >= batch.acceptedAt + ttlMillis - marginMillis
+      batch.chat && batch.slots[place.second]?.kind == AckKind.WAITING && now >= batch.acceptedAt + ttlMillis - marginMillis
     }.map { it.key }
   }
+
+  /** Every proposal whose line is waiting, whatever its handle. The caller checks each proposal's own age. */
+  @Synchronized fun waiting(): List<Long> = proposals.entries.filter { (_, place) ->
+    batches[place.first]?.slots?.get(place.second)?.kind == AckKind.WAITING
+  }.map { it.key }
 
   /** Forgets every handle and pending reply, for example when «Recibir órdenes» is turned off. */
   @Synchronized fun clear() { batches.clear(); proposals.clear() }
 
   private fun valid(batch: Batch<R>): Boolean { val now = clock(); return now >= batch.acceptedAt && now - batch.acceptedAt <= ttlMillis }
 
+  /** The chat is used for [batch]: it was opened for it, the channel still includes it and the handle is valid. */
+  private fun chatOpen(batch: Batch<R>): Boolean = batch.chat && channel().usesChat && valid(batch)
+
   private fun flush(batch: Batch<R>): Outgoing<R>? {
     if (batch.sent || !batch.complete) return null
     batch.sent = true
-    if (!valid(batch)) return null
-    val text = InstinctAck.format(batch.slots.filterNotNull(), mode()) ?: return null
-    return Outgoing(batch.handle, text)
+    return outgoing(batch, batch.slots.filterNotNull(), mode())
   }
 
   /** A follow-up closes a line Instinct already saw, so «Solo errores y esperas» sends it too. */
   private fun single(batch: Batch<R>, entry: AckEntry): Outgoing<R>? {
-    if (!valid(batch)) return null
     val current = mode()
     if (current == InstinctReplyMode.NEVER) return null
-    val text = InstinctAck.format(listOf(entry.copy(informative = true)), current) ?: return null
-    return Outgoing(batch.handle, text)
+    return outgoing(batch, listOf(entry.copy(informative = true)), current)
+  }
+
+  private fun outgoing(batch: Batch<R>, entries: List<AckEntry>, mode: InstinctReplyMode): Outgoing<R>? {
+    val text = if (chatOpen(batch)) InstinctAck.format(entries, mode) else null
+    val events = if (channel().usesLog) entries.filter { InstinctAck.sends(it, mode) } else emptyList()
+    if (text == null && events.isEmpty()) return null
+    return Outgoing(if (text != null) batch.handle else null, text, events, batch.message)
   }
 
   private fun prune() {
     val now = clock()
-    // A handle is never kept past its validity.
-    batches.values.filter { now < it.acceptedAt || now - it.acceptedAt > ttlMillis }.map { it.id }.forEach(::drop)
+    val keep = if (channel().usesLog) logTtlMillis else ttlMillis
+    batches.values.filter { now < it.acceptedAt || now - it.acceptedAt > keep }.map { it.id }.forEach(::drop)
+    // A handle is never kept past its validity, even when the line stays for the log.
+    batches.values.forEach { if (now - it.acceptedAt > ttlMillis) it.handle = null }
   }
 
   private fun drop(batchId: Long) {
@@ -254,5 +317,9 @@ class InstinctAckLedger<R : Any>(
     proposals.entries.removeAll { it.value.first == batchId }
   }
 
-  private companion object { const val CAPACITY = 32 }
+  companion object {
+    private const val CAPACITY = 64
+    /** A deferred order fires at most 24 hours later; its lines are kept a little longer for the log. */
+    const val LOG_TTL_MILLIS = 25 * 60 * 60_000L
+  }
 }

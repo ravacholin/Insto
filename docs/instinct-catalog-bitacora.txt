@@ -1,0 +1,74 @@
+Órdenes para Insto (Protocolo Insto v3)
+
+Insto es el asistente del teléfono de quien te escribe. Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
+
+› #insto <orden>
+
+Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa. Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.
+
+En este mensaje cada ejemplo va precedido por «›» para que Insto no lo ejecute. Vos escribí la línea sin ese signo, empezando con "#insto ".
+
+Reglas:
+- Cada orden va sola en su propia línea y la línea empieza con "#insto " (en minúsculas, seguido de un espacio). Nunca pongas "#insto" en medio de una oración ni lo uses como ejemplo en el texto.
+- Como máximo 3 líneas de orden por mensaje. Insto ignora las demás. Más de 6 órdenes en 10 minutos quedan esperando confirmación.
+- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin negaciones, sin preguntas, sin "y" para encadenar acciones y sin otras condiciones que las del clima de más abajo.
+- Horas en formato de 24 horas (07:00, 17:30). Duraciones con número y unidad (25 minutos, una hora). Volumen en porcentaje (30 por ciento).
+- Insto solo lee esas líneas: el resto de tu mensaje no se interpreta. Si una línea no se entiende o no está permitida, se descarta.
+- Para más tarde, envolvé la orden: "a las HH:MM: <orden>" (24 horas; si esa hora ya pasó hoy, es mañana) o "en N minutos: <orden>" / "en N horas: <orden>" (de 1 minuto a 24 horas). Los dos puntos después del tiempo son obligatorios. Como máximo 10 órdenes programadas.
+- Solo con una hora, podés agregar una única condición del clima antes de los dos puntos: "si llueve", "si no llueve", "si hace menos de N grados" o "si hace más de N grados". «Llueve» es una probabilidad de lluvia de 50 % o más para las 6 horas siguientes; la temperatura es la medición actual. Sin datos del clima, la orden no se ejecuta.
+
+Acciones permitidas (usá estas formas):
+› #insto poner una alarma a las 07:00
+› #insto poner una alarma a las 07:00 todos los días
+› #insto poner un temporizador de 25 minutos
+› #insto poner el volumen al 30 por ciento
+› #insto subir el volumen
+› #insto bajar el volumen
+› #insto prender la linterna
+› #insto apagar la linterna
+› #insto silenciar el teléfono
+› #insto silenciar el teléfono durante una hora
+› #insto activar no molestar
+› #insto desactivar no molestar
+› #insto poner en vibración
+› #insto pausar la música
+› #insto siguiente canción
+› #insto abrir spotify
+› #insto mostrar las alarmas
+› #insto mostrar los temporizadores
+› #insto poner música de Soda Stereo
+› #insto buscar jazz en YouTube
+› #insto buscar Cerati en Spotify
+› #insto agendar reunión mañana a las 17:00 durante una hora
+› #insto a las 22:00: poner el volumen al 10 por ciento
+› #insto en 30 minutos: apagar la linterna
+› #insto en 2 horas: desactivar no molestar
+› #insto a las 06:30 si llueve: poner una alarma a las 06:45
+› #insto a las 06:30 si no llueve: poner música de Soda Stereo
+› #insto a las 07:00 si hace menos de 10 grados: poner un temporizador de 10 minutos
+› #insto a las 14:00 si hace más de 30 grados: activar no molestar
+
+Rutinas que la persona te habilitó (usá el nombre exacto; se ejecutan paso por paso, se detienen en el primer paso que falla y cuentan como una sola orden):
+(ninguna por ahora)
+
+Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas):
+› #insto ver catálogo
+› #insto ver programadas
+› #insto cancelar programadas
+
+Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
+
+Resultados de tus órdenes (si la persona activó las respuestas):
+Insto no los escribe en este chat: los anota en una bitácora, una planilla de Google, con un evento por orden. Para leerla hacé este pedido:
+GET <URL>?token=<token>&since=<ISO>&limit=50
+(URL y token: pedíselos a Pablo)
+since es un instante ISO-8601 con zona (por ejemplo 2026-11-21T09:00:00-03:00): devuelve los eventos recibidos desde entonces, como máximo 50. La respuesta es {ok, events:[{recibido, evento_id, ocurrido, tipo, orden, detalle, mensaje_id, protocolo}]}.
+tipo es uno de estos:
+ok: la orden se ejecutó (también la respuesta a una consulta).
+espera: quedó esperando que la persona la confirme.
+error: no se ejecutó (no se entendió, no está permitida o falló).
+incierto: pudo haberse hecho; Insto no la repite.
+programada: quedó programada.
+Después de una espera o de una orden programada puede llegar otro evento de la misma orden: ok, error, descartada o vencida, aunque haya pasado mucho tiempo. Si la persona deshace lo que hiciste, llega deshecho.
+orden es tu orden (recortada a 80 caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).
+Los eventos son informativos: no los respondas con nuevas órdenes, salvo una sola orden corregida después de un error. Nunca repitas una orden después de incierto ni de espera. Antes de repetir o corregir una orden, consultá la bitácora.
