@@ -30,8 +30,12 @@ object InstinctProtocolCatalog {
    * Insto reads that chat and must never take its own message for orders. With [log] the results are in the log,
    * not in the chat, and the block says how to read it.
    */
+  /**
+   * [mailbox] (1.16.0), when the signed mailbox is on: how to sign and publish an order, with the log's address and
+   * token in the copy to paste ([InstinctCatalogLog.HIDDEN] in the chat copy). Never the key, in any copy.
+   */
   fun text(routines: List<String>, forChat: Boolean = false, log: InstinctCatalogLog? = null,
-    autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy()): String {
+    autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(), mailbox: InstinctCatalogLog? = null): String {
     fun example(order: String) = (if (forChat) CHAT_MARK else "") + "${InstinctProposalProtocol.PREFIX} $order"
     return buildString {
       appendLine("Órdenes para Insto ($TITLE)")
@@ -77,6 +81,10 @@ object InstinctProtocolCatalog {
         appendLine("sonido: normal, vibración o silencio. dnd: sí o no (No molestar). alarma: la hora de la próxima alarma, o ninguna. evento: «ahora <título> HH:MM–HH:MM», «próximo <título> HH:MM–HH:MM» (en las próximas 12 horas) o libre. audio: no, o sí con el tipo (auriculares o Bluetooth). bloqueado: sí o no. modo_temporal: no, o cuál y hasta qué hora. programadas: ninguna, o cuántas órdenes tuyas hay programadas y la próxima hora.")
         appendLine("Un campo puede decir «${InstinctState.NO_DATA}» o «${InstinctState.NO_PERMISSION}». El estado es una foto: puede tener hasta 30 segundos de demora.")
         appendLine("Antes de una orden que dependa del estado (silencio, No molestar, alarmas, calendario), mirá el último estado; si tiene más de 30 minutos, pedí la consulta «${ProposalCheck.QueryKind.STATE.phrase}» y esperá a que aparezca el nuevo.")
+        appendLine()
+      }
+      if (mailbox != null) {
+        appendLine(InstinctMailboxCatalog.text(mailbox, forChat))
         appendLine()
       }
       appendLine("Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas):")

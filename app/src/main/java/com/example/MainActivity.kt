@@ -40,6 +40,12 @@ class MainActivity : ComponentActivity() {
 
   private val viewModel: MainViewModel by viewModels()
 
+  override fun onResume() {
+    super.onResume()
+    // Insto opened: the signed mailbox is read at once (off the main thread, at most every 20 seconds).
+    runCatching { com.example.phone.InstinctMailbox.pollSoon(this) }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()

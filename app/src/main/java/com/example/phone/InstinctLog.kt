@@ -9,6 +9,7 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -207,27 +208,52 @@ class InstinctLogClient(base: OkHttpClient = OkHttpClient()) {
     if (!InstinctLogConfig.validUrl(url) || !InstinctLogConfig.validToken(token)) return Result.Failed(Failure.NOT_CONFIGURED)
     if (events.isEmpty()) return Result.Accepted(emptySet())
     val body = JSONObject().put("token", token).put("events", JSONArray(events.map(InstinctLogEvent::json))).toString()
-    val first = Request.Builder().url(url.trim()).post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
-    return try { exchange(first, events.mapTo(HashSet()) { it.id }) } catch (_: IOException) { Result.Failed(Failure.NETWORK) }
+    return when (val raw = post(url, body)) {
+      is Raw.Body -> parse(raw.text, events.mapTo(HashSet()) { it.id })
+      is Raw.Failed -> Result.Failed(raw.failure, raw.code)
+    }
   }
 
-  /** The POST, then at most [MAX_HOPS] redirects, each one a GET to a Google host over HTTPS. */
-  private fun exchange(first: Request, sent: Set<String>): Result {
+  /** The JSON body of an exchange, or why there is none. Shared by the log and the mailbox (1.16.0). */
+  sealed interface Raw {
+    data class Body(val text: String?) : Raw
+    data class Failed(val failure: Failure, val code: Int = 0) : Raw {
+      val reason: String get() = if (failure == Failure.HTTP) "HTTP $code" else failure.label
+    }
+  }
+
+  /** A POST of [json] to the Apps Script, following its redirect. Only a valid script URL. */
+  fun post(url: String, json: String): Raw {
+    if (!InstinctLogConfig.validUrl(url)) return Raw.Failed(Failure.NOT_CONFIGURED)
+    val first = Request.Builder().url(url.trim()).post(json.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+    return try { exchange(first) } catch (_: IOException) { Raw.Failed(Failure.NETWORK) }
+  }
+
+  /** A GET of the Apps Script with [query] parameters (encoded), following its redirect. */
+  fun get(url: String, query: List<Pair<String, String>>): Raw {
+    if (!InstinctLogConfig.validUrl(url)) return Raw.Failed(Failure.NOT_CONFIGURED)
+    val target = url.trim().toHttpUrlOrNull()?.newBuilder()?.apply { query.forEach { (k, v) -> addQueryParameter(k, v) } }?.build()
+      ?: return Raw.Failed(Failure.NOT_CONFIGURED)
+    return try { exchange(Request.Builder().url(target).get().build()) } catch (_: IOException) { Raw.Failed(Failure.NETWORK) }
+  }
+
+  /** The request, then at most [MAX_HOPS] redirects, each one a GET to a Google host over HTTPS. */
+  private fun exchange(first: Request): Raw {
     var request = first
     repeat(MAX_HOPS + 1) {
       http.newCall(request).execute().use { response ->
         val code = response.code
         if (code !in REDIRECTS) return when {
-          code == 401 || code == 403 -> Result.Failed(Failure.TOKEN)
-          code !in 200..299 -> Result.Failed(Failure.HTTP, code)
-          else -> parse(response.body?.let { readLimited(it.byteStream()) }, sent)
+          code == 401 || code == 403 -> Raw.Failed(Failure.TOKEN)
+          code !in 200..299 -> Raw.Failed(Failure.HTTP, code)
+          else -> Raw.Body(response.body?.let { readLimited(it.byteStream()) })
         }
         val location = response.header("Location")?.let { response.request.url.resolve(it) }
-        if (location == null || !location.isHttps || location.host !in REDIRECT_HOSTS) return Result.Failed(Failure.INVALID)
+        if (location == null || !location.isHttps || location.host !in REDIRECT_HOSTS) return Raw.Failed(Failure.INVALID)
         request = Request.Builder().url(location).get().build()
       }
     }
-    return Result.Failed(Failure.INVALID)
+    return Raw.Failed(Failure.INVALID)
   }
 
   private fun readLimited(stream: java.io.InputStream): String? = runCatching {

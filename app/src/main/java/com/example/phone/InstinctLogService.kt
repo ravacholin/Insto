@@ -37,6 +37,7 @@ class InstinctLogSettings(context: Context) {
     // Events that waited for a configuration go out now, and the phone's state starts being published.
     InstinctLog.rearm(app)
     InstinctStatePublisher.rearm(app)
+    InstinctMailbox.rearm(app)
     return true
   }
 
@@ -190,11 +191,12 @@ class InstinctLogJobService : JobService() {
   override fun onStopJob(params: JobParameters): Boolean = true
 }
 
-/** After a boot: the log's job if events are pending and the state's heartbeat. Not exported. */
+/** After a boot: the log's job if events are pending, the state's heartbeat and the mailbox's polling. Not exported. */
 class InstinctLogBootReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
     if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
     runCatching { InstinctLog.rearm(context) }
     runCatching { InstinctStatePublisher.rearm(context) }
+    runCatching { InstinctMailbox.rearm(context) }
   }
 }

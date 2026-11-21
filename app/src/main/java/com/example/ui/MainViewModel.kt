@@ -1013,6 +1013,8 @@ class MainViewModel @JvmOverloads constructor(
     if (proposalsAttached) return
     proposalsAttached = true
     InstinctProposalCenter.attach(proposalListener)
+    // The panel opened: a good moment to read the signed mailbox (off the main thread, at most every 20 seconds).
+    runCatching { com.example.phone.InstinctMailbox.pollSoon(getApplication()) }
   }
 
   /** The panel is no longer visible: proposals it could not show go back to notifications while they are valid. */
@@ -1112,7 +1114,7 @@ class MainViewModel @JvmOverloads constructor(
     learningPreview = null; patternExample = null
     InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.OFFERED)
     // Instinct acts on its own: with the panel free, the proposal runs now, like a local order.
-    val gate = InstinctProposalCenter.gate(getApplication(), proposal.command, foreground = true)
+    val gate = InstinctProposalCenter.gate(getApplication(), proposal.command, foreground = true, proposal.source)
     if (gate is com.example.phone.InstinctAutonomyGate.Gate.Run) {
       sessions.begin(com.example.session.SessionState.IDLE)
       floatingState.value = floatingState.value.copy(status = "Instinct pidió: ${proposal.summary}.", error = null)

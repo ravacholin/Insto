@@ -53,11 +53,12 @@ object InstinctScheduler {
   }
 
   /** Stores a validated deferred order (its inner order already passed the validator) and arms its alarm. */
-  fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String, message: String = ""): Outcome {
+  fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String, message: String = "",
+    source: ProposalSource = ProposalSource.WHATSAPP): Outcome {
     val deferred = check.deferred ?: return Outcome.Refused("no es una orden diferida.")
     recover(context)
     val order = ScheduledOrder(UUID.randomUUID().toString(), check.order, deferred.inner, deferred.fireAt, fingerprint,
-      deferred.condition, deferred.label, wallClock(), message = InstinctLogEvents.messageId(message))
+      deferred.condition, deferred.label, wallClock(), message = InstinctLogEvents.messageId(message), source = source)
     return when (val added = runCatching { store(context).add(order) }.getOrNull()) {
       is InstinctScheduleStore.Add.Added -> { alarms(context.applicationContext, order, true); Outcome.Scheduled(order) }
       InstinctScheduleStore.Add.Full -> Outcome.Refused("ya hay ${InstinctDeferral.MAX_SCHEDULED} órdenes programadas; cancelá alguna antes.")
@@ -128,7 +129,8 @@ object InstinctScheduler {
       }
       // The chat's line while its handle lives; for the log, also after a restart, from the stored message id.
       val ackKey = takeAckKey(order.id)?.takeIf(InstinctProposalCenter.acks::tracks)
-        ?: newAckKey().takeIf { InstinctProposalCenter.adopt(app, it, order.message, AckEntry(AckKind.SCHEDULED, order.order, order.label)) }
+        ?: newAckKey().takeIf { InstinctProposalCenter.adopt(app, it, order.message, AckEntry(AckKind.SCHEDULED, order.order, order.label),
+          logOnly = order.source == ProposalSource.BUZON) }
       fun tell(entry: AckEntry) { if (ackKey != null) InstinctProposalCenter.report(app, ackKey, entry) }
       if (decision is ScheduleFirePolicy.Decision.Drop) {
         InstinctProposalCenter.notifyScheduled(app, order, "Instinct había programado: ${order.summary}", "No se ejecutó: ${decision.why}")
@@ -158,7 +160,7 @@ object InstinctScheduler {
         is ScheduleFirePolicy.Decision.Late -> decision.command
         else -> return
       }
-      val proposal = InstinctProposalCenter.book.offer(order.order, command, order.fingerprint) ?: run {
+      val proposal = InstinctProposalCenter.book.offer(order.order, command, order.fingerprint, order.source) ?: run {
         tell(AckEntry(AckKind.ERROR, order.order, "ya había una orden igual esperando confirmación; no se duplica."))
         return
       }

@@ -37,11 +37,12 @@ class InstinctProposalSettings(context: Context) {
   fun isEnabled(): Boolean = Build.VERSION.SDK_INT >= MIN_SDK && runCatching { enabled.readText() == "true" }.getOrDefault(false)
 
   fun setEnabled(value: Boolean) {
-    if (value) { enabled.writeText("true"); InstinctStatePublisher.rearm(app) }
+    if (value) { enabled.writeText("true"); InstinctStatePublisher.rearm(app); InstinctMailbox.rearm(app) }
     else {
       if (enabled.exists()) enabled.delete()
-      // The state's heartbeat stops with the switch.
+      // The state's heartbeat and the mailbox's polling stop with the switch.
       InstinctStatePublisher.rearm(app)
+      InstinctMailbox.rearm(app)
       // Replies are cut first: discarding below must not answer Instinct either.
       InstinctProposalCenter.acks.clear()
       // Turning it off discards every pending proposal and scheduled order: nothing can run after this.
@@ -161,6 +162,7 @@ object InstinctProposalIntake {
     EXECUTED("Se ejecutó."),
     CONFIRM("Quedó para confirmar."),
     REFUSED("Se rechazó: elegiste que Instinct nunca haga esa acción."),
+    ONLY_MAILBOX("Tenía líneas #insto, pero elegiste aceptar órdenes solo por el buzón: se ignoraron."),
     FAILED("Se intentó, pero Android no lo permitió."),
     REPLIED("Se respondió a Instinct."),
     REPLY_FAILED("No se pudo responder."),
@@ -213,8 +215,17 @@ object InstinctProposalIntake {
       InstinctProposalFilter.Stage.NO_PROPOSAL -> diagnose(Diagnosis.NO_PROPOSAL)
       InstinctProposalFilter.Stage.ACCEPTED -> Unit
     }
+    // Any WhatsApp notification of Instinct's contact, with or without «#insto»: a good moment to read the mailbox.
+    if (outcome.stage == InstinctProposalFilter.Stage.ACCEPTED || outcome.stage == InstinctProposalFilter.Stage.NO_PROPOSAL ||
+      outcome.stage == InstinctProposalFilter.Stage.DUPLICATE) runCatching { InstinctMailbox.pollSoon(app) }
     if (outcome !is InstinctProposalFilter.Outcome.Accepted) {
       if (outcome.stage != InstinctProposalFilter.Stage.PACKAGE) log(counters())
+      return
+    }
+    // «Solo buzón»: unsigned orders are ignored, so a contact with the same name cannot order anything.
+    if (InstinctMailboxSettings(app).accept() == InstinctMailboxAccept.SOLO_BUZON) {
+      diagnose(Diagnosis.ONLY_MAILBOX)
+      log(counters() + " only_mailbox=1")
       return
     }
     val parser = PhoneCommandParser()
@@ -227,6 +238,27 @@ object InstinctProposalIntake {
     val ticket = InstinctProposalCenter.openReply(app, checks.size, replyHandle, outcome.message)
     InstinctProposalCenter.deliver(app, checks, fingerprint, ticket, outcome.message)
     log(counters() + " valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")
+  }
+
+  /**
+   * A verified order from the signed mailbox: the same entry point as WhatsApp's, with [ProposalSource.BUZON]. The
+   * same validator, allowlist, brake, autonomy, execution, «Deshacer» and deferred orders. Its acknowledgements go to
+   * the log, whatever the channel: there is no WhatsApp notification to answer.
+   */
+  fun onMailbox(context: Context, order: MailboxOrder) {
+    val app = context.applicationContext
+    if (!InstinctProposalSettings(app).isEnabled() || !InstinctMailboxSettings(app).enabled()) return
+    val orders = InstinctProposalProtocol.orders(order.lines.joinToString("\n"))
+    if (orders.isEmpty()) return
+    val parser = PhoneCommandParser()
+    val routines = InstinctRoutineGrants(app).access()
+    val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
+    val checks = orders.map { InstinctProposalValidator.check(it, parser, now, routines) }
+    val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
+    val message = InstinctMailboxSignature.messageId(order.id)
+    val ticket = InstinctProposalCenter.openReply(app, checks.size, { null }, message, logOnly = true)
+    InstinctProposalCenter.deliver(app, checks, fingerprint, ticket, message, ProposalSource.BUZON)
+    log("mailbox valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")
   }
 
   private fun counters(): String = filter.counters().entries.sortedBy { it.key.ordinal }
@@ -275,7 +307,7 @@ object InstinctProposalCenter {
   fun detach(value: Listener) { if (listener === value) listener = null }
 
   internal fun deliver(context: Context, checks: List<ProposalCheck>, fingerprint: String, ticket: InstinctAckLedger.Ticket? = null,
-    message: String = "") {
+    message: String = "", source: ProposalSource = ProposalSource.WHATSAPP) {
     val app = context.applicationContext
     val offered = ArrayList<ProposalBook.Proposal>()
     checks.forEachIndexed { index, check ->
@@ -285,11 +317,12 @@ object InstinctProposalCenter {
         is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index,
           if (check.kind == ProposalCheck.QueryKind.STATE) stateAnswer(app, check.order)
           else AckEntry(AckKind.OK, check.order, answer(app, check.kind), informative = true)))
+        is ProposalCheck.Notice -> reply(app, acks.resolve(ticket, index, notice(app, check, source)))
         // «Nunca» refuses at once, whatever the hour; Confirmar and the quiet hours are decided when it runs.
         is ProposalCheck.Valid -> if (refusedByPolicy(app, check.command)) {
           reply(app, acks.resolve(ticket, index, AckEntry(AckKind.ERROR, check.order, InstinctAutonomyPolicy.REFUSED)))
-        } else if (check.deferred != null) schedule(app, check, fingerprint, ticket, index, message) else {
-          val proposal = book.offer(check.order, check.command, fingerprint)
+        } else if (check.deferred != null) schedule(app, check, fingerprint, ticket, index, message, source) else {
+          val proposal = book.offer(check.order, check.command, fingerprint, source)
           if (proposal == null) reply(app, acks.resolve(ticket, index,
             AckEntry(AckKind.ERROR, check.order, "ya había una orden igual esperando confirmación; no se duplica.")))
           else { acks.link(ticket, index, proposal.id); offered += proposal }
@@ -335,11 +368,14 @@ object InstinctProposalCenter {
    * Opens the reply of an accepted message ([message] is its short hash, for the log). The handle is read only when
    * replies are on and the channel includes the chat: with «Bitácora» WhatsApp's «Responder» is never touched.
    */
-  internal fun openReply(context: Context, orders: Int, handle: () -> InstinctReplyHandle?, message: String = ""): InstinctAckLedger.Ticket? {
+  internal fun openReply(context: Context, orders: Int, handle: () -> InstinctReplyHandle?, message: String = "",
+    logOnly: Boolean = false): InstinctAckLedger.Ticket? {
     val app = context.applicationContext
     val settings = InstinctProposalSettings(app)
     bind(app)
     if (settings.replyMode() == InstinctReplyMode.NEVER) return null
+    // From the mailbox: to the log only, whatever the channel; WhatsApp's «Responder» is never touched.
+    if (logOnly) return acks.open(null, orders, message, logOnly = true)
     val chat = settings.channel().usesChat
     val ticket = acks.open(if (chat) runCatching(handle).getOrNull() else null, orders, message) ?: return null
     if (chat) main.postDelayed({ sweepReplies(app) }, ProposalBook.TTL_MILLIS - EXPIRY_MARGIN_MILLIS)
@@ -347,9 +383,9 @@ object InstinctProposalCenter {
   }
 
   /** Tracks a deferred order for the log when this process no longer remembers its message (after a restart). */
-  internal fun adopt(context: Context, key: Long, message: String, entry: AckEntry): Boolean {
+  internal fun adopt(context: Context, key: Long, message: String, entry: AckEntry, logOnly: Boolean = false): Boolean {
     bind(context)
-    return acks.adopt(key, message, entry)
+    return acks.adopt(key, message, entry, logOnly)
   }
 
   /**
@@ -375,7 +411,7 @@ object InstinctProposalCenter {
     if (entry.kind == AckKind.OK || entry.kind == AckKind.UNCERTAIN) InstinctStatePublisher.afterOrder(context)
     reply(context, acks.report(proposalId, entry))
     // In the log a waiting order is closed when it lapses, whatever the chat's handle: check it then.
-    if (entry.kind == AckKind.WAITING && ackChannel().usesLog && replyMode() != InstinctReplyMode.NEVER) {
+    if (entry.kind == AckKind.WAITING && acks.logs(proposalId) && replyMode() != InstinctReplyMode.NEVER) {
       val app = context.applicationContext
       main.postDelayed({ sweepLog(app) }, ProposalBook.TTL_MILLIS - EXPIRY_MARGIN_MILLIS)
     }
@@ -442,8 +478,8 @@ object InstinctProposalCenter {
 
   /** A deferred order: stored for later, never run now. Instinct hears «#insto-programada» or why not. */
   private fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String, ticket: InstinctAckLedger.Ticket?, index: Int,
-    message: String) {
-    when (val outcome = InstinctScheduler.schedule(context, check, fingerprint, message)) {
+    message: String, source: ProposalSource) {
+    when (val outcome = InstinctScheduler.schedule(context, check, fingerprint, message, source)) {
       is InstinctScheduler.Outcome.Refused -> reply(context, acks.resolve(ticket, index, AckEntry(AckKind.ERROR, check.order, outcome.why)))
       is InstinctScheduler.Outcome.Scheduled -> {
         notifyScheduled(context, outcome.order, "Instinct programó: ${PhoneCommandCodec.summary(check.command)}",
@@ -454,6 +490,22 @@ object InstinctProposalCenter {
         report(context, key, AckEntry(AckKind.SCHEDULED, check.order, outcome.order.label))
       }
     }
+  }
+
+  /**
+   * «avisarme»: only from the mailbox, with its own brake (3 an hour), refused under «Nunca» for avisos and without
+   * sound during the quiet hours (or under «Confirmar»: there is nothing to confirm in a notice). No «Deshacer».
+   */
+  internal fun notice(context: Context, check: ProposalCheck.Notice, source: ProposalSource): AckEntry {
+    if (source != ProposalSource.BUZON) return AckEntry(AckKind.ERROR, check.order, InstinctNotice.ONLY_MAILBOX)
+    val policy = InstinctAutonomySettings(context).policy()
+    val level = policy.level(InstinctCategory.AVISOS)
+    if (level == InstinctAutonomy.NUNCA) return AckEntry(AckKind.ERROR, check.order, InstinctAutonomyPolicy.REFUSED)
+    val quiet = level == InstinctAutonomy.CONFIRMAR ||
+      policy.quiet?.contains(InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock())) == true
+    val failure = InstinctNotices.show(context, check.text, quiet)
+    return if (failure == null) AckEntry(AckKind.OK, check.order, if (quiet) "aviso mostrado sin sonido." else "aviso mostrado.")
+      else AckEntry(AckKind.ERROR, check.order, failure)
   }
 
   /** A scheduled order fired and may run now: to the open panel, or in the background, as any order that arrives. */
@@ -477,8 +529,11 @@ object InstinctProposalCenter {
     val log = if (!InstinctProposalSettings(context).channel().usesLog) null
       else if (forChat) InstinctCatalogLog.HIDDEN
       else InstinctLogSettings(context).let { InstinctCatalogLog(it.url(), it.token()) }
+    val mailbox = if (!InstinctMailboxSettings(context).enabled()) null
+      else if (forChat) InstinctCatalogLog.HIDDEN
+      else InstinctLogSettings(context).let { InstinctCatalogLog(it.url(), it.token()) }
     return InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat, log,
-      InstinctAutonomySettings(context).policy())
+      InstinctAutonomySettings(context).policy(), mailbox)
   }
 
   /**
@@ -487,8 +542,9 @@ object InstinctProposalCenter {
    */
   fun sendCatalog(context: Context): Boolean {
     val handle = acks.latestHandle() ?: return false
-    val secrets = InstinctLogSettings(context).let { listOfNotNull(it.url(), it.token()) }
-    // Through WhatsApp: never the log's address nor its token.
+    val secrets = InstinctLogSettings(context).let { listOfNotNull(it.url(), it.token()) } +
+      listOfNotNull(InstinctMailboxSettings(context).key())
+    // Through WhatsApp: never the log's address, its token nor the mailbox key.
     val text = catalog(context, forChat = true).takeIf { InstinctAck.safe(it) && secrets.none(it::contains) } ?: return false
     val sent = runCatching { replySender(context.applicationContext, handle, text) }.getOrDefault(false)
     InstinctProposalIntake.diagnose(if (sent) InstinctProposalIntake.Diagnosis.REPLIED else InstinctProposalIntake.Diagnosis.REPLY_FAILED,
@@ -522,12 +578,15 @@ object InstinctProposalCenter {
    * [foreground] is true inside the open panel, where opening another app is allowed. The anti-loop budget is
    * acquired only for an order that runs; a routine counts as one execution.
    */
-  fun gate(context: Context, command: PhoneCommand, foreground: Boolean): InstinctAutonomyGate.Gate {
+  fun gate(context: Context, command: PhoneCommand, foreground: Boolean,
+    source: ProposalSource = ProposalSource.WHATSAPP): InstinctAutonomyGate.Gate {
     // A routine is checked as a whole before its first step: one step that cannot run leaves all of it for Confirmar.
     val steps = steps(context, command)
     val structural = if (steps == null) "La rutina ya no está habilitada para Instinct o cambió."
       else steps.firstNotNullOfOrNull { blocker(context, it, foreground) }
-    return InstinctAutonomyGate.combine(structural, policy(context, command, steps)) { budget.tryAcquire() }
+    // Unsigned orders from WhatsApp may be capped at Confirmar; that cap only ever hardens the policy.
+    val policy = InstinctSourceCap.apply(policy(context, command, steps), source, InstinctMailboxSettings(context).whatsappCap())
+    return InstinctAutonomyGate.combine(structural, policy) { budget.tryAcquire() }
   }
 
   /** The autonomy decision for [command] now, at the hour it runs (a deferred order: when it fires). */
@@ -549,7 +608,7 @@ object InstinctProposalCenter {
 
   /** The panel is closed: runs the proposal now, or leaves it for Confirmar when it cannot or should not. */
   internal fun runInBackground(context: Context, proposal: ProposalBook.Proposal) {
-    when (val gate = gate(context, proposal.command, foreground = false)) {
+    when (val gate = gate(context, proposal.command, foreground = false, proposal.source)) {
       is InstinctAutonomyGate.Gate.Refuse -> { refuse(context, proposal, gate.reason); return }
       is InstinctAutonomyGate.Gate.Wait -> {
         askConfirmation(context, proposal, gate.reason)
@@ -577,7 +636,7 @@ object InstinctProposalCenter {
       }
       InstinctAck.needsUser(result) -> {
         // It did not happen: it goes back for a touch, which can open the panel, ask a permission or choose.
-        val again = book.offer(proposal.order, proposal.command, proposal.fingerprint)
+        val again = book.offer(proposal.order, proposal.command, proposal.fingerprint, proposal.source)
         if (again != null) {
           acks.relink(proposal.id, again.id)
           askConfirmation(context, again, result.message)

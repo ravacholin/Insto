@@ -175,6 +175,15 @@ data class InstinctAutonomyPolicy(
   }
 }
 
+/** «Las órdenes por WhatsApp (sin firma) como máximo en»: a cap that only ever makes an unsigned order stricter. */
+object InstinctSourceCap {
+  const val REASON = "las órdenes por WhatsApp, sin firma, esperan confirmación"
+
+  fun apply(decision: AutonomyDecision, source: ProposalSource, whatsappCap: InstinctAutonomy): AutonomyDecision =
+    if (source == ProposalSource.WHATSAPP && whatsappCap != InstinctAutonomy.SOLO && decision == AutonomyDecision.Run)
+      AutonomyDecision.Confirm(REASON) else decision
+}
+
 /**
  * How the policy combines with the blockers that already existed (phone locked, another app without Accessibility,
  * a deferred order that fired late, a routine that changed). Structural on purpose: the existing blocker is decided

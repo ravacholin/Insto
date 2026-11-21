@@ -163,7 +163,9 @@ class InstinctAckLedger<R : Any>(
 
   class Ticket internal constructor(internal val id: Long)
 
-  private class Batch<R>(val id: Long, var handle: R?, val acceptedAt: Long, val slots: Array<AckEntry?>, val chat: Boolean, val message: String) {
+  private class Batch<R>(val id: Long, var handle: R?, val acceptedAt: Long, val slots: Array<AckEntry?>, val chat: Boolean, val message: String,
+    /** An order from the mailbox (1.16.0): its lines always go to the log, whatever the channel, and never to the chat. */
+    val logOnly: Boolean = false) {
     var sent = false
     val complete: Boolean get() = slots.all { it != null }
   }
@@ -176,11 +178,11 @@ class InstinctAckLedger<R : Any>(
    * Opens the reply of one accepted message with [orders] lines; [message] identifies it in the log. Null under
    * [InstinctReplyMode.NEVER]: nothing is kept. Without the chat channel [handle] is dropped right here.
    */
-  @Synchronized fun open(handle: R?, orders: Int, message: String = ""): Ticket? {
+  @Synchronized fun open(handle: R?, orders: Int, message: String = "", logOnly: Boolean = false): Ticket? {
     prune()
     if (mode() == InstinctReplyMode.NEVER || orders <= 0) return null
-    val chat = channel().usesChat
-    val batch = Batch(nextId++, if (chat) handle else null, clock(), arrayOfNulls<AckEntry>(orders), chat, message)
+    val chat = !logOnly && channel().usesChat
+    val batch = Batch(nextId++, if (chat) handle else null, clock(), arrayOfNulls<AckEntry>(orders), chat, message, logOnly)
     batches[batch.id] = batch
     while (batches.size > CAPACITY) drop(batches.keys.first())
     return Ticket(batch.id)
@@ -190,15 +192,19 @@ class InstinctAckLedger<R : Any>(
    * Tracks proposal [proposalId] for the log only, already past [entry] (for example a deferred order whose message
    * this process no longer remembers). False when the log is off or nothing is reported.
    */
-  @Synchronized fun adopt(proposalId: Long, message: String, entry: AckEntry): Boolean {
+  @Synchronized fun adopt(proposalId: Long, message: String, entry: AckEntry, logOnly: Boolean = false): Boolean {
     prune()
-    if (mode() == InstinctReplyMode.NEVER || !channel().usesLog) return false
-    val batch = Batch<R>(nextId++, null, clock(), arrayOf(entry), chat = false, message = message).apply { sent = true }
+    if (mode() == InstinctReplyMode.NEVER || !(logOnly || channel().usesLog)) return false
+    val batch = Batch<R>(nextId++, null, clock(), arrayOf(entry), chat = false, message = message, logOnly = logOnly).apply { sent = true }
     batches[batch.id] = batch
     proposals[proposalId] = batch.id to 0
     while (batches.size > CAPACITY) drop(batches.keys.first())
     return true
   }
+
+  /** Whether proposal [proposalId] reports to the log: the channel includes it or it came from the mailbox. */
+  @Synchronized fun logs(proposalId: Long): Boolean =
+    channel().usesLog || proposals[proposalId]?.let { batches[it.first] }?.logOnly == true
 
   /** Whether proposal [proposalId] still has a line here. */
   @Synchronized fun tracks(proposalId: Long): Boolean = proposals[proposalId]?.let { batches[it.first] } != null
@@ -299,15 +305,16 @@ class InstinctAckLedger<R : Any>(
 
   private fun outgoing(batch: Batch<R>, entries: List<AckEntry>, mode: InstinctReplyMode): Outgoing<R>? {
     val text = if (chatOpen(batch)) InstinctAck.format(entries, mode) else null
-    val events = if (channel().usesLog) entries.filter { InstinctAck.sends(it, mode) } else emptyList()
+    val events = if (channel().usesLog || batch.logOnly) entries.filter { InstinctAck.sends(it, mode) } else emptyList()
     if (text == null && events.isEmpty()) return null
     return Outgoing(if (text != null) batch.handle else null, text, events, batch.message)
   }
 
   private fun prune() {
     val now = clock()
-    val keep = if (channel().usesLog) logTtlMillis else ttlMillis
-    batches.values.filter { now < it.acceptedAt || now - it.acceptedAt > keep }.map { it.id }.forEach(::drop)
+    val log = channel().usesLog
+    batches.values.filter { now < it.acceptedAt || now - it.acceptedAt > if (log || it.logOnly) logTtlMillis else ttlMillis }
+      .map { it.id }.forEach(::drop)
     // A handle is never kept past its validity, even when the line stays for the log.
     batches.values.forEach { if (now - it.acceptedAt > ttlMillis) it.handle = null }
   }

@@ -34,6 +34,8 @@ sealed interface ProposalCheck {
   data class Invalid(override val order: String, val reason: Reason) : ProposalCheck
   /** A read-only question about the protocol itself: it never does anything on the phone. */
   data class Query(override val order: String, val kind: QueryKind) : ProposalCheck
+  /** «avisarme <texto>» (1.16.0): a local notice for the person, allowed only from the signed mailbox. */
+  data class Notice(override val order: String, val text: String) : ProposalCheck
   enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN }
   /** [readOnly] queries change nothing; «cancelar programadas» only cancels Insto's own pending orders. */
   enum class QueryKind(val phrase: String, val readOnly: Boolean = true) {
@@ -66,6 +68,10 @@ object InstinctProposalValidator {
     val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
     ProposalCheck.QueryKind.entries.firstOrNull { PhoneCommandParser.normalize(it.phrase) == folded }
       ?.let { return ProposalCheck.Query(order, it) }
+    // A notice for the person: fixed form, plain text. Where it may come from is decided by the caller.
+    InstinctNotice.text(order)?.let { text ->
+      return if (InstinctNotice.valid(text)) ProposalCheck.Notice(order, text) else ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY)
+    }
     // A deferred order: only a wrapper. Its inner order goes through every check below, untouched, and cannot be
     // another wrapper or a query.
     when (val wrapper = InstinctDeferral.parse(order, now)) {
@@ -265,6 +271,8 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
     val fingerprint: String,
     /** Random, carried only by Insto's own notification action: an id alone, which another app could guess, confirms nothing. */
     val token: String = java.util.UUID.randomUUID().toString(),
+    /** Where it came from (1.16.0): WhatsApp, unsigned, or the signed mailbox. */
+    val source: ProposalSource = ProposalSource.WHATSAPP,
   ) {
     val summary: String get() = PhoneCommandCodec.summary(command)
   }
@@ -284,10 +292,10 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
   private val entries = LinkedHashMap<Long, Entry>()
 
   /** Adds a validated proposal. Null when the same command is already pending: the same proposal is never offered twice. */
-  @Synchronized fun offer(order: String, command: PhoneCommand, fingerprint: String): Proposal? {
+  @Synchronized fun offer(order: String, command: PhoneCommand, fingerprint: String, source: ProposalSource = ProposalSource.WHATSAPP): Proposal? {
     expire()
     if (entries.values.any { it.state == State.PENDING && it.proposal.command == command }) return null
-    val proposal = Proposal(nextId++, order, command, clock(), fingerprint)
+    val proposal = Proposal(nextId++, order, command, clock(), fingerprint, source = source)
     entries[proposal.id] = Entry(proposal, State.PENDING)
     while (entries.size > CAPACITY) entries.remove(entries.keys.first())
     return proposal
