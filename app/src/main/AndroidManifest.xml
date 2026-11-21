@@ -91,6 +91,13 @@
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
         </receiver>
         <receiver android:name=".phone.InstinctProposalReceiver" android:exported="false" />
+        <receiver android:name=".phone.InstinctScheduleReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
         <activity android:name=".phone.CallActionActivity" android:exported="false" />
         <activity android:name=".phone.CaptureActionActivity" android:exported="false" />
         <activity android:name=".phone.FileActionActivity" android:exported="false" />

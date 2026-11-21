@@ -29,6 +29,8 @@ import com.example.data.PinnedContact
 import com.example.data.WhatsAppFlavor
 import com.example.phone.InstinctProposalIntake
 import com.example.phone.InstinctProposalSettings
+import com.example.phone.InstinctReplyMode
+import com.example.ui.components.SettingsChoices
 import com.example.ui.components.SettingsDescription
 import com.example.ui.components.SettingsSwitch
 
@@ -51,6 +53,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
   var explain by remember { mutableStateOf(false) }
   val enabled = remember(revision) { settings.isEnabled() }
   val asksFirst = remember(revision) { settings.asksFirst() }
+  val replyMode = remember(revision) { settings.replyMode() }
   val listenerEnabled = remember(revision) {
     NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
   }
@@ -73,6 +76,15 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       }
       SettingsSwitch("Pedirme confirmación antes de ejecutar", asksFirst, { settings.setAsksFirst(it); revision++ },
         "Apagado: Insto ejecuta y avisa después. Encendido: cada orden espera tu toque o un «dale».")
+      Text("Responderle a Instinct", style = MaterialTheme.typography.bodyLarge)
+      SettingsDescription("Insto contesta en el mismo chat, con la acción «Responder» de la notificación de WhatsApp, " +
+        "una línea por orden (#insto-ok, #insto-espera, #insto-error, #insto-incierto). No abre WhatsApp. " +
+        "Solo usa el texto del resultado que ya te muestra a vos.")
+      SettingsChoices(InstinctReplyMode.entries, replyMode, { settings.setReplyMode(it); revision++ }, label = ::replyModeLabel,
+        itemModifier = { Modifier.testTag("instinct_reply_${it.name.lowercase()}") })
+      InstinctScheduledList(revision) { revision++ }
+      InstinctRoutineSwitches(revision) { revision++ }
+      InstinctCatalogActions(replyMode, revision) { revision++ }
       ProposalDiagnostics(contact, revision) { revision++ }
       if (flavor == WhatsAppFlavor.AUTO) SettingsDescription("Se usa la app de WhatsApp que Insto elige para enviar.")
     }
@@ -99,6 +111,76 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
   }
 }
 
+/** Orders Instinct scheduled for later, with their time and a button to cancel each one. */
+@Composable
+private fun InstinctScheduledList(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val pending = remember(revision) { com.example.phone.InstinctScheduler.pending(context) }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_scheduled")) {
+    Text("Órdenes programadas por Instinct", style = MaterialTheme.typography.bodyLarge)
+    if (pending.isEmpty()) SettingsDescription("No hay órdenes programadas.")
+    val zone = java.util.Calendar.getInstance()
+    pending.forEach { order ->
+      SettingsDescription("${com.example.phone.InstinctDeferral.clock(order.fireAt, zone)}" +
+        (order.condition?.let { " ${it.label}" } ?: "") + ": ${order.inner}")
+      TextButton(onClick = { com.example.phone.InstinctScheduler.cancel(context, order.id); onChange() },
+        modifier = Modifier.testTag("instinct_scheduled_cancel")) { Text("Cancelar esta orden") }
+    }
+  }
+}
+
+/** «Instinct puede ejecutarla», one switch per configured routine. Off by default; disabled with the reason when not eligible. */
+@Composable
+private fun InstinctRoutineSwitches(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val grants = remember { com.example.phone.InstinctRoutineGrants(context) }
+  val routines = remember(revision) { grants.configured() }
+  val access = remember(revision) { grants.access() }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_routines")) {
+    Text("Rutinas para Instinct", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription(if (routines.isEmpty()) "No hay rutinas configuradas. Importá una para que Instinct pueda pedirla por su nombre."
+      else "Instinct puede pedir «#insto ejecutar la rutina <nombre>» solo para las que enciendas acá. Si la rutina cambia, se apaga sola.")
+    routines.forEach { routine ->
+      val blocker = com.example.phone.InstinctRoutines.blocker(routine)
+      val on = access.resolve(routine.name) != null
+      SettingsSwitch("Instinct puede ejecutar «${routine.name}»", on, { value -> grants.set(routine, value); onChange() },
+        blocker ?: "${routine.commands.size} pasos. Cuenta como una sola orden.", enabled = blocker == null || on)
+    }
+  }
+}
+
+/** Copy the generated catalog, or send it to Instinct while a «Responder» action is valid. */
+@Composable
+private fun InstinctCatalogActions(replyMode: InstinctReplyMode, revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  var notice by remember { mutableStateOf<String?>(null) }
+  val canSend = remember(revision, replyMode) {
+    replyMode != InstinctReplyMode.NEVER && com.example.phone.InstinctProposalCenter.acks.latestHandle() != null
+  }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_catalog")) {
+    Text("Instrucciones para Instinct", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("Se generan con la gramática de Insto (${com.example.phone.InstinctProtocolCatalog.TITLE}) y las rutinas que habilitaste. Pegalas en el prompt de Instinct.")
+    OutlinedButton(onClick = {
+      val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+      clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Instrucciones para Instinct",
+        com.example.phone.InstinctProposalCenter.catalog(context)))
+      notice = "Instrucciones copiadas."
+    }, modifier = Modifier.testTag("instinct_catalog_copy")) { Text("Copiar instrucciones para Instinct") }
+    if (canSend) OutlinedButton(onClick = {
+      notice = if (com.example.phone.InstinctProposalCenter.sendCatalog(context)) "Instrucciones enviadas a Instinct."
+        else "No se pudieron enviar: WhatsApp no aceptó la respuesta o venció."
+      onChange()
+    }, modifier = Modifier.testTag("instinct_catalog_send")) { Text("Enviarlas a Instinct") }
+    notice?.let { SettingsDescription(it) }
+  }
+}
+
+internal fun replyModeLabel(mode: InstinctReplyMode): String = when (mode) {
+  InstinctReplyMode.NEVER -> "Nunca"
+  InstinctReplyMode.PROBLEMS -> "Solo errores y esperas"
+  InstinctReplyMode.ALWAYS -> "Siempre"
+}
+
 /** Why orders are or are not arriving. Shows states and the last result, never a message or a name read. */
 @Composable
 private fun ProposalDiagnostics(contact: PinnedContact?, revision: Int, onRefresh: () -> Unit) {
@@ -118,6 +200,12 @@ private fun ProposalDiagnostics(contact: PinnedContact?, revision: Int, onRefres
       else "Accesibilidad de Insto: inactiva. Volumen, linterna, silencio y música se ejecutan solos; lo que abre otra app (alarma, temporizador, Spotify…) espera tu toque, porque Android no deja abrir apps en segundo plano.")
     SettingsDescription(if (diagnosis == null) "Último mensaje de WhatsApp: ninguno desde que se inició Insto."
       else "Último mensaje de WhatsApp ($ago): ${diagnosis.label}" + (detail?.let { " $it" } ?: ""))
+    val reply = InstinctProposalIntake.lastReply
+    if (reply != null) {
+      val replyAgo = ((now - InstinctProposalIntake.lastReplyAt) / 60_000L).let { if (it < 1) "hace menos de un minuto" else "hace $it min" }
+      SettingsDescription("Última respuesta a Instinct ($replyAgo): ${reply.label}" +
+        (InstinctProposalIntake.lastReplyDetail?.let { " $it" } ?: ""))
+    }
     TextButton(onClick = onRefresh) { Text("Actualizar diagnóstico") }
   }
 }

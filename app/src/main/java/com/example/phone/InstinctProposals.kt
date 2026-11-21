@@ -29,9 +29,16 @@ object InstinctProposalProtocol {
 /** The result of checking one proposal line. Only [Valid] can ever reach the user as something to confirm. */
 sealed interface ProposalCheck {
   val order: String
-  data class Valid(override val order: String, val command: PhoneCommand) : ProposalCheck
+  /** With [deferred], [command] is the inner order, checked now and again when it fires. */
+  data class Valid(override val order: String, val command: PhoneCommand, val deferred: Deferred? = null) : ProposalCheck
   data class Invalid(override val order: String, val reason: Reason) : ProposalCheck
+  /** A read-only question about the protocol itself: it never does anything on the phone. */
+  data class Query(override val order: String, val kind: QueryKind) : ProposalCheck
   enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN }
+  /** [readOnly] queries change nothing; «cancelar programadas» only cancels Insto's own pending orders. */
+  enum class QueryKind(val phrase: String, val readOnly: Boolean = true) {
+    CATALOG("ver catálogo"), SCHEDULED("ver programadas"), CANCEL_SCHEDULED("cancelar programadas", readOnly = false)
+  }
 }
 
 /**
@@ -44,12 +51,33 @@ object InstinctProposalValidator {
   private val silenceActions = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
     PlatformAction.DND_ON, PlatformAction.DND_OFF)
 
-  fun check(order: String, parser: PhoneCommandParser, now: Calendar = Calendar.getInstance()): ProposalCheck =
-    check(order, parser::parse, now)
+  /** [routines] are the routines the user let Instinct run; with none, every routine is forbidden. */
+  fun check(order: String, parser: PhoneCommandParser, now: Calendar = Calendar.getInstance(),
+    routines: InstinctRoutineAccess = InstinctRoutineAccess.NONE): ProposalCheck =
+    check(order, parser::parse, now, routines)
 
   /** [parse] is the explicit grammar; a seam for tests that the semantic guard still reviews its output. */
-  internal fun check(order: String, parse: (String) -> PhoneRoute, now: Calendar): ProposalCheck {
+  internal fun check(order: String, parse: (String) -> PhoneRoute, now: Calendar,
+    routines: InstinctRoutineAccess = InstinctRoutineAccess.NONE): ProposalCheck {
     if (order.isBlank()) return ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY)
+    // Read-only questions about the protocol: exact phrases, before the grammar.
+    val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
+    ProposalCheck.QueryKind.entries.firstOrNull { PhoneCommandParser.normalize(it.phrase) == folded }
+      ?.let { return ProposalCheck.Query(order, it) }
+    // A deferred order: only a wrapper. Its inner order goes through every check below, untouched, and cannot be
+    // another wrapper or a query.
+    when (val wrapper = InstinctDeferral.parse(order, now)) {
+      is InstinctDeferral.Parse.Rejected -> return ProposalCheck.Invalid(order, ProposalCheck.Reason.NOT_LOCAL)
+      is InstinctDeferral.Parse.Wrapped -> {
+        val inner = check(wrapper.deferred.inner, parse, now, routines)
+        return when {
+          inner is ProposalCheck.Valid && inner.deferred == null -> ProposalCheck.Valid(order, inner.command, wrapper.deferred)
+          inner is ProposalCheck.Invalid -> ProposalCheck.Invalid(order, inner.reason)
+          else -> ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
+        }
+      }
+      InstinctDeferral.Parse.None -> Unit
+    }
     if (RequestSafetyPolicy.refusal(order) != null || RequestSafetyPolicy.isQuestion(order))
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.UNSAFE)
     val command = (parse(order) as? PhoneRoute.Local)?.command
@@ -57,14 +85,60 @@ object InstinctProposalValidator {
     val reviewed = SemanticCommandGuard.review(InterpretationRequest(order, now = now), InterpretationResult.Direct(command))
     if (reviewed !is InterpretationResult.Direct || reviewed.command != command)
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.SEMANTIC)
-    if (!allowed(command)) return ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
+    if (!allowed(command) && !allowedRoutine(command, routines)) return ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
     return ProposalCheck.Valid(order, command)
   }
 
   /**
-   * Allowlist v1. Everything not named is forbidden, in particular calls ([PhoneCommand.Dial] and every
-   * [PlatformAction.CALL_DIRECT]), messages, files and sharing, [PhoneCommand.SavePlace], routines and workflows.
-   * A proposal is always one command: plans of several steps are never built from proposals.
+   * A routine passes only when its name matches exactly (normalized as `routine_run` does) a routine the user
+   * enabled for Instinct, whose steps have not changed since. No other routine, and never a plan built from text.
+   */
+  fun allowedRoutine(command: PhoneCommand, routines: InstinctRoutineAccess): Boolean =
+    command is PhoneCommand.Platform && command.action == PlatformAction.ROUTINE_RUN &&
+      command.argument?.let(routines::resolve) != null
+
+  /**
+   * One canonical form per allowed type: the single source of the examples in the generated catalog
+   * ([InstinctProtocolCatalog]). A test checks that each one is [ProposalCheck.Valid].
+   */
+  val examples: List<String> = listOf(
+    "poner una alarma a las 07:00",
+    "poner una alarma a las 07:00 todos los días",
+    "poner un temporizador de 25 minutos",
+    "poner el volumen al 30 por ciento",
+    "subir el volumen",
+    "bajar el volumen",
+    "prender la linterna",
+    "apagar la linterna",
+    "silenciar el teléfono",
+    "silenciar el teléfono durante una hora",
+    "activar no molestar",
+    "desactivar no molestar",
+    "poner en vibración",
+    "pausar la música",
+    "siguiente canción",
+    "abrir spotify",
+    "mostrar las alarmas",
+    "mostrar los temporizadores",
+    "poner música de Soda Stereo",
+    "buscar jazz en YouTube",
+    "buscar Cerati en Spotify",
+    "agendar reunión mañana a las 17:00 durante una hora",
+    // Deferred and conditional forms (1.14.0): the wrapper, then any order above.
+    "a las 22:00: poner el volumen al 10 por ciento",
+    "en 30 minutos: apagar la linterna",
+    "en 2 horas: desactivar no molestar",
+    "a las 06:30 si llueve: poner una alarma a las 06:45",
+    "a las 06:30 si no llueve: poner música de Soda Stereo",
+    "a las 07:00 si hace menos de 10 grados: poner un temporizador de 10 minutos",
+    "a las 14:00 si hace más de 30 grados: activar no molestar",
+  )
+
+  /**
+   * Allowlist v1 for single commands and routine steps. Everything not named is forbidden, in particular calls
+   * ([PhoneCommand.Dial] and every [PlatformAction.CALL_DIRECT]), messages, files and sharing, [PhoneCommand.SavePlace]
+   * and workflows. A routine is never allowed here: only [allowedRoutine] lets an enabled one through. A proposal is
+   * always one command: plans of several steps are never built from proposals.
    */
   fun allowed(command: PhoneCommand): Boolean = when (command) {
     is PhoneCommand.Alarm, is PhoneCommand.Timer, is PhoneCommand.Volume, is PhoneCommand.Torch,
@@ -232,6 +306,21 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
     entry.state = State.DISCARDED
     return true
   }
+
+  /**
+   * Expires [id] now, before its time: its reply handle is about to lapse and Instinct must still hear that it
+   * expired. Expiring early only ever runs less. True when it was pending.
+   */
+  @Synchronized fun expireNow(id: Long): Boolean {
+    expire()
+    val entry = entries[id] ?: return false
+    if (entry.state != State.PENDING) return false
+    entry.state = State.EXPIRED
+    return true
+  }
+
+  /** The proposal [id] whatever its state, to report on it; never to run it (only [claim] does). */
+  @Synchronized fun find(id: Long): Proposal? = entries[id]?.proposal
 
   @Synchronized fun isPending(id: Long): Boolean { expire(); return entries[id]?.state == State.PENDING }
 
