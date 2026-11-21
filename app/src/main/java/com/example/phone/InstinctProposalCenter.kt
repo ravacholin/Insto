@@ -533,7 +533,7 @@ object InstinctProposalCenter {
       else if (forChat) InstinctCatalogLog.HIDDEN
       else InstinctLogSettings(context).let { InstinctCatalogLog(it.url(), it.token()) }
     return InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat, log,
-      InstinctAutonomySettings(context).policy(), mailbox)
+      InstinctAutonomySettings(context).policy(), mailbox, doorbell = mailbox != null && InstinctDoorbell.active(context))
   }
 
   /**

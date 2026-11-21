@@ -35,7 +35,7 @@ object InstinctProtocolCatalog {
    * token in the copy to paste ([InstinctCatalogLog.HIDDEN] in the chat copy). Never the key, in any copy.
    */
   fun text(routines: List<String>, forChat: Boolean = false, log: InstinctCatalogLog? = null,
-    autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(), mailbox: InstinctCatalogLog? = null): String {
+    autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(), mailbox: InstinctCatalogLog? = null, doorbell: Boolean = false): String {
     fun example(order: String) = (if (forChat) CHAT_MARK else "") + "${InstinctProposalProtocol.PREFIX} $order"
     return buildString {
       appendLine("Órdenes para Insto ($TITLE)")
@@ -84,7 +84,7 @@ object InstinctProtocolCatalog {
         appendLine()
       }
       if (mailbox != null) {
-        appendLine(InstinctMailboxCatalog.text(mailbox, forChat))
+        appendLine(InstinctMailboxCatalog.text(mailbox, forChat, doorbell))
         appendLine()
       }
       appendLine("Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas):")

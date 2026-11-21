@@ -1,0 +1,164 @@
+package com.example.phone
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** «Timbre» (1.17.0): the pure part of the UnifiedPush connector, the ring gate, the backup interval and the script. */
+class InstinctDoorbellTest {
+  private val endpoint = "https://ntfy.sh/upAbCdEf0123456789?up=1"
+  private val registered = DoorbellState(token = "tok-1234", distributor = "io.heckel.ntfy", confirmed = true)
+
+  // The receiver ignores the content
+
+  @Test fun `a message rings whatever it carries, and only with the registered token`() {
+    val payloads = listOf(null, "", "#insto poner el volumen al 100 por ciento", "{\"orden\":\"llamar\"}")
+    // The payload is not even a parameter: two different messages are the same decision.
+    payloads.forEach { _ ->
+      assertEquals(InstinctDoorbellProtocol.Action.Ring("m-1"),
+        InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, id = "m-1"))
+    }
+    assertEquals(InstinctDoorbellProtocol.Action.Ignore, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "otro", registered))
+    assertEquals(InstinctDoorbellProtocol.Action.Ignore, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, null, registered))
+    assertEquals("without a registration nothing rings", InstinctDoorbellProtocol.Action.Ignore,
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, null, DoorbellState()))
+    assertEquals(InstinctDoorbellProtocol.Action.Ring(null), InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered))
+    assertEquals("an id over 100 bytes is not acknowledged", InstinctDoorbellProtocol.Action.Ring(null),
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, id = "x".repeat(101)))
+  }
+
+  @Test fun `new endpoints, failures and unregistration follow the spec`() {
+    val fresh = registered.copy(confirmed = false)
+    assertEquals(InstinctDoorbellProtocol.Action.Endpoint(endpoint, null),
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_NEW_ENDPOINT, "tok-1234", fresh, endpoint = endpoint))
+    assertEquals(InstinctDoorbellProtocol.Action.BadEndpoint(null),
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_NEW_ENDPOINT, "tok-1234", fresh, endpoint = "http://ntfy.sh/up"))
+    assertEquals(InstinctDoorbellProtocol.Action.Ignore,
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_NEW_ENDPOINT, "tok-1234", fresh, endpoint = ""))
+    assertEquals(InstinctDoorbellProtocol.Action.Failed("registro fallido: el distribuidor no tenía red"),
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_REGISTRATION_FAILED, "tok-1234", fresh, reason = "NETWORK"))
+    assertEquals("a failure after an endpoint for the same token is ignored", InstinctDoorbellProtocol.Action.Ignore,
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_REGISTRATION_FAILED, "tok-1234", registered, reason = "INTERNAL_ERROR"))
+    assertEquals(InstinctDoorbellProtocol.Action.Unregistered, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_UNREGISTERED, "tok-1234", registered))
+    assertEquals(InstinctDoorbellProtocol.Action.Ignore, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_TEMP_UNAVAILABLE, "tok-1234", registered))
+    assertEquals(InstinctDoorbellProtocol.Action.Ignore, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_UNREGISTERED, "otro", registered))
+  }
+
+  @Test fun `the distributor is the only one installed or the chosen one`() {
+    assertNull(InstinctDoorbellProtocol.pick(emptyList(), null))
+    assertEquals("io.heckel.ntfy", InstinctDoorbellProtocol.pick(listOf("io.heckel.ntfy"), null))
+    assertNull("several and none chosen", InstinctDoorbellProtocol.pick(listOf("a", "io.heckel.ntfy"), null))
+    assertEquals("a", InstinctDoorbellProtocol.pick(listOf("a", "io.heckel.ntfy"), "a"))
+    assertEquals("the chosen one was uninstalled", "b", InstinctDoorbellProtocol.pick(listOf("b"), "a"))
+  }
+
+  // The endpoint
+
+  @Test fun `the endpoint is masked to its last 6 characters and must be https within 500`() {
+    assertEquals("••••?up=1".let { "••••" + endpoint.takeLast(6) }, InstinctDoorbellEndpoint.mask(endpoint))
+    assertFalse(InstinctDoorbellEndpoint.mask(endpoint).contains("upAbCdEf"))
+    assertEquals("sin endpoint", InstinctDoorbellEndpoint.mask(null))
+    assertTrue(InstinctDoorbellEndpoint.valid(endpoint))
+    assertFalse(InstinctDoorbellEndpoint.valid("http://ntfy.sh/up"))
+    assertFalse(InstinctDoorbellEndpoint.valid("https://ntfy.sh/" + "a".repeat(500)))
+    assertFalse(InstinctDoorbellEndpoint.valid("https://ntfy.sh/a b"))
+  }
+
+  @Test fun `the state survives a round trip and a broken file is a fresh one`() {
+    val state = DoorbellState("tok", "io.heckel.ntfy", true, 1_790_000_000_000L, false, null, 1_790_000_100_000L, 3, 2)
+    assertEquals(state, DoorbellState.decode(state.encode()))
+    assertEquals(DoorbellState(), DoorbellState.decode("{roto"))
+    assertFalse("the state file never holds the endpoint", state.encode().contains("ntfy.sh"))
+  }
+
+  // The gate: 5 seconds, and a ring inside the window is postponed, never dropped
+
+  @Test fun `a ring polls now, after the running poll or when the 5-second window ends`() {
+    var now = 100_000L
+    val gate = InstinctMailboxGate { now }
+    assertEquals(InstinctMailboxGate.Ring.PollNow, gate.ring(online = true))
+    gate.begin()
+    assertEquals(InstinctMailboxGate.Ring.AfterCurrent, gate.ring(online = true))
+    assertTrue("the running poll polls once more", gate.end())
+    assertFalse(gate.end())
+    now += 1_000
+    assertEquals(InstinctMailboxGate.Ring.Later(4_000L), gate.ring(online = true))
+    now += 4_000
+    assertEquals(InstinctMailboxGate.Ring.PollNow, gate.ring(online = true))
+    assertEquals("a second ring before the reserved poll begins waits", InstinctMailboxGate.Ring.Later(5_000L), gate.ring(online = true))
+    assertEquals(InstinctMailboxGate.Ring.WhenOnline, gate.ring(online = false))
+  }
+
+  @Test fun `a poll of another kind also counts for the window`() {
+    var now = 0L
+    val gate = InstinctMailboxGate { now }
+    now = 50_000L
+    gate.begin(); assertFalse(gate.end())
+    now += 4_999
+    assertEquals(InstinctMailboxGate.Ring.Later(1L), gate.ring(online = true))
+    assertEquals(5_000L, InstinctMailboxGate.MIN_SPACING_MILLIS)
+  }
+
+  // The backup interval
+
+  @Test fun `the backup poll is 15 minutes while the doorbell rang in the last 24 hours`() {
+    val now = 1_790_000_000_000L
+    assertEquals(15, InstinctDoorbellPolicy.backupMinutes(2, active = true, lastRingAt = now - 60_000, now = now))
+    assertEquals(15, InstinctDoorbellPolicy.backupMinutes(5, active = true, lastRingAt = now - 23 * 3_600_000L, now = now))
+    assertEquals(15, InstinctDoorbellPolicy.backupMinutes(15, active = true, lastRingAt = now, now = now))
+    assertEquals("24 hours without a ring", 2, InstinctDoorbellPolicy.backupMinutes(2, active = true, lastRingAt = now - 24 * 3_600_000L, now = now))
+    assertEquals("never rang", 5, InstinctDoorbellPolicy.backupMinutes(5, active = true, lastRingAt = null, now = now))
+    assertEquals("off", 2, InstinctDoorbellPolicy.backupMinutes(2, active = false, lastRingAt = now, now = now))
+    assertEquals("a ring from the future (clock change)", 2, InstinctDoorbellPolicy.backupMinutes(2, active = true, lastRingAt = now + 60_000, now = now))
+  }
+
+  // The script
+
+  @Test fun `the script's answers, an old script included`() {
+    fun body(text: String) = InstinctLogClient.Raw.Body(text)
+    assertEquals(InstinctDoorbellScript.Answer.Confirmed(true), InstinctDoorbellScript.parseInform(body("""{"ok":true,"timbre":"guardado"}""")))
+    assertEquals(InstinctDoorbellScript.Answer.Confirmed(false), InstinctDoorbellScript.parseInform(body("""{"ok":true,"timbre":"borrado"}""")))
+    assertEquals("a 1.16.0 script answers the events branch", InstinctDoorbellScript.Answer.Failed(InstinctDoorbellScript.NOT_CONFIRMED, false),
+      InstinctDoorbellScript.parseInform(body("""{"ok":true,"accepted":[]}""")))
+    assertEquals(InstinctDoorbellScript.Answer.Failed("token rechazado", false), InstinctDoorbellScript.parseInform(body("""{"ok":false,"error":"token"}""")))
+    assertEquals(InstinctDoorbellScript.Answer.Failed("sin red", true),
+      InstinctDoorbellScript.parseInform(InstinctLogClient.Raw.Failed(InstinctLogClient.Failure.NETWORK)))
+    assertNull(InstinctDoorbellScript.testFailure(body("""{"ok":true,"timbre":true,"codigo":200}""")))
+    assertEquals("el script no pudo tocar el timbre (HTTP 404)", InstinctDoorbellScript.testFailure(body("""{"ok":true,"timbre":false,"codigo":404}""")))
+    assertEquals("el script no conoce «probar-timbre»: actualizalo", InstinctDoorbellScript.testFailure(body("""{"ok":true,"accepted":[]}""")))
+    assertEquals("el script no tiene el endpoint guardado", InstinctDoorbellScript.testFailure(body("""{"ok":false,"error":"sin-endpoint"}""")))
+    assertTrue(InstinctDoorbellScript.informBody("t0ken-largo", endpoint).contains("\"action\":\"timbre\""))
+    org.json.JSONObject(InstinctDoorbellScript.testBody("t0ken-largo")).let {
+      assertEquals("t0ken-largo", it.getString("token")); assertEquals("probar-timbre", it.getString("action")); assertEquals(2, it.length())
+    }
+  }
+
+  // Never the endpoint where it can travel
+
+  @Test fun `the diagnosis and the status never carry the endpoint`() {
+    val clock: (Long) -> String = { "09:30" }
+    val rang = registered.copy(lastRingAt = 1L, rings = 4, ringPolls = 3, informedAt = 1L)
+    assertEquals("Timbre: último 09:30 · timbres 4 · sondeos por timbre 3", InstinctDoorbellText.diagnosis(rang, 1, clock))
+    assertEquals("Timbre: sin distribuidor (instalá ntfy) · timbres 0 · sondeos por timbre 0", InstinctDoorbellText.diagnosis(DoorbellState(), 0, clock))
+    assertEquals("Timbre: no funciona (motivo: el script no confirmó el endpoint) · timbres 0 · sondeos por timbre 0",
+      InstinctDoorbellText.diagnosis(registered.copy(failure = InstinctDoorbellScript.NOT_CONFIRMED), 1, clock))
+    val status = InstinctDoorbellText.status(endpoint, rang, clock)
+    assertEquals("Endpoint ••••" + endpoint.takeLast(6) + " · avisado al script 09:30", status)
+    listOf(InstinctDoorbellText.diagnosis(rang, 1, clock), status).forEach { assertFalse(it, it.contains("ntfy.sh")) }
+  }
+
+  @Test fun `the catalog says it once, without the endpoint, in both copies`() {
+    val log = InstinctCatalogLog("https://script.google.com/macros/s/AKfycbx-ejemplo_123456/exec", "token-largo-de-prueba")
+    val on = InstinctProtocolCatalog.text(emptyList(), log = log, mailbox = log, doorbell = true)
+    val chat = InstinctProtocolCatalog.text(emptyList(), forChat = true, log = InstinctCatalogLog.HIDDEN, mailbox = InstinctCatalogLog.HIDDEN, doorbell = true)
+    val off = InstinctProtocolCatalog.text(emptyList(), log = log, mailbox = log)
+    assertTrue(on.contains(InstinctDoorbellText.CATALOG_LINE))
+    assertTrue(chat.contains(InstinctDoorbellText.CATALOG_LINE))
+    assertFalse(off.contains(InstinctDoorbellText.CATALOG_LINE))
+    assertFalse("no mailbox, no line", InstinctProtocolCatalog.text(emptyList(), doorbell = true).contains(InstinctDoorbellText.CATALOG_LINE))
+    listOf(on, chat).forEach { assertFalse(it.contains("ntfy")); assertFalse(it.contains(endpoint)) }
+    assertTrue("the chat copy still never reads as orders", InstinctAck.safe(chat))
+  }
+}

@@ -1,4 +1,4 @@
-# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.16.0)
+# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.17.0)
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
@@ -7,6 +7,8 @@ Desde 1.14.0, además: Insto le puede **responder** a Instinct con el resultado 
 Desde 1.15.0, los acuses pueden ir a una **bitácora** en Google Sheets en lugar del chat, para no llenarlo de mensajes ([Bitácora](#bitácora-1150)). Las órdenes siguen llegando por WhatsApp exactamente igual.
 
 Desde 1.16.0, qué hace Instinct solo se elige **por tipo de acción** ([Autonomía por acción](#autonomía-por-acción-1160)), con horas de silencio y un ajuste automático cuando deshacés mucho. Con la bitácora configurada, Insto además publica el **estado del teléfono** para que Instinct decida con contexto ([Estado del teléfono](#estado-del-teléfono-1160)), y las órdenes pueden llegar también por un **buzón firmado** en la misma planilla, sin escribir en el chat ([Buzón firmado](#buzón-firmado-1160)).
+
+Desde 1.17.0, un **timbre** push con ntfy hace que una orden del buzón se tome en segundos ([Timbre](#timbre-1170)).
 
 La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. En **Autonomía** elegís, por categoría, si Instinct lo hace solo, espera tu confirmación o nunca. Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
 
@@ -439,6 +441,73 @@ curl -sL "$URL?token=malo&action=ordenes"
 ```
 
 Si Insto sondea mientras tanto, va a tomar esa orden de prueba y contarla como «firma inválida» (es lo esperado: no se ejecuta ni se responde).
+
+## Timbre (1.17.0)
+
+Con el buzón, una orden tarda lo que tarde el próximo sondeo: de 5 a 15 minutos, o más con Doze. El **timbre** es un push que solo dice «hay algo en el buzón». **No lleva órdenes:** cuando suena, Insto lee la planilla y verifica la firma exactamente como en cualquier sondeo, así que el modelo de seguridad del buzón no cambia. Quien toca el timbre es tu Apps Script, al anotar una orden nueva; Instinct no tiene que hacer nada distinto.
+
+### Transporte: UnifiedPush con ntfy
+
+- Insto implementa a mano el lado *connector* de [UnifiedPush](https://unifiedpush.org/) para Android (especificación AND_3), con un `BroadcastReceiver` (`InstinctDoorbellReceiver`) y un servicio vacío para `RAISE_TO_FOREGROUND`. No usa la biblioteca `connector` ni Firebase, y no agrega dependencias.
+- El distribuidor es la app **ntfy**. Insto busca los distribuidores instalados (las apps que reciben `org.unifiedpush.android.distributor.REGISTER`). Si hay varios, se elige uno en Ajustes; si no hay ninguno, dice «Instalá ntfy para usar el timbre».
+- **Registro:** `REGISTER` con un token aleatorio (UUID) por registro. En Android 14 o posterior, el broadcast comparte la identidad de Insto (`setShareIdentityEnabled`); antes, va el `PendingIntent` `pi` inmutable que pide la especificación. Se agrega `application` (el nombre del paquete) para distribuidores anteriores a AND_3. Al reiniciar el teléfono se vuelve a registrar con el mismo token.
+- **El receptor está exportado**, porque el distribuidor es otra app. Todo pedido con un token que Insto no registró se ignora. Un `MESSAGE` **ignora el contenido**: lo mande quien lo mande y diga lo que diga, lo único que hace es sondear el buzón. Si trae `id`, se confirma con `MESSAGE_ACK`.
+- **El endpoint** (`NEW_ENDPOINT`) se guarda en `noBackupFilesDir` (`instinct-doorbell-endpoint`, escritura atómica). Nunca va a Logcat, al diagnóstico, al catálogo ni a WhatsApp; en Ajustes aparece enmascarado («••••» y los últimos 6 caracteres). El resto del estado (token, contadores, último aviso al script) vive en `instinct-doorbell-state.json`, sin el endpoint.
+- **`UNREGISTERED`, `REGISTRATION_FAILED` y un endpoint nuevo:** se borra o se reemplaza el endpoint guardado y se le vuelve a informar al script (vacío, para que lo borre). Después de un `REGISTRATION_FAILED`, el próximo registro usa un token nuevo, como pide la especificación. Al apagar el timbre se manda `UNREGISTER` y el token se olvida enseguida.
+
+### Apps Script
+
+| Pedido | Qué hace |
+| --- | --- |
+| `POST {token, action:"timbre", endpoint}` | Guarda el endpoint en `PropertiesService.getScriptProperties()`, **no en la planilla**. Tiene que empezar con `https://` y tener como máximo 500 caracteres; si no, `{ok:false, error:"endpoint"}`. Con `endpoint` vacío lo borra. Responde `{ok, timbre:"guardado"}` o `{ok, timbre:"borrado"}`. |
+| `POST {token, action:"probar-timbre"}` | Toca el timbre ahora y responde `{ok, timbre:true|false, codigo}`, o `{ok:false, error:"sin-endpoint"}`. |
+| `POST {token, action:"orden", …}` | Igual que en 1.16.0. Además, después de anotar una orden **nueva** (no una repetida), hace `UrlFetchApp.fetch(endpoint, {method:"post", payload:"insto-timbre", muteHttpExceptions:true})`, como mucho una vez cada 5 segundos (la última hora queda en las propiedades del script). Si el fetch falla, la orden queda anotada igual y la respuesta sigue siendo `{ok, id}`. |
+
+Un `POST` o un `GET` sin estas acciones se comporta exactamente igual que en 1.16.0. Con un script viejo, `action:"timbre"` cae en la rama de los eventos y responde `{ok:true, accepted:[]}`: Insto lo toma como «el script no confirmó el endpoint» y lo dice en el diagnóstico, sin reintentar. La prueba del script sin Google está en `scripts/test-bitacora-gs.js` (`node scripts/test-bitacora-gs.js`; `scripts/test-phone-core.py` la corre si hay Node).
+
+**Cuándo Insto le avisa al script:** cuando recibe el endpoint, cuando encendés el timbre, cuando el endpoint cambia o se borra y cuando guardás la bitácora. Usa el transporte de `InstinctLogClient` (la misma política de redirección, solo hosts de Google por HTTPS, 15 segundos). Si falla por red o HTTP, reintenta con `JobScheduler`, como la bandeja; un token rechazado o un script viejo esperan a que lo corrijas.
+
+### Qué hace Insto cuando suena
+
+- Con `goAsync()`, sondea el buzón enseguida, fuera del hilo principal, y espera como mucho **20 segundos** antes de soltar el broadcast (el sondeo sigue si tarda más).
+- **Ningún timbre se pierde por el espaciado.** Para el timbre, la separación mínima entre sondeos es de **5 segundos** (no los 20 de los sondeos inmediatos al abrir Insto o al llegar un mensaje de WhatsApp). Si suena dentro de esa ventana, se programa un sondeo para cuando termine. Si suena mientras hay un sondeo en curso, ese sondeo vuelve a leer el buzón al terminar (pudo haber leído la planilla antes de que se anotara la orden). Sin red, queda un job con restricción de red: *expedited* desde Android 12 (`setExpedited`), común en versiones anteriores.
+- **Intervalo de respaldo:** mientras el timbre está activo y sonó en las últimas 24 horas, el sondeo periódico pasa a ser cada **15 minutos**, aunque hayas elegido 2 o 5. Así se ahorra cuota de Apps Script. Si en 24 horas no suena ninguna vez, vuelve al intervalo que elegiste.
+
+### Ajustes, diagnóstico y catálogo
+
+- **Ajustes → Propuestas de Instinct → Buzón → «Timbre instantáneo (ntfy)»**: apagado por defecto; requiere el buzón encendido y un distribuidor. Con varios distribuidores, se elige uno. Una línea de estado: «Endpoint ••••abc123 · avisado al script HH:MM» (o «todavía no se avisó al script»). **«Probar timbre»** le pide al script que lo toque (`probar-timbre`) y muestra si llegó en menos de 30 segundos.
+- **Diagnóstico**, sin contenido: «Timbre: último HH:MM · timbres N · sondeos por timbre N», o el motivo del fallo (sin distribuidor, registro fallido, el script no confirmó el endpoint, el distribuidor dio de baja el registro).
+- **Catálogo:** con el timbre activo, la sección del buzón suma «Después de publicar una orden en el buzón, Insto la toma en segundos; no hace falta avisar por WhatsApp». Nunca incluye el endpoint.
+
+### Configuración paso a paso
+
+1. Instalá **ntfy** (F-Droid o Play Store). No hace falta crear una cuenta; podés usar `ntfy.sh` o tu propio servidor. En Android, sacale a ntfy la optimización de batería y, si lo pide, dejale activada la «conexión instantánea».
+2. Actualizá el Apps Script con [`instinct-bitacora.gs`](instinct-bitacora.gs) de esta versión y volvé a implementarlo (**Implementar → Gestionar implementaciones → Editar → Nueva versión**: así se conserva la URL).
+3. En Insto, **Ajustes → Propuestas de Instinct → Buzón**, con el buzón ya funcionando, encendé **«Timbre instantáneo (ntfy)»**. ntfy registra a Insto y le da el endpoint; la línea de estado pasa a «Endpoint ••••… · avisado al script HH:MM».
+4. Tocá **«Probar timbre»**: tiene que decir «El timbre llegó en N s».
+
+### Prueba con `curl`
+
+```sh
+URL='https://script.google.com/macros/s/<id>/exec'
+TOKEN='<token>'
+# Que el script toque el timbre ahora (Insto sondea el buzón al recibirlo).
+curl -sL -H 'Content-Type: application/json' -d '{"token":"'"$TOKEN"'","action":"probar-timbre"}' "$URL"
+# Una orden de prueba: queda anotada y, como es nueva, el script toca el timbre (repetirla no lo toca).
+curl -sL -H 'Content-Type: application/json' \
+  -d '{"token":"'"$TOKEN"'","action":"orden","id":"3b241101-e2bb-4255-8caf-4136c566a962","at":"2026-11-21T09:30:00-03:00","lines":["#insto ver estado"],"sig":"'"$(printf '0%.0s' $(seq 64))"'"}' "$URL"
+# Con el endpoint que ves en ntfy (Ajustes de ntfy → la suscripción de Insto), tocar el timbre a mano:
+curl -s -d 'insto-timbre' '<endpoint>'
+```
+
+Al tocar el timbre a mano, el diagnóstico suma un timbre y un sondeo; la orden de prueba se descarta como «firma inválida», como en la prueba del buzón.
+
+### Límites
+
+- **Depende de que ntfy esté vivo.** Si el sistema mata a ntfy o le restringe la batería, el timbre no llega y queda el sondeo de respaldo. Si ntfy deja de suscribirse, el intervalo vuelve solo al que elegiste a las 24 horas sin timbres.
+- El timbre solo acelera: nunca saltea la firma, la lista blanca, la autonomía ni el freno. Una orden que llega por el timbre es idéntica a una del sondeo.
+- El script toca el timbre como mucho una vez cada 5 segundos; varias órdenes seguidas igual se leen todas en el mismo sondeo.
+- ntfy reenvía el texto `insto-timbre` sin cifrar; como Insto no lo lee, no importa qué diga.
 
 ## Qué tiene que hacer Instinct
 

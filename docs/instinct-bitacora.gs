@@ -1,7 +1,7 @@
 /**
  * Bitácora de Insto (Protocolo Insto v4). Apps Script ligado a una planilla de Google.
- * Ver docs/INSTINCT-PROPUESTAS.md, «Bitácora (1.15.0)», «Estado del teléfono» y «Buzón firmado» (1.16.0).
- * Es compatible con Insto 1.15.0: un POST o un GET sin «action» se comportan exactamente igual que antes.
+ * Ver docs/INSTINCT-PROPUESTAS.md, «Bitácora (1.15.0)», «Estado del teléfono», «Buzón firmado» (1.16.0) y «Timbre» (1.17.0).
+ * Es compatible con Insto 1.15.0 y 1.16.0: un POST o un GET sin las acciones nuevas se comportan exactamente igual que antes.
  *
  * 1. En la planilla: Extensiones → Apps Script. Pegá este archivo y cambiá TOKEN por un texto largo y aleatorio.
  * 2. Implementar → Nueva implementación → Aplicación web. Ejecutar como: yo. Quién tiene acceso: cualquier usuario.
@@ -18,6 +18,13 @@
  * POST {token, action:"orden", id, at, lines:[…], sig}  → {ok, id}   (un id repetido se confirma y no se anota de nuevo)
  * GET ?token=…&action=ordenes&limit=10  → {ok, ordenes:[{recibido, orden_id, at, lineas:[…], firma}]}   (las no tomadas, en orden)
  * POST {token, action:"tomadas", ids:[…]}  → {ok, tomadas:N}
+ *
+ * Timbre (1.17.0): el endpoint de UnifiedPush (ntfy) del teléfono, guardado en las propiedades del script, nunca en la planilla.
+ * POST {token, action:"timbre", endpoint}  → {ok, timbre:"guardado"|"borrado"}   (endpoint vacío lo borra; https:// y 500 caracteres como máximo)
+ * POST {token, action:"probar-timbre"}  → {ok, timbre:true|false, codigo}   ({ok:false, error:"sin-endpoint"} si no hay endpoint)
+ * Después de anotar una orden NUEVA en el Buzón, el script toca el timbre: un POST «insto-timbre» al endpoint, como mucho
+ * uno cada 5 segundos. El timbre no lleva la orden: Insto la lee de la planilla y verifica la firma como siempre. Si falla,
+ * la orden queda anotada igual y la respuesta sigue siendo {ok, id}.
  * Un token incorrecto responde {ok:false, error:"token"}.
  */
 const TOKEN = 'CAMBIÁ-ESTE-TOKEN';
@@ -28,6 +35,10 @@ const MAILBOX = 'Buzón';
 const MAILBOX_HEADERS = ['recibido', 'orden_id', 'at', 'lineas', 'firma', 'tomada'];
 const MAX_ORDERS = 10;
 const MAX_LINES = 3;
+const DOORBELL_ENDPOINT = 'insto_timbre_endpoint';
+const DOORBELL_LAST = 'insto_timbre_ultimo';
+const DOORBELL_SPACING_MS = 5000;
+const DOORBELL_MAX_CHARS = 500;
 
 function sheet_() {
   const book = SpreadsheetApp.getActiveSpreadsheet();
@@ -74,6 +85,7 @@ function postOrder_(body) {
     !Array.isArray(body.lines) || !body.lines.length) return json_({ ok: false, error: 'orden' });
   // Unas pocas más de las que Insto lee: la firma cubre todas, Insto ejecuta como máximo 3.
   const lines = body.lines.slice(0, MAX_LINES * 3).map(function (l) { return String(l).slice(0, 300); });
+  let isNew = false;
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
@@ -82,11 +94,58 @@ function postOrder_(body) {
     const known = last > 1 ? sheet.getRange(2, 2, last - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
     if (known.indexOf(body.id) < 0) {
       sheet.appendRow([new Date().toISOString(), body.id, body.at, JSON.stringify(lines), body.sig, ''].map(cell_));
+      isNew = true;
     }
-    return json_({ ok: true, id: body.id });
   } finally {
     lock.releaseLock();
   }
+  // Solo una orden nueva toca el timbre; una repetida no. Un fallo nunca cambia la respuesta.
+  if (isNew) { try { ring_(false); } catch (_) { } }
+  return json_({ ok: true, id: body.id });
+}
+
+/** Las propiedades del script: el endpoint del timbre no va a la planilla. */
+function props_() {
+  return PropertiesService.getScriptProperties();
+}
+
+/**
+ * Toca el timbre: un POST «insto-timbre» al endpoint guardado. Sin «force», como mucho uno cada 5 segundos.
+ * Devuelve el código HTTP, 0 si no se tocó (sin endpoint o dentro de los 5 segundos) o -1 si el pedido falló.
+ */
+function ring_(force) {
+  const props = props_();
+  const endpoint = props.getProperty(DOORBELL_ENDPOINT);
+  if (!endpoint) return 0;
+  const now = Date.now();
+  const last = parseInt(props.getProperty(DOORBELL_LAST) || '0', 10) || 0;
+  if (!force && now - last >= 0 && now - last < DOORBELL_SPACING_MS) return 0;
+  props.setProperty(DOORBELL_LAST, String(now));
+  try {
+    const response = UrlFetchApp.fetch(endpoint, { method: 'post', payload: 'insto-timbre', muteHttpExceptions: true });
+    return response.getResponseCode();
+  } catch (_) {
+    return -1;
+  }
+}
+
+/** Guarda (o, vacío, borra) el endpoint del timbre. */
+function postDoorbell_(body) {
+  const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : '';
+  if (!endpoint) {
+    props_().deleteProperty(DOORBELL_ENDPOINT);
+    return json_({ ok: true, timbre: 'borrado' });
+  }
+  if (endpoint.length > DOORBELL_MAX_CHARS || !/^https:\/\/[^\s]+$/.test(endpoint)) return json_({ ok: false, error: 'endpoint' });
+  props_().setProperty(DOORBELL_ENDPOINT, endpoint);
+  return json_({ ok: true, timbre: 'guardado' });
+}
+
+/** «Probar timbre» desde Insto: toca el timbre ahora, sin esperar los 5 segundos. */
+function postDoorbellTest_() {
+  if (!props_().getProperty(DOORBELL_ENDPOINT)) return json_({ ok: false, error: 'sin-endpoint' });
+  const code = ring_(true);
+  return json_({ ok: true, timbre: code >= 200 && code < 300, codigo: code });
 }
 
 /** Marca como tomadas las órdenes que Insto ya leyó (válidas o no), para que no vuelvan. */
@@ -136,6 +195,8 @@ function doPost(e) {
   if (!body || body.token !== TOKEN) return json_({ ok: false, error: 'token' });
   if (body.action === 'orden') return postOrder_(body);
   if (body.action === 'tomadas') return postTaken_(body);
+  if (body.action === 'timbre') return postDoorbell_(body);
+  if (body.action === 'probar-timbre') return postDoorbellTest_();
   // Sin «action»: los eventos de Insto, exactamente como en 1.15.0.
   const events = Array.isArray(body.events) ? body.events.slice(0, MAX_EVENTS) : [];
   const lock = LockService.getScriptLock();

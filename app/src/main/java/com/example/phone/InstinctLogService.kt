@@ -38,6 +38,8 @@ class InstinctLogSettings(context: Context) {
     InstinctLog.rearm(app)
     InstinctStatePublisher.rearm(app)
     InstinctMailbox.rearm(app)
+    // The doorbell's endpoint goes to the (maybe new) script again (1.17.0).
+    InstinctDoorbell.onLogSaved(app)
     return true
   }
 
@@ -191,12 +193,13 @@ class InstinctLogJobService : JobService() {
   override fun onStopJob(params: JobParameters): Boolean = true
 }
 
-/** After a boot: the log's job if events are pending, the state's heartbeat and the mailbox's polling. Not exported. */
+/** After a boot: the log's job if events are pending, the state's heartbeat, the mailbox's polling and the doorbell. Not exported. */
 class InstinctLogBootReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
     if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
     runCatching { InstinctLog.rearm(context) }
     runCatching { InstinctStatePublisher.rearm(context) }
     runCatching { InstinctMailbox.rearm(context) }
+    runCatching { InstinctDoorbell.rearm(context) }
   }
 }
