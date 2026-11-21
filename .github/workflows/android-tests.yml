@@ -29,7 +29,7 @@ jobs:
             exit 1
           fi
           echo "$expected  app/libs/android-vad-webrtc-2.0.10.aar" | sha256sum --check --strict
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
