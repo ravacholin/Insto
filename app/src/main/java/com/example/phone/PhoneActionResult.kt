@@ -17,6 +17,11 @@ data class PhoneActionResult(
   val pendingCommand: PhoneCommand? = null,
   val outcome: PhoneActionOutcome = PhoneActionOutcome.COMPLETED,
   val launchedAppPackage: String? = null,
+  /**
+   * The action may already have had its effect although [outcome] reports a failure: an automation that touched
+   * controls and could not verify the result. The user sees the failure; the execution record treats it as uncertain.
+   */
+  val effectUnverified: Boolean = false,
 ) {
   val retainRequest: Boolean get() = outcome == PhoneActionOutcome.NEEDS_INPUT || outcome == PhoneActionOutcome.REJECTED || outcome == PhoneActionOutcome.UNCERTAIN || stopwatchAutomation != null || needsCamera || needsContacts || needsNotifications || contactOptions.isNotEmpty()
 }

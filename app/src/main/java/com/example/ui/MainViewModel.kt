@@ -175,7 +175,7 @@ class MainViewModel @JvmOverloads constructor(
   private suspend fun currentPrefs(): AssistantPreferences = preferencesCache.awaitCurrent()
   private val vocabularyHints = VocabularyHintProvider(application, learnedPhrases)
   private val audioTranscriber = audioTranscriber ?: GroqTranscriber(
-    { GroqKeyStore(application).read() }, prompt = vocabularyHints::cached,
+    { GroqKeyStore(application).readValue() }, prompt = vocabularyHints::cached,
   )
   private val recorder = VoiceRecorderManager(application)
   private val floatingState = MutableStateFlow(FloatingAssistantState())
@@ -200,7 +200,7 @@ class MainViewModel @JvmOverloads constructor(
   private val phoneParser = PhoneCommandParser()
   private val phoneExecutor = PhoneActionExecutor(application, preferredMediaPackage = operationalContext::preferredMediaPackage)
   private val conversation = ConversationSession()
-  private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).read() })
+  private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).readValue() })
   private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor,
     verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter, lookupLearnedPhrase = learnedPhrases::lookup,
     lookupLearnedPattern = learnedPhrases::lookupPattern, operationalContext = operationalContext)
@@ -506,7 +506,7 @@ class MainViewModel @JvmOverloads constructor(
     val ticket = executions.open(session, command)
     val result = phoneExecutor.execute(command, confirmed)
     // An automation result arrives later; anything else is final now.
-    if (result.stopwatchAutomation == null) executions.complete(ticket, result.outcome)
+    if (result.stopwatchAutomation == null) executions.complete(ticket, result)
     if (learning != null && result.confirmation == command) learningPreview = learning
     applyPhoneActionResult(command, confirmed, result, learning)
     result.stopwatchAutomation?.let { operation ->
@@ -514,7 +514,7 @@ class MainViewModel @JvmOverloads constructor(
       floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING)
       cancelClockAutomation = com.example.assist.PingAutoSendAccessibilityService.requestStopwatch(operation) { completed ->
         // A callback delivered twice records and applies its outcome once.
-        if (executions.complete(ticket, completed.outcome) && generation == floatingGeneration) {
+        if (executions.complete(ticket, completed) && generation == floatingGeneration) {
           cancelClockAutomation = null
           applyPhoneActionResult(command, confirmed, completed, learning)
         }

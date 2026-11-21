@@ -1,6 +1,7 @@
 package com.example.session
 
 import com.example.phone.PhoneActionOutcome
+import com.example.phone.PhoneActionResult
 import com.example.phone.PhoneCommand
 
 /** What is known about one dispatch of an action with external effects. */
@@ -24,6 +25,10 @@ enum class DispatchState {
       PhoneActionOutcome.NEEDS_INPUT -> NOT_DISPATCHED
       PhoneActionOutcome.REJECTED -> FAILED
     }
+
+    /** As [of], except that a failure whose effect could not be verified is uncertain, never [FAILED]. */
+    fun of(result: PhoneActionResult): DispatchState =
+      if (result.effectUnverified && result.outcome == PhoneActionOutcome.REJECTED) DISPATCHED_UNCERTAIN else of(result.outcome)
   }
 }
 
@@ -45,10 +50,15 @@ class ActionExecutionLedger {
   fun open(session: Long, command: PhoneCommand): Ticket = Ticket(session, command, ++serial)
 
   /** Records the outcome of [ticket]. False if it was already recorded: the duplicate must be ignored. */
-  fun complete(ticket: Ticket, outcome: PhoneActionOutcome): Boolean {
+  fun complete(ticket: Ticket, outcome: PhoneActionOutcome): Boolean = complete(ticket, DispatchState.of(outcome))
+
+  /** Records a full result, so an unverified effect counts as [DispatchState.DISPATCHED_UNCERTAIN]. */
+  fun complete(ticket: Ticket, result: PhoneActionResult): Boolean = complete(ticket, DispatchState.of(result))
+
+  private fun complete(ticket: Ticket, state: DispatchState): Boolean {
     if (!completed.add(ticket.serial)) return false
     last.remove(ticket.command)
-    last[ticket.command] = DispatchState.of(outcome)
+    last[ticket.command] = state
     // Bounded: only recent commands matter for a retry.
     while (last.size > MAX_REMEMBERED) last.remove(last.keys.first())
     return true

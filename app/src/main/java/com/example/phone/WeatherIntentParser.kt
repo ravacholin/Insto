@@ -38,8 +38,8 @@ object WeatherIntentParser {
   /** Null when the sentence is not an SMN query. */
   fun parse(text: String): PhoneRoute? {
     val s = body(text) ?: return null
-    if (past.containsMatchIn(s)) return PhoneRoute.Unsupported(TEMPERATURE_SCOPE)
-    if (extremes.matches(s)) return PhoneRoute.Unsupported(TEMPERATURE_SCOPE)
+    if (past.containsMatchIn(s)) return PhoneRoute.Unsupported(TEMPERATURE_SCOPE, reason = RejectionReason.OUT_OF_SCOPE)
+    if (extremes.matches(s)) return PhoneRoute.Unsupported(TEMPERATURE_SCOPE, reason = RejectionReason.OUT_OF_SCOPE)
     for ((grammar, command) in listOf(
       feelsLike to PhoneCommand.Platform(PlatformAction.WEATHER_TEMPERATURE, FEELS_LIKE),
       temperature to PhoneCommand.Platform(PlatformAction.WEATHER_TEMPERATURE),
@@ -55,8 +55,8 @@ object WeatherIntentParser {
         val tail = words.subList(cut, words.size).joinToString(" ")
         return when {
           allowedTail.matches(tail) -> PhoneRoute.Local(command)
-          otherDay.containsMatchIn(tail) -> PhoneRoute.Unsupported(scope)
-          otherPlace.matches(tail) && !units.containsMatchIn(tail) -> PhoneRoute.Unsupported(scope)
+          otherDay.containsMatchIn(tail) -> PhoneRoute.Unsupported(scope, reason = RejectionReason.OUT_OF_SCOPE)
+          otherPlace.matches(tail) && !units.containsMatchIn(tail) -> PhoneRoute.Unsupported(scope, reason = RejectionReason.OUT_OF_SCOPE)
           else -> null
         }
       }

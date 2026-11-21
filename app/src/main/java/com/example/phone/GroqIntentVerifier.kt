@@ -60,7 +60,7 @@ class GroqIntentVerifier(
         when (val route = registry.resolve(choice, request.text)) {
           is PhoneRoute.Local -> InterpretationResult.Plan(listOf(route.command), fallback = true)
           is PhoneRoute.Clarify -> InterpretationResult.Clarification(route.prompt, route.context)
-          is PhoneRoute.Unsupported -> InterpretationResult.Rejected(route.message)
+          is PhoneRoute.Unsupported -> InterpretationResult.Rejected(route.message, route.reason)
           else -> error("Invalid local interpretation")
         }
       } else StructuredCommandClient.parseProposal(proposal, request.now)

@@ -73,7 +73,7 @@ class WeatherIntentTest {
       assertEquals(text, InterpretationResult.Direct(expected), result)
     }
     val rejected = coordinator.interpret(InterpretationRequest("va a llover el sábado"), parser.parse("va a llover el sábado"))
-    assertEquals(InterpretationResult.Rejected(WeatherIntentParser.RAIN_SCOPE), rejected)
+    assertEquals(InterpretationResult.Rejected(WeatherIntentParser.RAIN_SCOPE, RejectionReason.OUT_OF_SCOPE), rejected)
   }
 
   @Test fun registroCodecYCatalogo() {

@@ -44,8 +44,23 @@ sealed interface InterpretationResult {
   data class Clarification(val prompt: String, val context: String, val source: String? = null) : InterpretationResult
   data class Plan(val commands: List<PhoneCommand>, val fallback: Boolean = false, val draft: DraftPlan? = null) : InterpretationResult
   data class Incomplete(val draft: DraftPlan, val prompt: String = draft.prompt(), val fallback: Boolean = false) : InterpretationResult
-  data class Rejected(val message: String) : InterpretationResult
+  /** [message] is what the user sees; [reason] lets callers and metrics tell the cases apart without parsing it. */
+  data class Rejected(val message: String, val reason: RejectionReason = RejectionReason.NOT_UNDERSTOOD) : InterpretationResult
   data class Failure(val kind: GeminiFailureKind, val message: String) : InterpretationResult
+}
+
+/** Why a request was not executed. A technical provider error is never a rejection: it is [InterpretationResult.Failure]. */
+enum class RejectionReason {
+  /** No valid phone action represents the request, or a proposal changed or lost its data. */
+  NOT_UNDERSTOOD,
+  /** Understood, but the action, option or restriction is not available. */
+  UNAVAILABLE,
+  /** A condition, in the request («cuando…», «si…») or in the session (a pending request), prevents executing now. */
+  BLOCKING_CONDITION,
+  /** A negation, cancellation, quote or hypothesis: executing anything would contradict the user. */
+  UNSAFE_OR_HYPOTHETICAL,
+  /** The phone action is only the topic of the request (a search or a message), or outside what Insto covers. */
+  OUT_OF_SCOPE,
 }
 
 enum class GeminiFailureKind(val label: String) {

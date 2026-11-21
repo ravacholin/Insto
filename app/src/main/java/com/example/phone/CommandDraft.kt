@@ -137,7 +137,7 @@ data class DraftPlan(
   fun reply(text: String, now: Calendar): InterpretationResult? {
     val s = PhoneCommandParser.normalize(text)
     if (s in listOf("si", "dale", "ok", "confirmo", "ejecutar")) return InterpretationResult.Incomplete(this)
-    RequestSafetyPolicy.rejection(text)?.let { return InterpretationResult.Rejected(it) }
+    RequestSafetyPolicy.refusal(text)?.let { return it.asResult() }
     val selected = PhoneCommandParser.choiceIndex(s)
     if (pendingEdit != null) {
       if (selectedStepId != null) return null

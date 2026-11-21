@@ -1,6 +1,9 @@
 package com.example.phone
 
-/** In-memory circuit for Decisions. Epochs prevent late calls from resetting a newer circuit. */
+/**
+ * In-memory circuit for Decisions. Epochs prevent late calls from resetting a newer circuit.
+ * The same circuit also observes Gemini extraction through [record], without ever blocking its calls.
+ */
 class DecisionsCircuitBreaker(
   private val failureLimit: Int = 2,
   private val recoveryMillis: Long = 30_000,
@@ -42,6 +45,12 @@ class DecisionsCircuitBreaker(
 
   /** Decisions failed recently: the next interpretation is likely to need the fallback provider. */
   @Synchronized internal fun degraded(): Boolean = failures > 0 || retryAt != null
+
+  /** Records a call this circuit only observes (Gemini extraction): same failure rules, no gating, no probe. */
+  @Synchronized internal fun record(failure: GeminiFailureKind?) = complete(Attempt(epoch, false), failure)
+
+  /** Repeated failures (or a quota or unavailable answer) opened the circuit and its recovery window is still running. */
+  @Synchronized internal fun openRecently(): Boolean = retryAt?.let { clock() < it } == true
 
   @Synchronized internal fun abandon(attempt: Attempt) {
     if (attempt.epoch == epoch && attempt.probe) probing = false

@@ -35,9 +35,17 @@ arnés. «Después» = `WHEN_DEGRADED` con las correcciones del guard y de la po
 | Decisions con 5xx | 88/91 → 88/91 | **3 → 0** | 18 → 15 | 0,205 → 0,173 | 950 → 950 |
 | Decisions sin respuesta | 88/91 → 88/91 | **3 → 0** | 18 → 15 | 0,205 → 0,173 | 4000 → 4000 |
 | Decisions dice «unsupported» | 88/91 → 88/91 | 0 → 0 | 18 → 13 | 0,307 → 0,220 | 1100 → 1500 |
-| Extracción de Gemini con 5xx | 88/91 → 88/91 | 0 → 0 | 18 → 5 | 0,433 → 0,283 | 2250 → 3050 |
-| Extracción de Gemini sin respuesta | 88/91 → 88/91 | 0 → 0 | 18 → 5 | 0,433 → 0,283 | 5100 → 5900 |
+| Extracción de Gemini con 5xx | 88/91 → 88/91 | 0 → 0 | 18 → 8 | 0,433 → 0,307 | 2250 → 3050 |
+| Extracción de Gemini sin respuesta | 88/91 → 88/91 | 0 → 0 | 18 → 8 | 0,433 → 0,307 | 5100 → 5900 |
 | Todos caídos | 75/91 → 75/91 | 0 → 0 | 18 → 15 | 0,205 → 0,173 | 1050 → 1050 |
+
+**Fase 5 (extracción).** Las dos filas de extracción reflejan que fallas recientes y repetidas de la extracción de
+Gemini reactivan la especulación: antes de ese cambio, `WHEN_DEGRADED` hacía 5 consultas a Groq y 0,283 llamadas por
+pedido en ambos escenarios; ahora 8 y 0,307. El p95 no cambia, porque lo fijan las dos primeras fallas, que son las
+que abren el circuito; la latencia media de los pedidos con proveedor baja de 1643 a 1536 ms (5xx) y de 2593 a
+2486 ms (sin respuesta), según la columna `provider_mean_ms` agregada al arnés. Con las fallas separadas por más de
+30 s (escenario nuevo `extraction_5xx_sparse`, 40 s entre pedidos) la especulación no se reactiva: 5 consultas a Groq,
+igual que `NEVER`. Las demás filas no cambian.
 
 En todos los escenarios y políticas: 0 parámetros perdidos o cambiados y 0 derivaciones incorrectas a Instinct. Las
 3 aceptaciones inseguras de «antes» eran hipótesis rioplatenses («Suponete que apagás el wifi», «Imaginate que

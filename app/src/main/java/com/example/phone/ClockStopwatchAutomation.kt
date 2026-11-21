@@ -61,7 +61,8 @@ internal class ClockStopwatchAutomation(
     cancel()
     val message = "No pude comprobar el cambio del cronómetro. Revisá Reloj de Google; el pedido quedó guardado en Insto."
     Toast.makeText(service, message, Toast.LENGTH_LONG).show()
-    onResult(PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED))
+    // It may have clicked a control before losing sight of the stopwatch: the state is unknown, not refused.
+    onResult(PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED, effectUnverified = true))
   }
 
   private fun inspect(root: AccessibilityNodeInfo) {

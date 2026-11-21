@@ -2,6 +2,7 @@ package com.example.phone
 
 import android.content.Context
 import com.example.speech.GroqKeyStore
+import com.example.speech.StoredKey
 import java.io.File
 
 /** Personal credentials and activation never enter the APK, preferences backup, or logs. */
@@ -9,7 +10,10 @@ class GeminiSettings(context: Context) {
   private val keys = GroqKeyStore(context, "gemini")
   private val localChoice = File(context.noBackupFilesDir, "gemini-local-choice")
   private val enabled = File(context.noBackupFilesDir, "gemini-enabled")
-  fun readKey(): String? = keys.read()
+  /** A usable key, or null when it is missing or unreadable: an unreadable key is never treated as valid. */
+  fun readKey(): String? = keys.readValue()
+  /** Missing, present or unreadable, for the settings screen. */
+  fun keyStatus(): StoredKey.Status = keys.read().status
   fun shouldPromptSetup(): Boolean = GeminiSetupPolicy.shouldPrompt(readKey() != null, localChoice.exists())
   fun continueLocally() { localChoice.writeText("true") }
   fun isEnabled(): Boolean = runCatching { enabled.readText() == "true" }.getOrDefault(false) && readKey() != null

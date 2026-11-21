@@ -11,8 +11,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * When the fallback provider (Groq) is asked in parallel with Decisions, before knowing it is needed.
- * [ALWAYS] was the original behaviour; [WHEN_DEGRADED] keeps it only after recent Decisions failures, where the
- * fallback is likely. See docs/metrics/reliability-before-after.md for the replay that chose the default.
+ * [ALWAYS] was the original behaviour; [WHEN_DEGRADED] keeps it only after recent Decisions failures, or after
+ * recent, repeated failures of Gemini extraction, where the fallback is likely. See docs/metrics/reliability-before-after.md for the replay that chose the default.
  */
 enum class FallbackSpeculation { ALWAYS, WHEN_DEGRADED, NEVER }
 
@@ -29,6 +29,8 @@ class GeminiCoordinator(
   /** Brief operational context. Never added to provider input. */
   private val operationalContext: OperationalContext? = null,
   private val speculation: FallbackSpeculation = FallbackSpeculation.WHEN_DEGRADED,
+  /** Observes Gemini extraction only to decide speculation; it never skips an extraction. */
+  private val extractionHealth: DecisionsCircuitBreaker = DecisionsCircuitBreaker(),
 ) {
   /**
    * Every interpretation, whatever produced it, passes the final [SemanticCommandGuard] here, once, before the
@@ -45,14 +47,14 @@ class GeminiCoordinator(
     local: PhoneRoute,
     stage: (String) -> Unit,
   ): InterpretationResult {
-    RequestSafetyPolicy.rejection(request.text)?.let { return InterpretationResult.Rejected(it) }
+    RequestSafetyPolicy.refusal(request.text)?.let { return it.asResult() }
     val canDeferToInstinct = canDeferToInstinct(request, local)
     val indirectPhoneRequest = RequestSafetyPolicy.isIndirectPhoneRequest(request.text)
     val steps = ConversationSession.splitSteps(request.text)
       .let { if (operationalContext != null) OperationalContext.withoutDiscourseLead(it) else it }
     val explicitQuestion = '?' in request.text || '¿' in request.text || RequestSafetyPolicy.isGeneralRequest(request.text)
     if (request.draft == null && steps.size > 1 && !explicitQuestion) {
-      steps.firstNotNullOfOrNull(RequestSafetyPolicy::rejection)?.let { return InterpretationResult.Rejected(it) }
+      steps.firstNotNullOfOrNull(RequestSafetyPolicy::refusal)?.let { return it.asResult() }
       // Plan locally only when the existing conversation parser understands every step.
       // Local and model plans enter the same confirmation flow.
       when (val plan = ConversationSession { request.now }.accept(request.text, allowSemantic = router.isEnabled())) {
@@ -60,7 +62,7 @@ class GeminiCoordinator(
           // Parsing an app's name does not resolve it to an installed handler.
           if (plan.commands.none { it is PhoneCommand.OpenApp }) return InterpretationResult.Plan(plan.commands)
         }
-        is ConversationResult.Prompt -> return InterpretationResult.Rejected(plan.message)
+        is ConversationResult.Prompt -> return InterpretationResult.Rejected(plan.message, plan.reason)
         else -> Unit
       }
     }
@@ -127,16 +129,16 @@ class GeminiCoordinator(
         else InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
       PhoneRoute.Instinct -> when {
         request.draft != null -> InterpretationResult.Incomplete(request.draft)
-        indirectPhoneRequest -> InterpretationResult.Rejected("Indicá la acción concreta del teléfono. En IA podés activar Gemini para interpretar pedidos menos directos.")
+        indirectPhoneRequest -> InterpretationResult.Rejected("Indicá la acción concreta del teléfono. En IA podés activar Gemini para interpretar pedidos menos directos.", RejectionReason.NOT_UNDERSTOOD)
         steps.size > 1 -> InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
         else -> InterpretationResult.Query()
       }
       is PhoneRoute.Clarify -> InterpretationResult.Clarification(local.prompt, local.context)
-      is PhoneRoute.Unsupported -> InterpretationResult.Rejected(local.message)
-      PhoneRoute.Cancel -> InterpretationResult.Rejected("Pedido cancelado.")
+      is PhoneRoute.Unsupported -> InterpretationResult.Rejected(local.message, local.reason)
+      PhoneRoute.Cancel -> InterpretationResult.Rejected("Pedido cancelado.", RejectionReason.UNSAFE_OR_HYPOTHETICAL)
     }
     if (isSingleNewTurn && local is PhoneRoute.Unsupported && !local.recoverable)
-      return InterpretationResult.Rejected(local.message)
+      return InterpretationResult.Rejected(local.message, local.reason)
     if (request.modelInput().length > 16000) return unavailableRoute(request, local,
       GeminiFailureKind.INVALID_REQUEST, "El pedido o su contexto es demasiado largo. Se conserva para editarlo.")
     val start = System.nanoTime()
@@ -152,7 +154,7 @@ class GeminiCoordinator(
         val attempt = breaker.acquire()
         val speculate = attempt != null && fallback != null && when (speculation) {
           FallbackSpeculation.ALWAYS -> true
-          FallbackSpeculation.WHEN_DEGRADED -> attempt.probe || breaker.degraded()
+          FallbackSpeculation.WHEN_DEGRADED -> attempt.probe || breaker.degraded() || extractionHealth.openRecently()
           FallbackSpeculation.NEVER -> false
         }
         val speculative: Deferred<Result<InterpretationResult>>? = if (speculate) async {
@@ -213,7 +215,7 @@ class GeminiCoordinator(
             when (val registered = router.resolve(decision.choice, request.text)) {
               is PhoneRoute.Local -> return@withTimeout if (verifiedByGroq)
                 InterpretationResult.Plan(listOf(registered.command)) else InterpretationResult.Direct(registered.command)
-              is PhoneRoute.Unsupported -> return@withTimeout InterpretationResult.Rejected(registered.message)
+              is PhoneRoute.Unsupported -> return@withTimeout InterpretationResult.Rejected(registered.message, registered.reason)
               is PhoneRoute.Clarify -> {
                 val type = CapabilityCatalog.extractionType(decision.choice)
                 if (type !in CapabilityCatalog.specs || local is PhoneRoute.Clarify && request.sourceContext == null)
@@ -227,7 +229,7 @@ class GeminiCoordinator(
             decision.choice == "unsupported" && fallback != null ->
               interpretWithFallback(request, local, steps, stage, GeminiFailureKind.INVALID_RESPONSE, speculative)
             decision.choice == "instinct" -> if (request.draft != null || local != PhoneRoute.Instinct || indirectPhoneRequest)
-              InterpretationResult.Rejected("Hay un pedido del teléfono pendiente. Completalo o cancelalo; no se envió a Instinct.")
+              InterpretationResult.Rejected("Hay un pedido del teléfono pendiente. Completalo o cancelalo; no se envió a Instinct.", RejectionReason.BLOCKING_CONDITION)
               else InterpretationResult.Query()
             decision.choice in CapabilityCatalog.fixed && request.draft == null -> {
               if (RequestSafetyPolicy.fixedActionHasExtraParameters(request.text) || RequestSafetyPolicy.isQuestion(request.text)) InterpretationResult.Rejected("La acción simple no representa todos los datos del pedido. No se ejecutó ni se envió.")
@@ -240,7 +242,7 @@ class GeminiCoordinator(
               resolveStructured(request, local, steps, stage, decision.choice, speculative)
             }
             else -> if (canDeferToInstinct && !verifiedByGroq) InterpretationResult.Query()
-              else InterpretationResult.Rejected("Ese pedido no está disponible o tiene restricciones no admitidas. No se ejecutó ni se envió.")
+              else InterpretationResult.Rejected("Ese pedido no está disponible o tiene restricciones no admitidas. No se ejecutó ni se envió.", RejectionReason.UNAVAILABLE)
           }
         } finally {
           speculative?.cancel()
@@ -294,6 +296,7 @@ class GeminiCoordinator(
     } catch (_: IllegalArgumentException) {
       InterpretationResult.Failure(GeminiFailureKind.INVALID_RESPONSE, "Gemini devolvió datos inválidos.")
     }
+    extractionHealth.record((proposal as? InterpretationResult.Failure)?.kind)
     val result = validateProposal(request, local, steps, proposal, choice)
     if (result is InterpretationResult.Failure) {
       if (fallback != null && result.kind != GeminiFailureKind.INVALID_REQUEST)
@@ -429,7 +432,7 @@ class GeminiCoordinator(
     currentCoroutineContext().ensureActive()
     return when (result) {
       is InterpretationResult.Query -> if (request.draft == null) InterpretationResult.Query()
-        else InterpretationResult.Rejected("Hay un pedido pendiente. Completalo o cancelalo antes de enviar una consulta.")
+        else InterpretationResult.Rejected("Hay un pedido pendiente. Completalo o cancelalo antes de enviar una consulta.", RejectionReason.BLOCKING_CONDITION)
       is InterpretationResult.Plan -> {
         require(result.commands.size in 1..10)
         // Registry-backed proposals were already decoded locally and may have no structured draft schema.

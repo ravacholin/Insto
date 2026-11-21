@@ -4,7 +4,7 @@ import java.util.Calendar
 
 sealed interface ConversationResult {
   data object Pass : ConversationResult
-  data class Prompt(val message: String) : ConversationResult
+  data class Prompt(val message: String, val reason: RejectionReason = RejectionReason.NOT_UNDERSTOOD) : ConversationResult
   data class Plan(val commands: List<PhoneCommand>) : ConversationResult
   data class Semantic(val draft: DraftPlan? = null) : ConversationResult
 }
@@ -24,17 +24,17 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
     if (normalized in listOf("cancelar", "cancela", "no", "dejalo", "olvidalo")) {
       val active = calendarDraft != null || pending != null || lastPlan != null || pendingDraft != null
       clear()
-      return if (active) ConversationResult.Prompt("Pedido cancelado.") else ConversationResult.Pass
+      return if (active) ConversationResult.Prompt("Pedido cancelado.", RejectionReason.UNSAFE_OR_HYPOTHETICAL) else ConversationResult.Pass
     }
     if (normalized in listOf("si", "dale", "ok", "confirmo", "confirmar") && (calendarDraft != null || pending != null))
       return ConversationResult.Prompt("Todavía hay datos pendientes. Completá o corregí el pedido antes de confirmarlo.")
     if (Regex("\\b(?:si|cuando|hasta que|a menos que)\\b").containsMatchIn(PhoneCommandParser.normalize(maskQuotes(text))) && looksLikeRequest(normalized)) {
-      return ConversationResult.Prompt("Todavía no ejecuto condiciones. Pedime los pasos para hacer ahora.")
+      return ConversationResult.Prompt("Todavía no ejecuto condiciones. Pedime los pasos para hacer ahora.", RejectionReason.BLOCKING_CONDITION)
     }
     val parts = splitSteps(text)
     if (parts.size > 1) {
       clear()
-      if (parts.size > 10) return ConversationResult.Prompt("Podés pedir hasta diez pasos por vez.")
+      if (parts.size > 10) return ConversationResult.Prompt("Podés pedir hasta diez pasos por vez.", RejectionReason.UNAVAILABLE)
       val commands = parts.map { part -> (parser.parse(part) as? PhoneRoute.Local)?.command }
       if (commands.any { it == null }) {
         val routes = parts.map(parser::parse)
@@ -90,7 +90,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
             return ConversationResult.Plan(listOf(reply.command)).also { lastPlan = it.commands }
           }
           is PhoneRoute.Clarify -> return ConversationResult.Prompt(reply.prompt)
-          is PhoneRoute.Unsupported -> return ConversationResult.Prompt(reply.message)
+          is PhoneRoute.Unsupported -> return ConversationResult.Prompt(reply.message, reply.reason)
           else -> Unit
         }
       }

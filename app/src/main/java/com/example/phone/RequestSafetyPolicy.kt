@@ -143,7 +143,14 @@ object RequestSafetyPolicy {
     }
   }
 
-  fun rejection(text: String): String? {
+  /** A refusal of the request as written, with its typed reason. The message is what the user sees. */
+  data class Refusal(val message: String, val reason: RejectionReason) {
+    fun asResult(): InterpretationResult.Rejected = InterpretationResult.Rejected(message, reason)
+  }
+
+  fun rejection(text: String): String? = refusal(text)?.message
+
+  fun refusal(text: String): Refusal? {
     if (isExplicitQuery(text) || isQuestion(text)) return null
     // «Decime si va a llover» is an indirect question, not a condition on an action.
     if (WeatherIntentParser.isQuery(text)) return null
@@ -151,16 +158,19 @@ object RequestSafetyPolicy {
     if (text.trimStart().firstOrNull() in listOf('"', '“', '«') ||
       // Rioplatense forms too: «suponete que…», «imaginate…», «supongamos…».
       Regex("^(?:supone(?:te)?|supongamos|imagina(?:te)?|imaginemos|dijo|dice|escribio|cito)\\b").containsMatchIn(s))
-      return "El pedido parece una cita o una hipótesis. Indicá qué querés hacer ahora."
+      return Refusal("El pedido parece una cita o una hipótesis. Indicá qué querés hacer ahora.", RejectionReason.UNSAFE_OR_HYPOTHETICAL)
     val command = PhoneCommandParser.canonicalRequest(s)
     // «Dale, no, …» and «che, ni se te ocurra …» are negations after an interjection.
     val head = command.replace(leadingInterjection, "")
-    if ((!isDoNotDisturbRequest(head) && Regex("^(?:no|nunca|ni|jamas|tampoco)\\b").containsMatchIn(head)) ||
-      Regex("\\b(?:cuando|hasta que|a menos que|siempre que|en caso de que|con tal de que|salvo que|salvo si|excepto que|excepto si|a no ser que|sin que)\\b|(?:^|\\s)si\\s+(?!confirmo\\b)").containsMatchIn(s) ||
-      Regex("\\s(?:no|nunca)$").containsMatchIn(s))
-      return "El pedido contiene una negación o condición. No se ejecutó ni se envió; indicá qué querés hacer ahora."
+    val negated = (!isDoNotDisturbRequest(head) && Regex("^(?:no|nunca|ni|jamas|tampoco)\\b").containsMatchIn(head)) ||
+      Regex("\\s(?:no|nunca)$").containsMatchIn(s)
+    val conditional =
+      Regex("\\b(?:cuando|hasta que|a menos que|siempre que|en caso de que|con tal de que|salvo que|salvo si|excepto que|excepto si|a no ser que|sin que)\\b|(?:^|\\s)si\\s+(?!confirmo\\b)").containsMatchIn(s)
+    if (negated || conditional)
+      return Refusal("El pedido contiene una negación o condición. No se ejecutó ni se envió; indicá qué querés hacer ahora.",
+        if (negated) RejectionReason.UNSAFE_OR_HYPOTHETICAL else RejectionReason.BLOCKING_CONDITION)
     if (Regex("\\b(?:sin peajes|evitando peajes|sin autopistas|evitando autopistas|pasando por|con una parada)\\b").containsMatchIn(s))
-      return "Esa restricción de ruta no está disponible. No se omitió ni se ejecutó el pedido."
+      return Refusal("Esa restricción de ruta no está disponible. No se omitió ni se ejecutó el pedido.", RejectionReason.UNAVAILABLE)
     return null
   }
 }
