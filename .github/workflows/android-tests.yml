@@ -21,6 +21,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      - name: Verify vendored VAD library checksum
+        run: |
+          expected=$(grep -oE 'SHA-256: `[0-9a-f]{64}`' app/libs/README.md | grep -oE '[0-9a-f]{64}')
+          if [ -z "$expected" ]; then
+            echo "::error::No SHA-256 documented in app/libs/README.md"
+            exit 1
+          fi
+          echo "$expected  app/libs/android-vad-webrtc-2.0.10.aar" | sha256sum --check --strict
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

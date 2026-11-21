@@ -77,8 +77,8 @@ empezar.
 | `com.squareup.okio:okio` (resuelto) | 3.4.0 | 3.6.0 |
 | `kotlin-stdlib-jdk7` / `-jdk8` (resueltos; vacíos desde Kotlin 1.8) | 1.8.0 | 1.9.10 |
 
-No se agregaron ni quitaron artefactos. `logging-interceptor` sigue comentado en `app/build.gradle.kts`; solo se
-alineó su versión en el catálogo.
+No se agregaron ni quitaron artefactos en ese cambio. La limpieza posterior de dependencias y las versiones nuevas
+están en `docs/architecture/reliability-refactor.md` (Fase 3).
 
 ## A. Red
 

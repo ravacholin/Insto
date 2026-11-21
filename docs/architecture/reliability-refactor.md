@@ -257,3 +257,24 @@ vacía); `AssistantPreferencesCacheTest` (null hasta el primer valor, espera sin
 ilegible) y `AssistantPreferencesCacheRepositoryTest` (escrituras reales del repositorio llegan a la caché). Las
 pruebas Robolectric usan `TestInstoApplication`, que arranca con la caché cargada, y `awaitCachedPreferences` después
 de escribir preferencias, porque la caché las recibe de forma asíncrona.
+
+### Fase 3 — Dependencias y plugins
+
+- **Plugins quitados**: KSP, google-services y secrets (con sus bloques `secrets {}` y `googleServices {}`, la
+  importación de `MissingGoogleServicesStrategy`, `googleServices.missing.passthrough` y `.env.example`). Nada leía
+  `BuildConfig.GEMINI_API_KEY`: la clave de Gemini vive en el Keystore. `.gitignore` conserva `.env` como protección.
+- **Librerías quitadas**: las 25 líneas comentadas y su catálogo (Room, Moshi, Retrofit, Coil, CameraX, Firebase,
+  Credentials, Navigation, Accompanist, play-services-location, logging-interceptor), más `ui-tooling-preview` (no hay
+  `@Preview`), `espresso-core` y el Compose BOM / `ui-test-junit4` de `androidTest` (las pruebas instrumentadas no
+  los usan). `ui-tooling` queda en `debugImplementation` como herramienta de depuración.
+- **Catálogo**: plugins 5 → 2, versiones 41 → 15, librerías 51 → 25; dependencias declaradas en `app` 31 → 27 y 0
+  comentadas. Artefactos resueltos en release 106 → 131: Compose 1.11 se reparte en más módulos.
+- **Versiones**: Compose BOM 2024.09.00 → 2026.06.01 (Compose UI 1.11.4, Material 3 1.4.0), lifecycle 2.8.7 →
+  2.10.0, activity-compose 1.10.1 → 1.13.0, coroutines 1.10.2 → 1.11.0, Robolectric 4.16.1 → 4.18.1, androidx.test
+  core/runner 1.6.x → 1.7.0, org.json 20240303 → 20260814 (ahora en el catálogo). Compose BOM ≥ 2026.08 (Compose 1.12,
+  Material 3 1.5) y lifecycle 2.11 exigen `compileSdk 37`; no se subió `compileSdk` en este cambio. OkHttp sigue en
+  4.12.0.
+- **Lint**: el baseline perdió solo sus 13 entradas obsoletas (OkHttp 4.10.0, logging-interceptor, Retrofit, Moshi,
+  play-services-location, las versiones ya subidas y `UseTomlInstead` del `org.json` suelto); no se agregó ninguna.
+- **CI**: `.github/dependabot.yml` (Gradle y GitHub Actions, semanal, grupos `androidx` y `kotlin`, sin OkHttp 5) y
+  un paso que compara el SHA-256 de `app/libs/android-vad-webrtc-2.0.10.aar` con `app/libs/README.md`.
