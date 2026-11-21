@@ -102,19 +102,16 @@ data class ProposalFilterConfig(
   val expectedPackage: String?,
   /** The configured contact name, compared exactly. */
   val contactName: String?,
-  /** Monotonic time of the last confirmed send from Insto to that contact, or null. Read only after the contact matched. */
-  val lastSendAt: () -> Long?,
-  val windowMillis: Long,
   val now: Long,
 )
 
 /**
- * Filters, in order, stopping at the first that fails: package, not a group, exact contact name, a confirmed send to
- * Instinct inside the correlation window, a message never seen before. A message that fails is dropped: nothing about
+ * Filters, in order, stopping at the first that fails: package, not a group, exact contact name, a message never seen
+ * before. Instinct may write on its own initiative: no previous message from Insto is required. A message that fails is dropped: nothing about
  * it is kept, not even its hash. Only stage counters exist, for diagnostics.
  */
 class InstinctProposalFilter(private val dedupe: MessageDedupe = MessageDedupe()) {
-  enum class Stage { PACKAGE, GROUP, CONTACT, WINDOW, DUPLICATE, NO_PROPOSAL, ACCEPTED }
+  enum class Stage { PACKAGE, GROUP, CONTACT, DUPLICATE, NO_PROPOSAL, ACCEPTED }
 
   sealed interface Outcome {
     val stage: Stage
@@ -139,20 +136,11 @@ class InstinctProposalFilter(private val dedupe: MessageDedupe = MessageDedupe()
     val latest = n.latestMessage()
     val fromContact = if (latest != null) latest.sender == contact else n.title() == contact
     if (!fromContact) return Outcome.Dropped(Stage.CONTACT)
-    val sentAt = config.lastSendAt()
-    if (sentAt == null || config.now < sentAt || config.now - sentAt > config.windowMillis) return Outcome.Dropped(Stage.WINDOW)
     val text = n.text()?.takeIf { it.isNotBlank() } ?: return Outcome.Dropped(Stage.NO_PROPOSAL)
     val orders = InstinctProposalProtocol.orders(text)
     if (orders.isEmpty()) return Outcome.Dropped(Stage.NO_PROPOSAL)
     if (!dedupe.firstTime(n.key, text, config.now)) return Outcome.Dropped(Stage.DUPLICATE)
     return Outcome.Accepted(orders)
-  }
-
-  companion object {
-    const val MIN_WINDOW_MINUTES = 5
-    const val DEFAULT_WINDOW_MINUTES = 15
-    const val MAX_WINDOW_MINUTES = 60
-    fun windowMinutes(value: Int?): Int = (value ?: DEFAULT_WINDOW_MINUTES).coerceIn(MIN_WINDOW_MINUTES, MAX_WINDOW_MINUTES)
   }
 }
 
@@ -269,4 +257,20 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
     fun fingerprint(contactName: String, contactPhone: String, packageName: String): String =
       sha256("$contactName\u0000$contactPhone\u0000$packageName")
   }
+}
+
+/**
+ * Anti-loop brake for automatic execution: at most [max] executions per [periodMillis], in memory. Beyond that a
+ * proposal falls back to Confirmar/Descartar.
+ */
+class AutoRunBudget(private val clock: () -> Long, private val max: Int = 6, private val periodMillis: Long = 10 * 60_000L) {
+  private val runs = ArrayDeque<Long>()
+  @Synchronized fun tryAcquire(): Boolean {
+    val now = clock()
+    while (runs.isNotEmpty() && (now - runs.first() >= periodMillis || now < runs.first())) runs.removeFirst()
+    if (runs.size >= max) return false
+    runs.addLast(now)
+    return true
+  }
+  @Synchronized fun reset() = runs.clear()
 }

@@ -50,6 +50,9 @@ class InstinctProposalFlowTest {
     Dispatchers.setMain(StandardTestDispatcher(scheduler))
     ShadowLog.clear()
     InstinctProposalCenter.clock = { fakeNow }
+    InstinctProposalCenter.budget.reset()
+    InstinctProposalCenter.accessibilityConnected = { false }
+    InstinctProposalCenter.keyguardLocked = { false }
     InstinctProposalIntake.log = { logs += it }
     shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
     shadowOf(app.packageManager).installPackage(PackageInfo().apply {
@@ -59,8 +62,10 @@ class InstinctProposalFlowTest {
   }
 
   @After fun tearDown() {
+    InstinctProposalSettings(app).setAsksFirst(false)
     InstinctProposalSettings(app).setEnabled(false)
     InstinctProposalCenter.book.discardAll()
+    InstinctProposalCenter.accessibilityConnected = { com.example.assist.PingAutoSendAccessibilityService.isConnected() }
     InstinctProposalCenter.clock = android.os.SystemClock::elapsedRealtime
     Dispatchers.resetMain()
   }
@@ -70,9 +75,9 @@ class InstinctProposalFlowTest {
     awaitCachedPreferences(app) { it.pinnedContact?.phoneNumber == number && it.pinnedContact?.displayName == name }
   }
 
-  private fun enable() {
+  private fun enable(asksFirst: Boolean = false) {
     InstinctProposalSettings(app).setEnabled(true)
-    InstinctSendCorrelation(app).record(com.example.whatsapp.PhoneNumberUtils.normalizeDigits(phone))
+    InstinctProposalSettings(app).setAsksFirst(asksFirst)
   }
 
   private fun whatsApp(text: String, sender: String = "Instinct", group: Boolean = false): Notification {
@@ -101,82 +106,114 @@ class InstinctProposalFlowTest {
   private fun vm(context: OperationalContext = OperationalContext()) =
     MainViewModel(app, learnedPhrases = phrases, operationalContext = context)
 
-  private fun offer(command: PhoneCommand, order: String = "orden"): ProposalBook.Proposal {
-    val fingerprint = InstinctProposalCenter.fingerprint(app)!!
-    InstinctProposalCenter.deliver(app, listOf(ProposalCheck.Valid(order, command)), fingerprint)
-    return InstinctProposalCenter.book.pending().single { it.command == command }
-  }
+  /** Delivers a validated proposal as the intake does: to the open panel if attached, otherwise in the background. */
+  private fun deliver(command: PhoneCommand, order: String = "orden") =
+    InstinctProposalCenter.deliver(app, listOf(ProposalCheck.Valid(order, command)), InstinctProposalCenter.fingerprint(app)!!)
+
+  /** A pending proposal waiting for Confirmar, as the notification leaves it. */
+  private fun pending(command: PhoneCommand): ProposalBook.Proposal =
+    InstinctProposalCenter.book.offer("orden", command, InstinctProposalCenter.fingerprint(app)!!)!!
+
+  private fun mediaVolume(): Int = app.getSystemService(android.media.AudioManager::class.java)
+    .getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+
+  private fun titles() = posted().map { it.extras.getString(Notification.EXTRA_TITLE) ?: "" }
 
   @Test fun `with the switch off a posted notification is not read at all`() {
     assertFalse(InstinctProposalSettings(app).isEnabled())
     // The framework constructor reads its own fields to build the key; only what happens afterwards counts.
-    val sbn = CountingSbn("com.whatsapp", whatsApp("#insto poner una alarma a las 07:00")).also { it.reads = 0 }
+    val sbn = CountingSbn("com.whatsapp", whatsApp("#insto poner el volumen al 10 por ciento")).also { it.reads = 0 }
+    val before = mediaVolume()
     post(sbn)
     assertEquals(0, sbn.reads)
-    assertTrue(InstinctProposalCenter.book.pending().isEmpty())
+    assertEquals(before, mediaVolume())
     assertTrue(posted().isEmpty())
     assertTrue(logs.isEmpty())
   }
 
-  @Test fun `a proposal from Instinct becomes a notification to confirm and no text is logged`() {
+  @Test fun `Instinct on its own initiative changes the volume and Insto reports it afterwards`() {
     enable()
-    post(CountingSbn("com.whatsapp", whatsApp(
-      "Te propongo esto:\n#insto poner una alarma a las 07:00\nmi clave es secreto123\n#insto llamar a Ana")))
-    val pending = InstinctProposalCenter.book.pending()
-    assertEquals(listOf(PhoneCommand.Alarm(7, 0)), pending.map { it.command })
-    val titles = posted().map { it.extras.getString(Notification.EXTRA_TITLE) }
-    assertTrue(titles.toString(), titles.any { it!!.startsWith("Instinct propone: ") })
-    assertTrue(titles.toString(), InstinctProposalCenter.NOT_UNDERSTOOD in titles)
-    val proposal = posted().single { it.extras.getString(Notification.EXTRA_TITLE)!!.startsWith("Instinct propone") }
-    assertEquals(InstinctProposalCenter.CHANNEL_ID, proposal.channelId)
-    assertEquals(listOf("Confirmar", "Descartar"), proposal.actions.map { it.title.toString() })
+    val audio = app.getSystemService(android.media.AudioManager::class.java)
+    audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
+    post(CountingSbn("com.whatsapp", whatsApp("Te bajo un poco la música.\n#insto poner el volumen al 30 por ciento")))
+    val max = audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+    assertEquals(max * 30 / 100, mediaVolume())
+    val done = posted().single()
+    assertEquals(InstinctProposalCenter.ACTIONS_CHANNEL_ID, done.channelId)
+    assertTrue(titles().single().startsWith("Instinct hizo: "))
+    assertTrue(done.actions.isNullOrEmpty())
+    assertEquals(InstinctProposalIntake.Diagnosis.EXECUTED, InstinctProposalIntake.lastDiagnosis)
+    // The same notification again (WhatsApp re-posting it) runs nothing more.
+    audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
+    post(CountingSbn("com.whatsapp", whatsApp("Te bajo un poco la música.\n#insto poner el volumen al 30 por ciento")))
+    assertEquals(0, mediaVolume())
+    assertEquals(1, posted().size)
+  }
+
+  @Test fun `opening another app from the background needs accessibility, otherwise it waits for Confirmar`() {
+    enable()
+    installNativeHandler(app, android.provider.AlarmClock.ACTION_SET_TIMER)
+    post(CountingSbn("com.whatsapp", whatsApp("#insto poner un temporizador de 3 minutos\nmi clave es secreto123\n#insto llamar a Ana")))
+    assertNull(shadowOf(app).nextStartedActivity)
+    val confirm = posted().single { it.channelId == InstinctProposalCenter.CHANNEL_ID }
+    assertEquals(listOf("Confirmar", "Descartar"), confirm.actions.map { it.title.toString() })
+    assertTrue(titles().toString(), InstinctProposalCenter.NOT_UNDERSTOOD in titles())
+    assertEquals(InstinctProposalIntake.Diagnosis.CONFIRM, InstinctProposalIntake.lastDiagnosis)
+    assertTrue(InstinctProposalIntake.lastDetail!!.contains("Accesibilidad"))
     // Logcat and the debug log get counters only.
     val everything = logs + ShadowLog.getLogs().map { it.msg ?: "" }
     assertTrue(logs.isNotEmpty())
-    for (secret in listOf("secreto123", "alarma", "Ana", "Instinct", "07:00", "#insto"))
+    for (secret in listOf("secreto123", "temporizador", "Ana", "Instinct", "#insto"))
       assertTrue("$secret leaked: $everything", everything.none { secret in it })
   }
 
-  @Test fun `other apps, groups, other contacts and messages outside the window are ignored`() {
+  @Test fun `with accessibility connected a timer is created without a touch`() {
     enable()
-    post(CountingSbn("com.example.chat", whatsApp("#insto prender la linterna")))
-    post(CountingSbn("com.whatsapp", whatsApp("#insto prender la linterna", group = true)))
-    post(CountingSbn("com.whatsapp", whatsApp("#insto prender la linterna", sender = "Instinct bis")))
-    InstinctSendCorrelation(app).clear()
-    post(CountingSbn("com.whatsapp", whatsApp("#insto prender la linterna")))
-    assertTrue(InstinctProposalCenter.book.pending().isEmpty())
-    assertTrue(posted().isEmpty())
+    InstinctProposalCenter.accessibilityConnected = { true }
+    installNativeHandler(app, android.provider.AlarmClock.ACTION_SET_TIMER)
+    post(CountingSbn("com.whatsapp", whatsApp("#insto poner un temporizador de 4 minutos")))
+    val intent = shadowOf(app).nextStartedActivity
+    assertEquals(android.provider.AlarmClock.ACTION_SET_TIMER, intent.action)
+    assertEquals(240, intent.getIntExtra(android.provider.AlarmClock.EXTRA_LENGTH, 0))
+    assertTrue(titles().single().startsWith("Instinct hizo: "))
   }
 
-  @Test fun `the diagnosis says why the last WhatsApp message was not offered, without content`() {
+  @Test fun `a locked phone, the confirmation switch and the anti-loop brake leave it for Confirmar`() {
     enable()
-    post(CountingSbn("com.whatsapp", whatsApp("#insto mostrar las alarmas", sender = "Instinct IA")))
+    InstinctProposalCenter.keyguardLocked = { true }
+    deliver(PhoneCommand.Volume(VolumeOp.SET, 11))
+    assertEquals(InstinctProposalCenter.CHANNEL_ID, posted().last().channelId)
+    InstinctProposalCenter.keyguardLocked = { false }
+
+    InstinctProposalSettings(app).setAsksFirst(true)
+    deliver(PhoneCommand.Volume(VolumeOp.SET, 12))
+    assertEquals(InstinctProposalCenter.CHANNEL_ID, posted().last().channelId)
+    InstinctProposalSettings(app).setAsksFirst(false)
+
+    (13..18).forEach { deliver(PhoneCommand.Volume(VolumeOp.SET, it)) }
+    deliver(PhoneCommand.Volume(VolumeOp.SET, 19))
+    assertEquals(3, InstinctProposalCenter.book.pending().size)
+    assertEquals(6, posted().count { it.channelId == InstinctProposalCenter.ACTIONS_CHANNEL_ID })
+    assertEquals(InstinctProposalIntake.Diagnosis.CONFIRM, InstinctProposalIntake.lastDiagnosis)
+  }
+
+  @Test fun `other apps, groups and other contacts are ignored`() {
+    enable()
+    val before = mediaVolume()
+    post(CountingSbn("com.example.chat", whatsApp("#insto poner el volumen al 20 por ciento")))
+    post(CountingSbn("com.whatsapp", whatsApp("#insto poner el volumen al 21 por ciento", group = true)))
+    assertEquals(InstinctProposalIntake.Diagnosis.GROUP, InstinctProposalIntake.lastDiagnosis)
+    post(CountingSbn("com.whatsapp", whatsApp("#insto poner el volumen al 22 por ciento", sender = "Instinct IA")))
     assertEquals(InstinctProposalIntake.Diagnosis.CONTACT, InstinctProposalIntake.lastDiagnosis)
-    post(CountingSbn("com.example.chat", whatsApp("#insto mostrar las alarmas")))
+    post(CountingSbn("com.example.chat", whatsApp("#insto poner el volumen al 23 por ciento")))
     assertEquals("other apps never change it", InstinctProposalIntake.Diagnosis.CONTACT, InstinctProposalIntake.lastDiagnosis)
-    InstinctSendCorrelation(app).clear()
-    post(CountingSbn("com.whatsapp", whatsApp("#insto mostrar los temporizadores")))
-    assertEquals(InstinctProposalIntake.Diagnosis.WINDOW, InstinctProposalIntake.lastDiagnosis)
-    enable()
-    post(CountingSbn("com.whatsapp", whatsApp("#insto llamar a Ana")))
-    assertEquals(InstinctProposalIntake.Diagnosis.NOT_UNDERSTOOD, InstinctProposalIntake.lastDiagnosis)
-    post(CountingSbn("com.whatsapp", whatsApp("#insto mostrar los temporizadores")))
-    assertEquals(InstinctProposalIntake.Diagnosis.OFFERED, InstinctProposalIntake.lastDiagnosis)
-  }
-
-  @Test fun `a send to another number does not open the window`() {
-    InstinctProposalSettings(app).setEnabled(true)
-    InstinctSendCorrelation(app).record("5491100000000")
-    assertNull(InstinctSendCorrelation(app).lastSendTo(phone))
-    // Nothing is recorded with the switch off.
-    InstinctProposalSettings(app).setEnabled(false)
-    InstinctSendCorrelation(app).record(com.example.whatsapp.PhoneNumberUtils.normalizeDigits(phone))
-    assertNull(InstinctSendCorrelation(app).lastSendTo(phone))
+    assertEquals(before, mediaVolume())
+    assertTrue(posted().isEmpty())
   }
 
   @Test fun `Descartar from the notification discards for good`() {
     enable()
-    val proposal = offer(PhoneCommand.Torch(true))
+    val proposal = pending(PhoneCommand.Torch(true))
     InstinctProposalReceiver().onReceive(app, Intent(InstinctProposalCenter.ACTION_DISCARD)
       .putExtra(InstinctProposalCenter.EXTRA_PROPOSAL_ID, proposal.id))
     val vm = vm()
@@ -184,31 +221,33 @@ class InstinctProposalFlowTest {
     assertEquals("Esa propuesta ya se ejecutó o se descartó. No se repite.", vm.floatingAssistant.value.error)
   }
 
-  @Test fun `inside the open assistant a proposal waits while a draft is being written`() = runTest(scheduler) {
+  @Test fun `inside the open assistant an order waits while a draft is being written, then runs`() = runTest(scheduler) {
     enable()
     val vm = vm()
     vm.attachInstinctProposals()
     vm.enterFloatingTextMode(); vm.updateFloatingText("recordame comprar pan")
-    offer(PhoneCommand.Volume(VolumeOp.SET, 30))
+    deliver(PhoneCommand.Volume(VolumeOp.SET, 30))
     runCurrent()
     assertEquals(1, vm.floatingAssistant.value.proposalsWaiting)
-    assertFalse(vm.floatingAssistant.value.needsConfirmation)
     assertEquals("recordame comprar pan", vm.floatingAssistant.value.text)
+    assertEquals(1, InstinctProposalCenter.book.pending().size)
     vm.updateFloatingText("")
     runCurrent()
     assertEquals(0, vm.floatingAssistant.value.proposalsWaiting)
-    assertTrue(vm.floatingAssistant.value.needsConfirmation)
-    assertTrue(vm.floatingAssistant.value.status!!.startsWith("Instinct propone: "))
+    assertFalse(vm.floatingAssistant.value.needsConfirmation)
+    assertTrue(InstinctProposalCenter.book.pending().isEmpty())
+    assertEquals("Volumen multimedia ajustado.", vm.floatingAssistant.value.status)
     vm.detachInstinctProposals()
   }
 
-  @Test fun `confirming runs once and never feeds the operational context`() = runTest(scheduler) {
-    enable()
+  @Test fun `with confirmation on, dale runs once and never feeds context or learning`() = runTest(scheduler) {
+    enable(asksFirst = true)
     installNativeHandler(app, Intent.ACTION_VIEW, scheme = "https")
     val context = OperationalContext()
     val vm = vm(context)
     vm.attachInstinctProposals()
-    val proposal = offer(PhoneCommand.YouTubeSearch("jazz"))
+    deliver(PhoneCommand.YouTubeSearch("jazz"))
+    val proposal = InstinctProposalCenter.book.pending().single()
     runCurrent()
     assertTrue(vm.floatingAssistant.value.needsConfirmation)
     vm.enterFloatingTextMode(); vm.updateFloatingText("dale"); vm.sendFloatingText { fail("A confirmation never goes to Instinct") }
@@ -216,21 +255,33 @@ class InstinctProposalFlowTest {
     assertNotNull(vm.consumePhoneActionCompletion())
     advanceUntilIdle()
     assertNull(context.snapshot())
-    // Nor learning: no phrase and no structure comes from a proposal.
     val learned = runBlocking { phrases.backupData() }
     assertTrue(learned.entries.isEmpty() && learned.patterns.isEmpty())
-    // A second Confirmar (notification action delivered again) does not repeat it.
     vm.confirmInstinctProposalFromNotification(proposal.id, proposal.token)
     assertEquals("Esa propuesta ya se ejecutó o se descartó. No se repite.", vm.floatingAssistant.value.error)
     assertNull(vm.consumePhoneActionCompletion())
     vm.detachInstinctProposals()
   }
 
-  @Test fun `cancelling a shown proposal discards it`() = runTest(scheduler) {
+  @Test fun `an automatic order in the open panel does not feed the operational context`() = runTest(scheduler) {
     enable()
+    installNativeHandler(app, Intent.ACTION_VIEW, scheme = "https")
+    val context = OperationalContext()
+    val vm = vm(context)
+    vm.attachInstinctProposals()
+    deliver(PhoneCommand.YouTubeSearch("tango"))
+    runCurrent()
+    assertNotNull(vm.consumePhoneActionCompletion())
+    assertNull(context.snapshot())
+    vm.detachInstinctProposals()
+  }
+
+  @Test fun `cancelling a shown proposal discards it`() = runTest(scheduler) {
+    enable(asksFirst = true)
     val vm = vm()
     vm.attachInstinctProposals()
-    val proposal = offer(PhoneCommand.Volume(VolumeOp.SET, 40))
+    deliver(PhoneCommand.Volume(VolumeOp.SET, 40))
+    val proposal = InstinctProposalCenter.book.pending().single()
     runCurrent()
     vm.confirmFloatingAction(false)
     assertFalse(InstinctProposalCenter.book.isPending(proposal.id))
@@ -240,7 +291,7 @@ class InstinctProposalFlowTest {
 
   @Test fun `an expired proposal does not run`() {
     enable()
-    val proposal = offer(PhoneCommand.Volume(VolumeOp.SET, 50))
+    val proposal = pending(PhoneCommand.Volume(VolumeOp.SET, 50))
     fakeNow += ProposalBook.TTL_MILLIS + 1
     val vm = vm()
     vm.confirmInstinctProposalFromNotification(proposal.id, proposal.token)
@@ -250,7 +301,7 @@ class InstinctProposalFlowTest {
 
   @Test fun `a proposal confirmed after the contact changed does not run`() {
     enable()
-    val proposal = offer(PhoneCommand.Volume(VolumeOp.SET, 60))
+    val proposal = pending(PhoneCommand.Volume(VolumeOp.SET, 60))
     contact("+54 9 11 9999-0000")
     val vm = vm()
     vm.confirmInstinctProposalFromNotification(proposal.id, proposal.token)
@@ -259,7 +310,7 @@ class InstinctProposalFlowTest {
 
   @Test fun `turning the switch off discards pending proposals`() {
     enable()
-    val proposal = offer(PhoneCommand.Volume(VolumeOp.SET, 70))
+    val proposal = pending(PhoneCommand.Volume(VolumeOp.SET, 70))
     InstinctProposalSettings(app).setEnabled(false)
     assertFalse(InstinctProposalCenter.book.isPending(proposal.id))
     assertNull(InstinctProposalCenter.fingerprint(app))
@@ -267,7 +318,7 @@ class InstinctProposalFlowTest {
 
   @Test fun `a forged confirmation without the token runs nothing`() {
     enable()
-    val proposal = offer(PhoneCommand.Volume(VolumeOp.SET, 80))
+    val proposal = pending(PhoneCommand.Volume(VolumeOp.SET, 80))
     val vm = vm()
     vm.confirmInstinctProposalFromNotification(proposal.id, "adivinado")
     assertEquals("Esa propuesta ya no está disponible. No se ejecutó nada.", vm.floatingAssistant.value.error)

@@ -22,14 +22,14 @@ import java.io.File
 import org.json.JSONObject
 
 /**
- * The opt-in switch «Recibir propuestas de Instinct» and its correlation window. Off by default, stored in
- * [Context.getNoBackupFilesDir] like Gemini's switch: never in preferences backups, configuration exports or the
- * cloud, so a restore never turns passive reading on.
+ * The opt-in switch «Recibir propuestas de Instinct» and «Pedirme confirmación antes de ejecutar». Off by default,
+ * stored in [Context.getNoBackupFilesDir] like Gemini's switch: never in preferences backups, configuration exports
+ * or the cloud, so a restore never turns passive reading or automatic execution on.
  */
 class InstinctProposalSettings(context: Context) {
   private val app = context.applicationContext
   private val enabled = File(app.noBackupFilesDir, "instinct-proposals-enabled")
-  private val window = File(app.noBackupFilesDir, "instinct-proposals-window")
+  private val askFirst = File(app.noBackupFilesDir, "instinct-proposals-ask-first")
 
   /** Read on every posted notification: one small file, before anything of the notification is touched. */
   fun isEnabled(): Boolean = Build.VERSION.SDK_INT >= MIN_SDK && runCatching { enabled.readText() == "true" }.getOrDefault(false)
@@ -38,58 +38,19 @@ class InstinctProposalSettings(context: Context) {
     if (value) enabled.writeText("true")
     else {
       if (enabled.exists()) enabled.delete()
-      // Turning it off forgets the window and every pending proposal: nothing can run after this.
-      InstinctSendCorrelation(app).clear()
+      // Turning it off discards every pending proposal: nothing can run after this.
       InstinctProposalCenter.discardAll(app)
     }
   }
 
-  fun windowMinutes(): Int = InstinctProposalFilter.windowMinutes(runCatching { window.readText().trim().toInt() }.getOrNull())
-  fun setWindowMinutes(minutes: Int) { window.writeText(InstinctProposalFilter.windowMinutes(minutes).toString()) }
+  /** With this on, nothing runs automatically: every proposal waits for Confirmar or «dale». */
+  fun asksFirst(): Boolean = runCatching { askFirst.readText() == "true" }.getOrDefault(false)
+  fun setAsksFirst(value: Boolean) { if (value) askFirst.writeText("true") else if (askFirst.exists()) askFirst.delete() }
 
   companion object {
     /** [Notification.EXTRA_IS_GROUP_CONVERSATION] exists from Android 9; without it a group cannot be excluded. */
     const val MIN_SDK = Build.VERSION_CODES.P
     val supported: Boolean get() = Build.VERSION.SDK_INT >= MIN_SDK
-  }
-}
-
-/**
- * When Insto last delivered something to Instinct with a confirmed automatic send. Only the monotonic time, the
- * boot it belongs to and a hash of the recipient's digits are kept, atomically, in [Context.getNoBackupFilesDir].
- * Recorded only while the switch is on. A reboot invalidates it.
- */
-class InstinctSendCorrelation(context: Context, private val now: () -> Long = SystemClock::elapsedRealtime) {
-  private val app = context.applicationContext
-  private val file = AtomicFile(File(app.noBackupFilesDir, FILE_NAME))
-
-  fun record(recipientDigits: String?) {
-    if (recipientDigits.isNullOrEmpty() || !InstinctProposalSettings(app).isEnabled()) return
-    val json = JSONObject().put("boot", boot()).put("at", now()).put("recipient", sha256(recipientDigits)).toString()
-    synchronized(lock) {
-      val stream = file.startWrite()
-      try { stream.write(json.toByteArray(Charsets.UTF_8)); file.finishWrite(stream) }
-      catch (error: Exception) { file.failWrite(stream); throw error }
-    }
-  }
-
-  /** The time of the last confirmed send to [contactPhone] in this boot, or null. */
-  fun lastSendTo(contactPhone: String): Long? = runCatching {
-    val json = synchronized(lock) { JSONObject(file.readFully().toString(Charsets.UTF_8)) }
-    json.getLong("at").takeIf {
-      json.getInt("boot") == boot() && json.getString("recipient") == sha256(PhoneNumberUtils.normalizeDigits(contactPhone))
-    }
-  }.getOrNull()
-
-  fun clear() = synchronized(lock) { file.delete() }
-
-  private fun boot(): Int = runCatching {
-    android.provider.Settings.Global.getInt(app.contentResolver, android.provider.Settings.Global.BOOT_COUNT, -1)
-  }.getOrDefault(-1)
-
-  companion object {
-    const val FILE_NAME = "instinct-last-send.json"
-    private val lock = Any()
   }
 }
 
@@ -143,11 +104,13 @@ object InstinctProposalIntake {
     PACKAGE("Llegó de una app de WhatsApp distinta de la que Insto usa para enviar."),
     GROUP("Era una conversación grupal."),
     CONTACT("El remitente no coincide exactamente con el nombre del contacto configurado en Insto."),
-    WINDOW("No hubo un envío confirmado por el auto-envío a ese contacto dentro de la ventana."),
     DUPLICATE("Ese mensaje ya se había procesado."),
     NO_PROPOSAL("El mensaje no tenía líneas que empiecen con «#insto »."),
     NOT_UNDERSTOOD("Había líneas #insto, pero ninguna se entendió o estaba permitida."),
-    OFFERED("Se ofreció para confirmar."),
+    OFFERED("Llegó al panel abierto."),
+    EXECUTED("Se ejecutó."),
+    CONFIRM("Quedó para confirmar."),
+    FAILED("Se intentó, pero Android no lo permitió."),
   }
 
   @Volatile var lastDiagnosis: Diagnosis? = null
@@ -155,7 +118,13 @@ object InstinctProposalIntake {
   @Volatile var lastDiagnosisAt: Long = 0L
     private set
 
-  private fun diagnose(value: Diagnosis) { lastDiagnosis = value; lastDiagnosisAt = SystemClock.elapsedRealtime() }
+  /** Extra detail for [Diagnosis.CONFIRM] and [Diagnosis.FAILED]: Insto's own result message, never Instinct's text. */
+  @Volatile var lastDetail: String? = null
+    private set
+
+  internal fun diagnose(value: Diagnosis, detail: String? = null) {
+    lastDiagnosis = value; lastDetail = detail; lastDiagnosisAt = SystemClock.elapsedRealtime()
+  }
 
   private val whatsAppPackages = setOf("com.whatsapp", "com.whatsapp.w4b")
 
@@ -167,16 +136,13 @@ object InstinctProposalIntake {
     val fromWhatsApp = view.packageName in whatsAppPackages
     val prefs = AssistantPreferencesCache.of(app).current ?: run { if (fromWhatsApp) diagnose(Diagnosis.PREFS); return }
     val contact = prefs.pinnedContact ?: run { if (fromWhatsApp) diagnose(Diagnosis.NO_CONTACT); return }
-    val settings = InstinctProposalSettings(app)
     val packageName = WhatsAppDispatcher.resolveTargetPackage(app, prefs.preferredFlavor)
-    val config = ProposalFilterConfig(packageName, contact.displayName,
-      { InstinctSendCorrelation(app).lastSendTo(contact.phoneNumber) }, settings.windowMinutes() * 60_000L, SystemClock.elapsedRealtime())
+    val config = ProposalFilterConfig(packageName, contact.displayName, SystemClock.elapsedRealtime())
     val outcome = filter.evaluate(view, config)
     if (fromWhatsApp) when (outcome.stage) {
       InstinctProposalFilter.Stage.PACKAGE -> diagnose(Diagnosis.PACKAGE)
       InstinctProposalFilter.Stage.GROUP -> diagnose(Diagnosis.GROUP)
       InstinctProposalFilter.Stage.CONTACT -> diagnose(Diagnosis.CONTACT)
-      InstinctProposalFilter.Stage.WINDOW -> diagnose(Diagnosis.WINDOW)
       InstinctProposalFilter.Stage.DUPLICATE -> diagnose(Diagnosis.DUPLICATE)
       InstinctProposalFilter.Stage.NO_PROPOSAL -> diagnose(Diagnosis.NO_PROPOSAL)
       InstinctProposalFilter.Stage.ACCEPTED -> Unit
@@ -187,7 +153,7 @@ object InstinctProposalIntake {
     }
     val parser = PhoneCommandParser()
     val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser) }
-    diagnose(if (checks.any { it is ProposalCheck.Valid }) Diagnosis.OFFERED else Diagnosis.NOT_UNDERSTOOD)
+    if (checks.none { it is ProposalCheck.Valid }) diagnose(Diagnosis.NOT_UNDERSTOOD)
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
     InstinctProposalCenter.deliver(app, checks, fingerprint)
     log(counters() + " valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")
@@ -216,6 +182,8 @@ object InstinctProposalCenter {
   const val CHANNEL_ID = "instinct-proposals"
   /** Low importance: the discreet «not understood» notice never pops up or makes a sound. */
   const val NOTICE_CHANNEL_ID = "instinct-proposal-notices"
+  /** «Instinct hizo: …» after an automatic execution. */
+  const val ACTIONS_CHANNEL_ID = "instinct-actions"
   const val ACTION_CONFIRM = "com.example.phone.ACTION_CONFIRM_INSTINCT_PROPOSAL"
   const val ACTION_DISCARD = "com.example.phone.ACTION_DISCARD_INSTINCT_PROPOSAL"
   const val EXTRA_PROPOSAL_ID = "insto.instinct.proposal"
@@ -246,11 +214,74 @@ object InstinctProposalCenter {
         offered.forEach(target::onProposal)
         if (notUnderstood) target.onNotUnderstood()
       } else {
-        offered.forEach { notify(app, it) }
+        offered.forEach { runInBackground(app, it) }
         if (notUnderstood) notifyNotUnderstood(app)
       }
     }
     if (Looper.myLooper() == Looper.getMainLooper()) run.run() else main.post(run)
+  }
+
+  /** Anti-loop brake shared by both paths: 6 automatic executions per 10 minutes. */
+  val budget = AutoRunBudget({ clock() })
+  internal var accessibilityConnected: () -> Boolean = { com.example.assist.PingAutoSendAccessibilityService.isConnected() }
+  internal var keyguardLocked: (Context) -> Boolean = {
+    it.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
+  }
+
+  /** Commands that open another app's screen. From the background Android only allows that while Insto is exempt. */
+  internal fun opensActivity(command: PhoneCommand): Boolean = when (command) {
+    is PhoneCommand.Volume, is PhoneCommand.Torch, is PhoneCommand.Media, is PhoneCommand.TemporaryMode,
+    is PhoneCommand.Platform -> false
+    else -> true
+  }
+
+  /**
+   * Null: run now without asking. Otherwise the reason it waits for Confirmar. [foreground] is true inside the open
+   * panel, where opening another app is allowed. Acquires the anti-loop budget only when it returns null.
+   */
+  fun autoRunBlocker(context: Context, command: PhoneCommand, foreground: Boolean): String? = when {
+    InstinctProposalSettings(context).asksFirst() -> "Elegiste confirmar cada propuesta."
+    !foreground && keyguardLocked(context) -> "El teléfono estaba bloqueado."
+    !foreground && opensActivity(command) && !accessibilityConnected() ->
+      "Para abrir otra app sin tocar nada, Android necesita el servicio de Accesibilidad de Insto activo."
+    !budget.tryAcquire() -> "Instinct pidió muchas acciones seguidas; esta espera tu confirmación."
+    else -> null
+  }
+
+  /** The panel is closed: runs the proposal now, or leaves it for Confirmar when it cannot or should not. */
+  internal fun runInBackground(context: Context, proposal: ProposalBook.Proposal) {
+    val blocker = autoRunBlocker(context, proposal.command, foreground = false)
+    if (blocker != null) { askConfirmation(context, proposal, blocker); return }
+    val claim = book.claim(proposal.id, fingerprint(context))
+    if (claim !is ProposalBook.Claim.Granted) return
+    val result = PhoneActionExecutor(context).execute(proposal.command)
+    when {
+      // Maybe it happened: never offered again, so it is never repeated.
+      result.outcome == PhoneActionOutcome.UNCERTAIN -> {
+        InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.FAILED, result.message)
+        notifyResult(context, proposal, "Instinct pidió: ${proposal.summary}", "${result.message} Revisalo; no se repite.")
+      }
+      result.outcome == PhoneActionOutcome.REJECTED -> {
+        InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.FAILED, result.message)
+        notifyResult(context, proposal, "Instinct pidió: ${proposal.summary}", "No se pudo: ${result.message}")
+      }
+      result.confirmation != null || result.outcome == PhoneActionOutcome.NEEDS_INPUT || result.stopwatchAutomation != null ||
+        result.appOptions.isNotEmpty() || result.contactOptions.isNotEmpty() || result.needsCamera ||
+        result.needsNotifications || result.needsContacts -> {
+        // It did not happen: it goes back for a touch, which can open the panel, ask a permission or choose.
+        val again = book.offer(proposal.order, proposal.command, proposal.fingerprint)
+        if (again != null) askConfirmation(context, again, result.message)
+      }
+      else -> {
+        InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.EXECUTED)
+        notifyResult(context, proposal, "Instinct hizo: ${proposal.summary}", result.message)
+      }
+    }
+  }
+
+  private fun askConfirmation(context: Context, proposal: ProposalBook.Proposal, reason: String) {
+    InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.CONFIRM, reason)
+    notify(context, proposal, reason)
   }
 
   /**
@@ -284,7 +315,9 @@ object InstinctProposalCenter {
       context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false
     if (!manager.areNotificationsEnabled()) return false
     if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(
-      if (channel == CHANNEL_ID) NotificationChannel(CHANNEL_ID, "Insto · propuestas de Instinct", NotificationManager.IMPORTANCE_HIGH).apply {
+      if (channel == ACTIONS_CHANNEL_ID) NotificationChannel(ACTIONS_CHANNEL_ID, "Insto · acciones de Instinct", NotificationManager.IMPORTANCE_DEFAULT).apply {
+        description = "Avisos de lo que Insto hizo cuando Instinct se lo pidió."
+      } else if (channel == CHANNEL_ID) NotificationChannel(CHANNEL_ID, "Insto · propuestas de Instinct", NotificationManager.IMPORTANCE_HIGH).apply {
         description = "Acciones que Instinct te propone. Ninguna se ejecuta sin que la confirmes."
       } else NotificationChannel(NOTICE_CHANNEL_ID, "Insto · avisos de propuestas", NotificationManager.IMPORTANCE_LOW).apply {
         description = "Avisos discretos cuando Instinct propone algo que Insto no entiende."
@@ -295,7 +328,7 @@ object InstinctProposalCenter {
   private fun builder(context: Context, channel: String = CHANNEL_ID): Notification.Builder =
     if (Build.VERSION.SDK_INT >= 26) Notification.Builder(context, channel) else @Suppress("DEPRECATION") Notification.Builder(context)
 
-  private fun notify(context: Context, proposal: ProposalBook.Proposal) {
+  private fun notify(context: Context, proposal: ProposalBook.Proposal, reason: String? = null) {
     if (!canNotify(context)) return
     val requestCode = proposal.id.toInt()
     val confirm = PendingIntent.getActivity(context, requestCode,
@@ -313,7 +346,8 @@ object InstinctProposalCenter {
       .setContentTitle("Instinct propone una acción").setContentText("Desbloqueá el teléfono para revisarla.").build()
     val notification = builder(context).setSmallIcon(android.R.drawable.ic_dialog_info)
       .setContentTitle(title)
-      .setContentText("No se ejecuta sin tu confirmación. Vence en 10 minutos.")
+      .setContentText(listOfNotNull(reason, "Confirmá para hacerlo. Vence en 10 minutos.").joinToString(" "))
+      .setStyle(Notification.BigTextStyle().bigText(listOfNotNull(reason, "Confirmá para hacerlo. Vence en 10 minutos.").joinToString(" ")))
       .setCategory(Notification.CATEGORY_RECOMMENDATION)
       .setPriority(@Suppress("DEPRECATION") Notification.PRIORITY_HIGH)
       .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(public)
@@ -323,6 +357,18 @@ object InstinctProposalCenter {
       .addAction(Notification.Action.Builder(null, "Descartar", discard).build())
       .build()
     runCatching { context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_BASE + requestCode, notification) }
+  }
+
+  /** «Instinct hizo: …» after an automatic execution, or why it could not. Informative: no action runs from it. */
+  private fun notifyResult(context: Context, proposal: ProposalBook.Proposal, title: String, text: String) {
+    if (!canNotify(context, ACTIONS_CHANNEL_ID)) return
+    val public = builder(context, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info)
+      .setContentTitle("Instinct usó Insto").build()
+    val notification = builder(context, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info)
+      .setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text))
+      .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(public)
+      .setAutoCancel(true).build()
+    runCatching { context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_BASE + proposal.id.toInt(), notification) }
   }
 
   private fun notifyNotUnderstood(context: Context) {
