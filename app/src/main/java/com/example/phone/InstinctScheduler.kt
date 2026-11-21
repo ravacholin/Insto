@@ -53,11 +53,11 @@ object InstinctScheduler {
   }
 
   /** Stores a validated deferred order (its inner order already passed the validator) and arms its alarm. */
-  fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String): Outcome {
+  fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String, message: String = ""): Outcome {
     val deferred = check.deferred ?: return Outcome.Refused("no es una orden diferida.")
     recover(context)
     val order = ScheduledOrder(UUID.randomUUID().toString(), check.order, deferred.inner, deferred.fireAt, fingerprint,
-      deferred.condition, deferred.label, wallClock())
+      deferred.condition, deferred.label, wallClock(), message = InstinctLogEvents.messageId(message))
     return when (val added = runCatching { store(context).add(order) }.getOrNull()) {
       is InstinctScheduleStore.Add.Added -> { alarms(context.applicationContext, order, true); Outcome.Scheduled(order) }
       InstinctScheduleStore.Add.Full -> Outcome.Refused("ya hay ${InstinctDeferral.MAX_SCHEDULED} órdenes programadas; cancelá alguna antes.")
@@ -68,6 +68,7 @@ object InstinctScheduler {
 
   @Synchronized internal fun ackKey(orderId: String): Long = ackKeys.getOrPut(orderId) { nextAckKey-- }
   @Synchronized private fun takeAckKey(orderId: String): Long? = ackKeys.remove(orderId)
+  @Synchronized private fun newAckKey(): Long = nextAckKey--
 
   fun cancel(context: Context, id: String): Boolean {
     val order = store(context).pending().firstOrNull { it.id == id } ?: return false
@@ -125,7 +126,9 @@ object InstinctScheduler {
       val decision = ScheduleFirePolicy.decide(order, InstinctProposalSettings(app).isEnabled(), InstinctProposalCenter.fingerprint(app), now) {
         InstinctProposalValidator.check(it, parser, Calendar.getInstance().apply { timeInMillis = now }, routines)
       }
-      val ackKey = takeAckKey(order.id)
+      // The chat's line while its handle lives; for the log, also after a restart, from the stored message id.
+      val ackKey = takeAckKey(order.id)?.takeIf(InstinctProposalCenter.acks::tracks)
+        ?: newAckKey().takeIf { InstinctProposalCenter.adopt(app, it, order.message, AckEntry(AckKind.SCHEDULED, order.order, order.label)) }
       fun tell(entry: AckEntry) { if (ackKey != null) InstinctProposalCenter.report(app, ackKey, entry) }
       if (decision is ScheduleFirePolicy.Decision.Drop) {
         InstinctProposalCenter.notifyScheduled(app, order, "Instinct había programado: ${order.summary}", "No se ejecutó: ${decision.why}")

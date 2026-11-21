@@ -6,8 +6,20 @@ package com.example.phone
  * the user enabled (names only, never their steps), the reply prefixes and the protocol version. A copy with no
  * routines lives in docs/instinct-catalog.txt and a test checks it matches.
  */
+/**
+ * How Instinct reads the log, for the catalog. [url] and [token] are the real values in the copy to paste in the
+ * prompt; null in the copy sent through WhatsApp, which says to ask for them instead.
+ */
+data class InstinctCatalogLog(val url: String?, val token: String?) {
+  companion object {
+    /** The chat copy never carries the address nor the token. */
+    val HIDDEN = InstinctCatalogLog(null, null)
+    const val ASK = "(URL y token: pedíselos a Pablo)"
+  }
+}
+
 object InstinctProtocolCatalog {
-  const val VERSION = 2
+  const val VERSION = 3
   const val TITLE = "Protocolo Insto v$VERSION"
   const val ROUTINE_FORM = "ejecutar la rutina"
   /** Marks example lines in a copy sent through WhatsApp, so that copy never reads as orders for Insto. */
@@ -15,9 +27,10 @@ object InstinctProtocolCatalog {
 
   /**
    * [forChat] is the copy sent to Instinct through WhatsApp: every example line is preceded by [CHAT_MARK], because
-   * Insto reads that chat and must never take its own message for orders.
+   * Insto reads that chat and must never take its own message for orders. With [log] the results are in the log,
+   * not in the chat, and the block says how to read it.
    */
-  fun text(routines: List<String>, forChat: Boolean = false): String {
+  fun text(routines: List<String>, forChat: Boolean = false, log: InstinctCatalogLog? = null): String {
     fun example(order: String) = (if (forChat) CHAT_MARK else "") + "${InstinctProposalProtocol.PREFIX} $order"
     return buildString {
       appendLine("Órdenes para Insto ($TITLE)")
@@ -53,15 +66,35 @@ object InstinctProtocolCatalog {
       appendLine()
       appendLine("Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.")
       appendLine()
-      appendLine("Respuestas de Insto (si la persona las activó):")
-      appendLine("Insto puede contestarte en este chat con una línea por orden, en el mismo orden:")
-      appendLine("${AckKind.OK.prefix} <orden> → <resultado>: la orden se ejecutó.")
-      appendLine("${AckKind.WAITING.prefix} <orden> → <motivo>: quedó esperando que la persona la confirme.")
-      appendLine("${AckKind.ERROR.prefix} <orden> → <motivo>: no se ejecutó (no se entendió, no está permitida o falló).")
-      appendLine("${AckKind.UNCERTAIN.prefix} <orden> → <mensaje> · no se repite: pudo haberse hecho; Insto no la repite.")
-      appendLine("${AckKind.SCHEDULED.prefix} <orden> → a las HH:MM: quedó programada.")
-      appendLine("Después de una espera o de una orden programada puede llegar una línea más: ${AckKind.OK.prefix}, ${AckKind.ERROR.prefix}, ${AckKind.DISCARDED.prefix} o ${AckKind.EXPIRED.prefix}. Si la persona deshace lo que hiciste, llega ${AckKind.UNDONE.prefix} <orden>.")
-      append("Esas líneas son informativas: no las respondas con nuevas órdenes, salvo una sola orden corregida después de un ${AckKind.ERROR.prefix}. Nunca repitas una orden después de ${AckKind.UNCERTAIN.prefix} ni de ${AckKind.WAITING.prefix}.")
+      if (log == null) {
+        appendLine("Respuestas de Insto (si la persona las activó):")
+        appendLine("Insto puede contestarte en este chat con una línea por orden, en el mismo orden:")
+        appendLine("${AckKind.OK.prefix} <orden> → <resultado>: la orden se ejecutó.")
+        appendLine("${AckKind.WAITING.prefix} <orden> → <motivo>: quedó esperando que la persona la confirme.")
+        appendLine("${AckKind.ERROR.prefix} <orden> → <motivo>: no se ejecutó (no se entendió, no está permitida o falló).")
+        appendLine("${AckKind.UNCERTAIN.prefix} <orden> → <mensaje> · no se repite: pudo haberse hecho; Insto no la repite.")
+        appendLine("${AckKind.SCHEDULED.prefix} <orden> → a las HH:MM: quedó programada.")
+        appendLine("Después de una espera o de una orden programada puede llegar una línea más: ${AckKind.OK.prefix}, ${AckKind.ERROR.prefix}, ${AckKind.DISCARDED.prefix} o ${AckKind.EXPIRED.prefix}. Si la persona deshace lo que hiciste, llega ${AckKind.UNDONE.prefix} <orden>.")
+        append("Esas líneas son informativas: no las respondas con nuevas órdenes, salvo una sola orden corregida después de un ${AckKind.ERROR.prefix}. Nunca repitas una orden después de ${AckKind.UNCERTAIN.prefix} ni de ${AckKind.WAITING.prefix}.")
+      } else {
+        appendLine("Resultados de tus órdenes (si la persona activó las respuestas):")
+        appendLine("Insto no los escribe en este chat: los anota en una bitácora, una planilla de Google, con un evento por orden. Para leerla hacé este pedido:")
+        if (log.url != null && log.token != null) appendLine("GET ${InstinctLogConfig.readUrl(log.url, log.token)}")
+        else {
+          appendLine("GET <URL>?token=<token>&since=<ISO>&limit=50")
+          appendLine(InstinctCatalogLog.ASK)
+        }
+        appendLine("since es un instante ISO-8601 con zona (por ejemplo 2026-11-21T09:00:00-03:00): devuelve los eventos recibidos desde entonces, como máximo 50. La respuesta es {ok, events:[{recibido, evento_id, ocurrido, tipo, orden, detalle, mensaje_id, protocolo}]}.")
+        appendLine("tipo es uno de estos:")
+        appendLine("${AckKind.OK.code}: la orden se ejecutó (también la respuesta a una consulta).")
+        appendLine("${AckKind.WAITING.code}: quedó esperando que la persona la confirme.")
+        appendLine("${AckKind.ERROR.code}: no se ejecutó (no se entendió, no está permitida o falló).")
+        appendLine("${AckKind.UNCERTAIN.code}: pudo haberse hecho; Insto no la repite.")
+        appendLine("${AckKind.SCHEDULED.code}: quedó programada.")
+        appendLine("Después de una espera o de una orden programada puede llegar otro evento de la misma orden: ${AckKind.OK.code}, ${AckKind.ERROR.code}, ${AckKind.DISCARDED.code} o ${AckKind.EXPIRED.code}, aunque haya pasado mucho tiempo. Si la persona deshace lo que hiciste, llega ${AckKind.UNDONE.code}.")
+        appendLine("orden es tu orden (recortada a ${InstinctAck.MAX_ORDER_CHARS} caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).")
+        append("Los eventos son informativos: no los respondas con nuevas órdenes, salvo una sola orden corregida después de un ${AckKind.ERROR.code}. Nunca repitas una orden después de ${AckKind.UNCERTAIN.code} ni de ${AckKind.WAITING.code}. Antes de repetir o corregir una orden, consultá la bitácora.")
+      }
     }
   }
 

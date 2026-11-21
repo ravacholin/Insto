@@ -31,6 +31,7 @@ class InstinctProposalSettings(context: Context) {
   private val enabled = File(app.noBackupFilesDir, "instinct-proposals-enabled")
   private val askFirst = File(app.noBackupFilesDir, "instinct-proposals-ask-first")
   private val replyMode = File(app.noBackupFilesDir, "instinct-proposals-reply-mode")
+  private val ackChannel = File(app.noBackupFilesDir, "instinct-proposals-ack-channel")
 
   /** Read on every posted notification: one small file, before anything of the notification is touched. */
   fun isEnabled(): Boolean = Build.VERSION.SDK_INT >= MIN_SDK && runCatching { enabled.readText() == "true" }.getOrDefault(false)
@@ -59,6 +60,12 @@ class InstinctProposalSettings(context: Context) {
       if (replyMode.exists()) replyMode.delete()
       InstinctProposalCenter.acks.clear()
     } else replyMode.writeText(value.name)
+  }
+
+  /** «Canal de estados» (1.15.0): WhatsApp by default; a restore never brings it, like the other switches. */
+  fun channel(): InstinctAckChannel = runCatching { InstinctAckChannel.valueOf(ackChannel.readText()) }.getOrDefault(InstinctAckChannel.WHATSAPP)
+  fun setChannel(value: InstinctAckChannel) {
+    if (value == InstinctAckChannel.WHATSAPP) { if (ackChannel.exists()) ackChannel.delete() } else ackChannel.writeText(value.name)
   }
 
   companion object {
@@ -187,7 +194,7 @@ object InstinctProposalIntake {
 
   private val whatsAppPackages = setOf("com.whatsapp", "com.whatsapp.w4b")
 
-  /** [replyHandle] is read only for an accepted message, and only when replies are on. */
+  /** [replyHandle] is read only for an accepted message, and only when replies are on and go to the chat. */
   fun onPosted(context: Context, notification: () -> ProposalNotification?, replyHandle: () -> InstinctReplyHandle? = { null }) {
     if (!InstinctProposalSettings(context).isEnabled()) return
     val app = context.applicationContext
@@ -218,8 +225,8 @@ object InstinctProposalIntake {
     val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser, now, routines) }
     if (checks.none { it !is ProposalCheck.Invalid }) diagnose(Diagnosis.NOT_UNDERSTOOD)
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
-    val ticket = InstinctProposalCenter.openReply(app, checks.size, replyHandle)
-    InstinctProposalCenter.deliver(app, checks, fingerprint, ticket)
+    val ticket = InstinctProposalCenter.openReply(app, checks.size, replyHandle, outcome.message)
+    InstinctProposalCenter.deliver(app, checks, fingerprint, ticket, outcome.message)
     log(counters() + " valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")
   }
 
@@ -268,7 +275,8 @@ object InstinctProposalCenter {
   fun attach(value: Listener) { listener = value }
   fun detach(value: Listener) { if (listener === value) listener = null }
 
-  internal fun deliver(context: Context, checks: List<ProposalCheck>, fingerprint: String, ticket: InstinctAckLedger.Ticket? = null) {
+  internal fun deliver(context: Context, checks: List<ProposalCheck>, fingerprint: String, ticket: InstinctAckLedger.Ticket? = null,
+    message: String = "") {
     val app = context.applicationContext
     val offered = ArrayList<ProposalBook.Proposal>()
     checks.forEachIndexed { index, check ->
@@ -276,7 +284,7 @@ object InstinctProposalCenter {
         is ProposalCheck.Invalid -> reply(app, acks.resolve(ticket, index, InstinctAck.invalid(check)))
         // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
         is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index, AckEntry(AckKind.OK, check.order, answer(app, check.kind), informative = true)))
-        is ProposalCheck.Valid -> if (check.deferred != null) schedule(app, check, fingerprint, ticket, index) else {
+        is ProposalCheck.Valid -> if (check.deferred != null) schedule(app, check, fingerprint, ticket, index, message) else {
           val proposal = book.offer(check.order, check.command, fingerprint)
           if (proposal == null) reply(app, acks.resolve(ticket, index,
             AckEntry(AckKind.ERROR, check.order, "ya había una orden igual esperando confirmación; no se duplica.")))
@@ -299,31 +307,55 @@ object InstinctProposalCenter {
   }
 
   /**
-   * Replies to Instinct: one per accepted message, through WhatsApp's «Responder» action. In memory only; cleared
-   * when «Recibir órdenes» is turned off.
+   * Replies to Instinct: one per accepted message, through WhatsApp's «Responder» action and/or as events in the
+   * log, as «Canal de estados» says. In memory only; cleared when «Recibir órdenes» is turned off.
    */
-  val acks = InstinctAckLedger<InstinctReplyHandle>({ clock() }, { replyMode() })
+  val acks = InstinctAckLedger<InstinctReplyHandle>({ clock() }, { replyMode() }, channel = { ackChannel() })
   @Volatile private var replyModeSource: () -> InstinctReplyMode = { InstinctReplyMode.NEVER }
+  @Volatile private var channelSource: () -> InstinctAckChannel = { InstinctAckChannel.WHATSAPP }
   private fun replyMode(): InstinctReplyMode = replyModeSource()
+  private fun ackChannel(): InstinctAckChannel = channelSource()
+
+  /** The ledger reads the settings through the application context; any entry point binds it. */
+  internal fun bind(context: Context) {
+    val settings = InstinctProposalSettings(context.applicationContext)
+    replyModeSource = { settings.replyMode() }
+    channelSource = { settings.channel() }
+  }
   /** Sends one reply; a seam for tests. */
   internal var replySender: (Context, InstinctReplyHandle, String) -> Boolean = { context, handle, text -> handle.send(context, text) }
   /** Before its handle lapses, a waiting order is expired here so its «vencida» line can still go out. */
   private const val EXPIRY_MARGIN_MILLIS = 2_000L
 
-  /** Opens the reply of an accepted message. The handle is read only when replies are on. */
-  internal fun openReply(context: Context, orders: Int, handle: () -> InstinctReplyHandle?): InstinctAckLedger.Ticket? {
+  /**
+   * Opens the reply of an accepted message ([message] is its short hash, for the log). The handle is read only when
+   * replies are on and the channel includes the chat: with «Bitácora» WhatsApp's «Responder» is never touched.
+   */
+  internal fun openReply(context: Context, orders: Int, handle: () -> InstinctReplyHandle?, message: String = ""): InstinctAckLedger.Ticket? {
     val app = context.applicationContext
     val settings = InstinctProposalSettings(app)
-    replyModeSource = { settings.replyMode() }
+    bind(app)
     if (settings.replyMode() == InstinctReplyMode.NEVER) return null
-    val ticket = acks.open(runCatching(handle).getOrNull(), orders) ?: return null
-    main.postDelayed({ sweepReplies(app) }, ProposalBook.TTL_MILLIS - EXPIRY_MARGIN_MILLIS)
+    val chat = settings.channel().usesChat
+    val ticket = acks.open(if (chat) runCatching(handle).getOrNull() else null, orders, message) ?: return null
+    if (chat) main.postDelayed({ sweepReplies(app) }, ProposalBook.TTL_MILLIS - EXPIRY_MARGIN_MILLIS)
     return ticket
   }
 
-  /** Sends [outgoing], if any. Without a «Responder» action or when WhatsApp cancels it, it is dropped and diagnosed. */
+  /** Tracks a deferred order for the log when this process no longer remembers its message (after a restart). */
+  internal fun adopt(context: Context, key: Long, message: String, entry: AckEntry): Boolean {
+    bind(context)
+    return acks.adopt(key, message, entry)
+  }
+
+  /**
+   * Sends [outgoing], if any: its events to the log's outbox (never blocking, never instead of anything), its text
+   * through WhatsApp. Without a «Responder» action or when WhatsApp cancels it, the text is dropped and diagnosed.
+   */
   internal fun reply(context: Context, outgoing: InstinctAckLedger.Outgoing<InstinctReplyHandle>?) {
     outgoing ?: return
+    if (outgoing.events.isNotEmpty()) InstinctLog.enqueue(context, outgoing.events, outgoing.message)
+    if (outgoing.text == null) return
     val handle = outgoing.handle ?: run {
       InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.REPLY_FAILED, "WhatsApp no ofreció Responder."); return
     }
@@ -333,7 +365,15 @@ object InstinctProposalCenter {
   }
 
   /** The outcome of [proposal] for Instinct. Only the first outcome of each line and one follow-up are ever sent. */
-  fun report(context: Context, proposalId: Long, entry: AckEntry) = reply(context, acks.report(proposalId, entry))
+  fun report(context: Context, proposalId: Long, entry: AckEntry) {
+    bind(context)
+    reply(context, acks.report(proposalId, entry))
+    // In the log a waiting order is closed when it lapses, whatever the chat's handle: check it then.
+    if (entry.kind == AckKind.WAITING && ackChannel().usesLog && replyMode() != InstinctReplyMode.NEVER) {
+      val app = context.applicationContext
+      main.postDelayed({ sweepLog(app) }, ProposalBook.TTL_MILLIS - EXPIRY_MARGIN_MILLIS)
+    }
+  }
 
   fun report(context: Context, proposal: ProposalBook.Proposal, result: PhoneActionResult) =
     report(context, proposal.id, InstinctAck.entry(proposal.order, result))
@@ -345,6 +385,19 @@ object InstinctProposalCenter {
       if (book.expireNow(id)) {
         cancelNotification(context, id)
         report(context, id, AckEntry(AckKind.EXPIRED, order, "venció sin que se confirmara; no se ejecutó."))
+      }
+    }
+  }
+
+  /** Waiting orders about to lapse, by their own age: they expire now and the log records «vencida». */
+  internal fun sweepLog(context: Context) {
+    val now = clock()
+    acks.waiting().forEach { id ->
+      val proposal = book.pending().firstOrNull { it.id == id } ?: return@forEach
+      if (now < proposal.createdAt + ProposalBook.TTL_MILLIS - EXPIRY_MARGIN_MILLIS) return@forEach
+      if (book.expireNow(id)) {
+        cancelNotification(context, id)
+        report(context, id, AckEntry(AckKind.EXPIRED, proposal.order, "venció sin que se confirmara; no se ejecutó."))
       }
     }
   }
@@ -361,8 +414,9 @@ object InstinctProposalCenter {
   }
 
   /** A deferred order: stored for later, never run now. Instinct hears «#insto-programada» or why not. */
-  private fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String, ticket: InstinctAckLedger.Ticket?, index: Int) {
-    when (val outcome = InstinctScheduler.schedule(context, check, fingerprint)) {
+  private fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String, ticket: InstinctAckLedger.Ticket?, index: Int,
+    message: String) {
+    when (val outcome = InstinctScheduler.schedule(context, check, fingerprint, message)) {
       is InstinctScheduler.Outcome.Refused -> reply(context, acks.resolve(ticket, index, AckEntry(AckKind.ERROR, check.order, outcome.why)))
       is InstinctScheduler.Outcome.Scheduled -> {
         notifyScheduled(context, outcome.order, "Instinct programó: ${PhoneCommandCodec.summary(check.command)}",
@@ -387,9 +441,16 @@ object InstinctProposalCenter {
     report(context, proposal.id, AckEntry(AckKind.WAITING, proposal.order, reason))
   }
 
-  /** The catalog to give Instinct, with the routines enabled now. */
-  fun catalog(context: Context, forChat: Boolean = false): String =
-    InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat)
+  /**
+   * The catalog to give Instinct, with the routines enabled now. With the log on, the copy to paste carries its
+   * address and token, because Instinct needs them; the chat copy ([forChat]) never does.
+   */
+  fun catalog(context: Context, forChat: Boolean = false): String {
+    val log = if (!InstinctProposalSettings(context).channel().usesLog) null
+      else if (forChat) InstinctCatalogLog.HIDDEN
+      else InstinctLogSettings(context).let { InstinctCatalogLog(it.url(), it.token()) }
+    return InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat, log)
+  }
 
   /**
    * Sends the catalog to Instinct through the newest valid «Responder» action. False when replies are off, there is
@@ -397,7 +458,9 @@ object InstinctProposalCenter {
    */
   fun sendCatalog(context: Context): Boolean {
     val handle = acks.latestHandle() ?: return false
-    val text = catalog(context, forChat = true).takeIf(InstinctAck::safe) ?: return false
+    val secrets = InstinctLogSettings(context).let { listOfNotNull(it.url(), it.token()) }
+    // Through WhatsApp: never the log's address nor its token.
+    val text = catalog(context, forChat = true).takeIf { InstinctAck.safe(it) && secrets.none(it::contains) } ?: return false
     val sent = runCatching { replySender(context.applicationContext, handle, text) }.getOrDefault(false)
     InstinctProposalIntake.diagnose(if (sent) InstinctProposalIntake.Diagnosis.REPLIED else InstinctProposalIntake.Diagnosis.REPLY_FAILED,
       if (sent) null else "WhatsApp no aceptó el mensaje.")

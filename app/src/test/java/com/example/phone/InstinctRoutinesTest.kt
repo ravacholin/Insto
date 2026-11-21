@@ -184,8 +184,8 @@ class InstinctRoutinesTest {
   @Test fun `ver catálogo is a read-only query`() {
     assertEquals(ProposalCheck.Query("ver catálogo", ProposalCheck.QueryKind.CATALOG), check("ver catálogo"))
     assertEquals(ProposalCheck.QueryKind.CATALOG, (check("Ver catalogo.") as ProposalCheck.Query).kind)
-    assertEquals("Protocolo Insto v2 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
-    assertEquals("Protocolo Insto v2 · rutinas habilitadas: Estudio, Noche.", InstinctProtocolCatalog.summary(listOf("Estudio", "Noche")))
+    assertEquals("Protocolo Insto v3 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
+    assertEquals("Protocolo Insto v3 · rutinas habilitadas: Estudio, Noche.", InstinctProtocolCatalog.summary(listOf("Estudio", "Noche")))
     assertTrue(check("ver catálogo completo") is ProposalCheck.Invalid)
   }
 
@@ -195,5 +195,13 @@ class InstinctRoutinesTest {
     val expected = InstinctProtocolCatalog.text(emptyList()) + "\n"
     if (System.getenv("INSTO_WRITE_CATALOG") == "1") file.writeText(expected)
     assertEquals("Regenerá docs/instinct-catalog.txt con INSTO_WRITE_CATALOG=1", expected, file.readText())
+  }
+
+  /** The log variant, as sent through WhatsApp: placeholders, never an address or a token. */
+  @Test fun `the reference copy of the log variant matches the generated catalog`() {
+    val file = listOf(File("docs/instinct-catalog-bitacora.txt"), File("../docs/instinct-catalog-bitacora.txt")).first { it.parentFile?.isDirectory == true }
+    val expected = InstinctProtocolCatalog.text(emptyList(), forChat = true, log = InstinctCatalogLog.HIDDEN) + "\n"
+    if (System.getenv("INSTO_WRITE_CATALOG") == "1") file.writeText(expected)
+    assertEquals("Regenerá docs/instinct-catalog-bitacora.txt con INSTO_WRITE_CATALOG=1", expected, file.readText())
   }
 }

@@ -164,6 +164,8 @@ data class ScheduledOrder(
   /** Random, carried only by Insto's own alarm PendingIntent. */
   val token: String = java.util.UUID.randomUUID().toString(),
   val state: State = State.PENDING,
+  /** The short id of Instinct's message (never its text), so a follow-up in the log names it even after a restart. */
+  val message: String = "",
 ) {
   enum class State { PENDING, CONSUMED }
   val summary: String get() = "$label: $inner"
@@ -242,6 +244,7 @@ class InstinctScheduleStore(private val file: File, private val clock: () -> Lon
       JSONObject().put("id", o.id).put("order", o.order).put("inner", o.inner).put("fireAt", o.fireAt).put("fingerprint", o.fingerprint)
         .put("label", o.label).put("createdAt", o.createdAt).put("token", o.token).put("state", o.state.name)
         .apply { o.condition?.let { put("condition", conditionCode(it)) } }
+        .apply { if (o.message.isNotEmpty()) put("message", o.message) }
     }).toString()
 
     fun decode(text: String): List<ScheduledOrder> {
@@ -251,7 +254,8 @@ class InstinctScheduleStore(private val file: File, private val clock: () -> Lon
         val o = array.getJSONObject(i)
         ScheduledOrder(o.getString("id"), o.getString("order"), o.getString("inner"), o.getLong("fireAt"), o.getString("fingerprint"),
           o.optString("condition").takeIf { it.isNotEmpty() }?.let(::condition), o.getString("label"), o.getLong("createdAt"),
-          o.getString("token"), ScheduledOrder.State.valueOf(o.getString("state")))
+          o.getString("token"), ScheduledOrder.State.valueOf(o.getString("state")),
+          InstinctLogEvents.messageId(o.optString("message")))
       }
     }
 

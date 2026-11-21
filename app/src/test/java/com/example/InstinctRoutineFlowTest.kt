@@ -140,7 +140,7 @@ class InstinctRoutineFlowTest {
     assertEquals(3, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
     assertEquals(before, titles().size)
     assertTrue(InstinctProposalCenter.book.pending().isEmpty())
-    assertEquals("#insto-ok ver catálogo → Protocolo Insto v2 · rutinas habilitadas: Estudio.", sent.single())
+    assertEquals("#insto-ok ver catálogo → Protocolo Insto v3 · rutinas habilitadas: Estudio.", sent.single())
     // Read-only answers go out under «Solo errores y esperas» too, and not under «Nunca».
     InstinctProposalSettings(app).setReplyMode(InstinctReplyMode.PROBLEMS)
     post("#insto ver catalogo")

@@ -9,9 +9,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -19,17 +22,27 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import com.example.data.PinnedContact
 import com.example.data.WhatsAppFlavor
 import com.example.phone.InstinctProposalIntake
 import com.example.phone.InstinctProposalSettings
+import com.example.phone.InstinctAckChannel
+import com.example.phone.InstinctLog
+import com.example.phone.InstinctLogConfig
+import com.example.phone.InstinctLogSettings
 import com.example.phone.InstinctReplyMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.example.ui.components.SettingsChoices
 import com.example.ui.components.SettingsDescription
 import com.example.ui.components.SettingsSwitch
@@ -54,6 +67,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
   val enabled = remember(revision) { settings.isEnabled() }
   val asksFirst = remember(revision) { settings.asksFirst() }
   val replyMode = remember(revision) { settings.replyMode() }
+  val channel = remember(revision) { settings.channel() }
   val listenerEnabled = remember(revision) {
     NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
   }
@@ -82,9 +96,15 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         "Solo usa el texto del resultado que ya te muestra a vos.")
       SettingsChoices(InstinctReplyMode.entries, replyMode, { settings.setReplyMode(it); revision++ }, label = ::replyModeLabel,
         itemModifier = { Modifier.testTag("instinct_reply_${it.name.lowercase()}") })
+      Text("Canal de estados", style = MaterialTheme.typography.bodyLarge)
+      SettingsDescription("Por dónde van esas respuestas. «Bitácora» las anota en una planilla de Google, a través de tu Apps " +
+        "Script, y no escribe nada en el chat. Las órdenes siguen llegando por WhatsApp.")
+      SettingsChoices(InstinctAckChannel.entries, channel, { settings.setChannel(it); revision++ }, label = ::channelLabel,
+        itemModifier = { Modifier.testTag("instinct_channel_${it.name.lowercase()}") })
+      if (channel.usesLog) InstinctLogConfiguration(revision) { revision++ }
       InstinctScheduledList(revision) { revision++ }
       InstinctRoutineSwitches(revision) { revision++ }
-      InstinctCatalogActions(replyMode, revision) { revision++ }
+      InstinctCatalogActions(replyMode, channel, revision) { revision++ }
       ProposalDiagnostics(contact, revision) { revision++ }
       if (flavor == WhatsAppFlavor.AUTO) SettingsDescription("Se usa la app de WhatsApp que Insto elige para enviar.")
     }
@@ -151,15 +171,16 @@ private fun InstinctRoutineSwitches(revision: Int, onChange: () -> Unit) {
 
 /** Copy the generated catalog, or send it to Instinct while a «Responder» action is valid. */
 @Composable
-private fun InstinctCatalogActions(replyMode: InstinctReplyMode, revision: Int, onChange: () -> Unit) {
+private fun InstinctCatalogActions(replyMode: InstinctReplyMode, channel: InstinctAckChannel, revision: Int, onChange: () -> Unit) {
   val context = LocalContext.current
   var notice by remember { mutableStateOf<String?>(null) }
-  val canSend = remember(revision, replyMode) {
-    replyMode != InstinctReplyMode.NEVER && com.example.phone.InstinctProposalCenter.acks.latestHandle() != null
+  val canSend = remember(revision, replyMode, channel) {
+    replyMode != InstinctReplyMode.NEVER && channel.usesChat && com.example.phone.InstinctProposalCenter.acks.latestHandle() != null
   }
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_catalog")) {
     Text("Instrucciones para Instinct", style = MaterialTheme.typography.bodyLarge)
-    SettingsDescription("Se generan con la gramática de Insto (${com.example.phone.InstinctProtocolCatalog.TITLE}) y las rutinas que habilitaste. Pegalas en el prompt de Instinct.")
+    SettingsDescription("Se generan con la gramática de Insto (${com.example.phone.InstinctProtocolCatalog.TITLE}) y las rutinas que habilitaste. Pegalas en el prompt de Instinct." +
+      if (channel.usesLog) " La copia incluye la URL y el token de la bitácora, porque Instinct los necesita para leerla; la que se envía por WhatsApp no los lleva." else "")
     OutlinedButton(onClick = {
       val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
       clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Instrucciones para Instinct",
@@ -171,6 +192,55 @@ private fun InstinctCatalogActions(replyMode: InstinctReplyMode, revision: Int, 
         else "No se pudieron enviar: WhatsApp no aceptó la respuesta o venció."
       onChange()
     }, modifier = Modifier.testTag("instinct_catalog_send")) { Text("Enviarlas a Instinct") }
+    notice?.let { SettingsDescription(it) }
+  }
+}
+
+internal fun channelLabel(channel: InstinctAckChannel): String = when (channel) {
+  InstinctAckChannel.WHATSAPP -> "WhatsApp"
+  InstinctAckChannel.BITACORA -> "Bitácora"
+  InstinctAckChannel.AMBOS -> "Ambos"
+}
+
+/**
+ * The Apps Script address and token, and «Probar bitácora». The token field starts empty and the saved token is
+ * only ever shown as its last four characters.
+ */
+@Composable
+private fun InstinctLogConfiguration(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val log = remember { InstinctLogSettings(context) }
+  val scope = rememberCoroutineScope()
+  var url by remember(revision) { mutableStateOf(log.url().orEmpty()) }
+  var token by remember(revision) { mutableStateOf("") }
+  var notice by remember { mutableStateOf<String?>(null) }
+  var busy by remember { mutableStateOf(false) }
+  val masked = remember(revision) { log.maskedToken() }
+  val urlError = url.isNotBlank() && !InstinctLogConfig.validUrl(url)
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_log")) {
+    Text("Bitácora", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("URL de la implementación de tu Apps Script (empieza con ${InstinctLogConfig.URL_PREFIX} y termina en " +
+      "${InstinctLogConfig.URL_SUFFIX}) y el token que definiste en el script. Se guardan solo en este teléfono, fuera de las copias de seguridad.")
+    OutlinedTextField(url, { url = it; notice = null }, label = { Text("URL del Apps Script") }, singleLine = true, isError = urlError,
+      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth().testTag("instinct_log_url"))
+    if (urlError) SettingsDescription("La URL tiene que empezar con ${InstinctLogConfig.URL_PREFIX} y terminar en ${InstinctLogConfig.URL_SUFFIX}.")
+    OutlinedTextField(token, { token = it; notice = null }, label = { Text("Token (guardado: $masked)") }, singleLine = true,
+      visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+      modifier = Modifier.fillMaxWidth().testTag("instinct_log_token"))
+    OutlinedButton(onClick = {
+      notice = if (log.save(url, token)) "Bitácora guardada." else
+        "No se guardó: revisá la URL y el token (de 8 a 200 caracteres, sin espacios)."
+      token = ""
+      onChange()
+    }, enabled = !busy, modifier = Modifier.testTag("instinct_log_save")) { Text("Guardar bitácora") }
+    OutlinedButton(onClick = {
+      busy = true; notice = "Probando…"
+      scope.launch {
+        notice = withContext(Dispatchers.IO) { InstinctLog.test(context) }
+        busy = false
+        onChange()
+      }
+    }, enabled = !busy && log.configured(), modifier = Modifier.testTag("instinct_log_test")) { Text("Probar bitácora") }
     notice?.let { SettingsDescription(it) }
   }
 }
@@ -206,6 +276,11 @@ private fun ProposalDiagnostics(contact: PinnedContact?, revision: Int, onRefres
       SettingsDescription("Última respuesta a Instinct ($replyAgo): ${reply.label}" +
         (InstinctProposalIntake.lastReplyDetail?.let { " $it" } ?: ""))
     }
+    val context = LocalContext.current
+    val logLine = remember(revision) {
+      if (InstinctProposalSettings(context).channel().usesLog || InstinctLog.outbox(context).size() > 0) InstinctLog.diagnosis(context) else null
+    }
+    logLine?.let { SettingsDescription(it, modifier = Modifier.testTag("instinct_log_diagnosis")) }
     TextButton(onClick = onRefresh) { Text("Actualizar diagnóstico") }
   }
 }

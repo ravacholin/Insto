@@ -182,7 +182,8 @@ data class ProposalFilterConfig(
 /**
  * Filters, in order, stopping at the first that fails: package, not a group, exact contact name, a message never seen
  * before. Instinct may write on its own initiative: no previous message from Insto is required. A message that fails is dropped: nothing about
- * it is kept, not even its hash. Only stage counters exist, for diagnostics.
+ * it is kept, not even its hash. Only stage counters exist, for diagnostics. An accepted message carries the first
+ * hex digits of its dedupe hash ([Outcome.Accepted.message]): the only way the log names it, never its text.
  */
 class InstinctProposalFilter(private val dedupe: MessageDedupe = MessageDedupe()) {
   enum class Stage { PACKAGE, GROUP, CONTACT, DUPLICATE, NO_PROPOSAL, ACCEPTED }
@@ -190,7 +191,7 @@ class InstinctProposalFilter(private val dedupe: MessageDedupe = MessageDedupe()
   sealed interface Outcome {
     val stage: Stage
     data class Dropped(override val stage: Stage) : Outcome
-    data class Accepted(val orders: List<String>) : Outcome { override val stage get() = Stage.ACCEPTED }
+    data class Accepted(val orders: List<String>, val message: String = "") : Outcome { override val stage get() = Stage.ACCEPTED }
   }
 
   private val counters = java.util.EnumMap<Stage, Int>(Stage::class.java)
@@ -214,7 +215,7 @@ class InstinctProposalFilter(private val dedupe: MessageDedupe = MessageDedupe()
     val orders = InstinctProposalProtocol.orders(text)
     if (orders.isEmpty()) return Outcome.Dropped(Stage.NO_PROPOSAL)
     if (!dedupe.firstTime(n.key, text, config.now)) return Outcome.Dropped(Stage.DUPLICATE)
-    return Outcome.Accepted(orders)
+    return Outcome.Accepted(orders, InstinctLogEvents.messageId(MessageDedupe.id(n.key, text)))
   }
 }
 
@@ -228,7 +229,7 @@ class MessageDedupe(private val retentionMillis: Long = 6 * 60 * 60_000L, privat
 
   @Synchronized fun firstTime(key: String, text: String, now: Long): Boolean {
     seen.entries.removeAll { now - it.value > retentionMillis || now < it.value }
-    val id = sha256("$key\u0000$text")
+    val id = id(key, text)
     if (id in seen) return false
     seen[id] = now
     while (seen.size > capacity) seen.remove(seen.keys.first())
@@ -236,6 +237,11 @@ class MessageDedupe(private val retentionMillis: Long = 6 * 60 * 60_000L, privat
   }
 
   @Synchronized fun clear() = seen.clear()
+
+  companion object {
+    /** The hash a message is remembered by: notification key and text. */
+    fun id(key: String, text: String): String = sha256("$key\u0000$text")
+  }
 }
 
 internal fun sha256(value: String): String =
