@@ -10,6 +10,8 @@ Con Gemini Decisions activado, Groq puede verificar una categoría o interpretar
 
 Las frases aprendidas, las estructuras con un parámetro (hora, duración o porcentaje) y el contexto operativo breve entre órdenes se consultan después de este catálogo y antes de Gemini; ver [Estructuras aprendidas y contexto operativo](LOCAL-LEARNING.md).
 
+Las [propuestas de Instinct](INSTINCT-PROPUESTAS.md) (`#insto <orden>`, desde 1.13.0) usan este mismo catálogo y nada más: cada línea pasa por `RequestSafetyPolicy`, `PhoneCommandParser` y `SemanticCommandGuard`, sin frases ni estructuras aprendidas, contexto operativo, Gemini ni Groq. Solo se aceptan alarmas, temporizadores, volumen, linterna, silencio/vibrar/No molestar, multimedia, abrir una app, ver alarmas o temporizadores, búsquedas de música, Spotify o YouTube y eventos de calendario con su confirmación. Llamadas, mensajes, archivos, lugares guardados, rutinas y planes de varios pasos están prohibidos aunque el catálogo los entienda, y nada se ejecuta sin confirmación.
+
 Una capacidad sin integración se reconoce y explica su limitación localmente. No se anuncia como implementada ni se ejecuta una alternativa. `instinct` y `unsupported` son salidas de derivación y no acciones Android.
 
 Total de entradas: 96.
@@ -328,7 +330,7 @@ Consultar notificaciones activas con acceso explícito.
 
 - Equivalentes: mostrá mis notificaciones / qué notificaciones tengo
 - Parámetros: ninguno
-- Permisos: acceso especial a notificaciones de Insto (separado del acceso multimedia)
+- Permisos: acceso especial a notificaciones de Insto (separado del acceso multimedia). La lectura pasiva de propuestas de Instinct es otro opt-in, apagado por defecto; ver [propuestas](INSTINCT-PROPUESTAS.md)
 - Ejecución: NotificationListenerService.getActiveNotifications
 - Resultado: Lista real de notificaciones activas; sin enviar su contenido a Gemini
 - Disponibilidad: adaptador implementado; depende de app, versión y permisos

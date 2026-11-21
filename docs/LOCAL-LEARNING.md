@@ -96,6 +96,14 @@ El panel también se cierra solo después de cada entrega a otra app. Ese cierre
 - No agrega confirmaciones ni saltea las que exigen Android o Insto.
 - No se agrega al texto que reciben Gemini o Groq.
 
+## Propuestas de Instinct: no se aprenden
+
+Las [propuestas de Instinct](INSTINCT-PROPUESTAS.md) (líneas `#insto <orden>`, desde 1.13.0) quedan fuera de las dos mejoras:
+
+- **No se interpretan con lo aprendido.** Solo pasan por la gramática explícita (`PhoneCommandParser`). No consultan frases aprendidas, estructuras ni el contexto operativo.
+- **No enseñan nada.** Confirmar una propuesta no crea ni refuerza frases en `LearnedPhraseStore`, no registra un uso y no aporta ejemplos a `PhrasePatterns`, aunque la acción salga bien. El texto lo escribió Instinct, no la persona.
+- **No son turnos de `OperationalContext`.** No cuentan como turno pertinente ni establecen la app o el medio de referencia para la próxima orden. (Al ejecutar un control multimedia sin app indicada, el ejecutor sigue leyendo el contexto vigente para elegir la sesión, como con cualquier pedido.)
+
 ## Mediciones
 
 Ver [métricas de aprendizaje local](metrics/local-learning.md).

@@ -90,6 +90,7 @@
         <receiver android:name=".phone.TemporaryModeReceiver" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
         </receiver>
+        <receiver android:name=".phone.InstinctProposalReceiver" android:exported="false" />
         <activity android:name=".phone.CallActionActivity" android:exported="false" />
         <activity android:name=".phone.CaptureActionActivity" android:exported="false" />
         <activity android:name=".phone.FileActionActivity" android:exported="false" />

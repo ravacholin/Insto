@@ -62,7 +62,13 @@ object AutoSendCoordinator {
    * Outcome bookkeeping of one automatic send, kept after [disarm] because confirmation arrives later. Holds no
    * content: only the package, the kind and selector strategy ids. Exactly one outcome is recorded per request.
    */
-  class Report(val request: Long, val packageName: String, val kind: AutoSendMetrics.Kind) {
+  class Report(
+    val request: Long,
+    val packageName: String,
+    val kind: AutoSendMetrics.Kind,
+    /** Digits of the armed recipient, to correlate a confirmed send with Instinct's proposals. Never logged. */
+    val recipientDigits: String? = null,
+  ) {
     @Volatile var strategy: String? = null
     /** The last reason a check could not proceed, recorded if the request ends without a touch. */
     @Volatile var failure: AutoSendMetrics.Outcome? = null
@@ -116,7 +122,7 @@ object AutoSendCoordinator {
         expectedAudioFileName?.startsWith("instinct_") == true -> AutoSendMetrics.Kind.AUDIO
         else -> AutoSendMetrics.Kind.FILE
       }
-      Report(requestId, targetPackage, kind)
+      Report(requestId, targetPackage, kind, recipientPhone?.let(com.example.whatsapp.PhoneNumberUtils::normalizeDigits))
     } else null
   }
 

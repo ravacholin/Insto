@@ -10,6 +10,10 @@ Se prefiere la app YouTube/Spotify instalada para abrir resultados mediante `ACT
 
 El [catálogo de intents](LOCAL-INTENTS.md) detalla parámetros, permisos y límites. Las secciones de versiones anteriores de este documento son historial. La entrega vigente está en [Insto 1.9.1](releases/Insto-1.9.1-disponibilidad-debug.md).
 
+## Propuestas de Instinct (1.13.0)
+
+Con el interruptor opcional **«Recibir propuestas de Instinct»**, apagado por defecto, Instinct puede responder con líneas `#insto <orden>`. Con el flotante abierto, la propuesta aparece como confirmación dentro de la sesión actual («Instinct propone: …»; «dale» o **Confirmar** la ejecutan, «no» o **Cancelar** la descartan). Nunca reemplaza un texto escrito, una grabación, una interpretación, una confirmación, una elección o un plan en curso: queda en espera y el panel lo indica. Con el flotante cerrado llega como notificación con **Confirmar** y **Descartar**. Nada se ejecuta sin confirmación y cada propuesta se ejecuta una sola vez. Ver [Propuestas de Instinct](INSTINCT-PROPUESTAS.md).
+
 # Instinct floating assistant
 
 ## Teléfono e Instinct: una sola entrada
@@ -462,3 +466,16 @@ Si el estado no es «listo», el botón **«Abrir el chat y enviar a mano»** ab
 **Recuperación.** Si no hubo toque, el aviso dice que no se envió nada y que el contenido quedó listo en WhatsApp. Si hubo un toque sin confirmación, pide revisar el chat antes de reenviar. Un toque incierto nunca se repite.
 
 Pruebas: `WhatsAppSelectorsTest` cubre 6 árboles sintéticos (3 de WhatsApp y 3 de Business), con un distractor y un caso ambiguo. Se suman `AutoSendMetricsTest` (privacidad y estados), `WhatsAppSelectorStrategyRegressionTest` (servicio integrado: un toque, ninguno ante la ambigüedad, adelanto por evento y métricas sin contenido) y `AutoSendHealthPanelTest`. Las regresiones anteriores pasan sin cambios. Falta probarlo con WhatsApp y WhatsApp Business reales en un teléfono.
+
+## Propuestas de Instinct en el panel (1.13.0)
+
+`MainViewModel` se registra en `InstinctProposalCenter` mientras `AssistActivity` está visible (`onStart`/`onStop`). Una propuesta validada llega como `ProposalBook.Proposal` y se muestra con el mecanismo de confirmación existente (`confirmation` + `needsConfirmation`), en una sesión nueva de `SessionLifecycle`. Reglas:
+
+- **No pisa lo que está en curso.** Se considera ocupado el panel con texto sin enviar, adjunto, audio retenido, captura, transcripción, interpretación, consulta previa, confirmación, aclaración, borrador semántico, plan, elección de app o contacto, o un pedido de permiso pendiente. La propuesta queda en espera (`proposalsWaiting`) y se muestra cuando el estado vuelve a estar libre.
+- **Se ejecuta solo con un `claim` exitoso** en `ProposalBook`, que es atómico: vencida (10 minutos), descartada, ya ejecutada o con la configuración cambiada, no corre.
+- **Se ejecuta como cualquier comando local:** `runPhoneCommand` sin `confirmed`, para que las confirmaciones propias de la acción sigan apareciendo. Un evento de calendario pasa por la vista previa del plan, como siempre.
+- **No es un turno del usuario:** no se registra en `OperationalContext` ni alimenta frases o estructuras aprendidas.
+- **Una orden nueva, «cancelar» o «no» descartan la propuesta mostrada.** Cerrar el panel devuelve las que no se resolvieron a notificación mientras sigan vigentes.
+- **Confirmar desde la notificación** abre `AssistActivity` con `ACTION_CONFIRM_INSTINCT_PROPOSAL`, el id y un token aleatorio. No arranca el micrófono. Si el panel ya tenía algo en curso, la propuesta queda en espera en lugar de ejecutarse encima.
+
+Pruebas: `InstinctProposalsTest` (protocolo, validación, filtros y registro, también en `scripts/test-phone-core.py`) e `InstinctProposalFlowTest` (Robolectric: interruptor apagado sin lecturas, notificación sin texto en los logs, filtros con notificaciones reales, espera con un borrador, idempotencia, vencimiento, cambio de contacto y token).

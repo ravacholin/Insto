@@ -149,6 +149,8 @@ data class FloatingAssistantState(
   val accessSettingsAction: String? = null,
   /** Evidence about automatic WhatsApp sending, computed when the panel opens. Null without a contact. */
   val autoSendHealth: com.example.assist.AutoSendHealth.Status? = null,
+  /** Instinct's proposals waiting until the request in progress ends; none is shown over a draft or a confirmation. */
+  val proposalsWaiting: Int = 0,
 )
 
 class MainViewModel @JvmOverloads constructor(
@@ -209,6 +211,19 @@ class MainViewModel @JvmOverloads constructor(
   private var patternExample: Pair<InterpretationRequest, PhoneCommand>? = null
   private var learnedCommandConfirmation = false
   private var semanticDraft: DraftPlan? = null
+  /** Instinct's proposal shown as the pending confirmation; executes only through [InstinctProposalCenter.claim]. */
+  private var activeProposal: ProposalBook.Proposal? = null
+  /** The command of a confirmed proposal while it runs: it never feeds the operational context or learning. */
+  private var proposalCommand: PhoneCommand? = null
+  private val waitingProposals = ArrayDeque<ProposalBook.Proposal>()
+  private var proposalsAttached = false
+  private val proposalListener = object : InstinctProposalCenter.Listener {
+    override fun onProposal(proposal: ProposalBook.Proposal) = receiveInstinctProposal(proposal)
+    override fun onNotUnderstood() {
+      if (proposalBusy()) return // Discreet: a request in progress keeps its own status line.
+      floatingState.value = floatingState.value.copy(status = InstinctProposalCenter.NOT_UNDERSTOOD + ". No se ejecutó nada.")
+    }
+  }
   private data class QueryPreview(val text: String, val generation: Long)
   private var pendingQuery: QueryPreview? = null
   private var approvedQueryText: String? = null
@@ -276,6 +291,7 @@ class MainViewModel @JvmOverloads constructor(
     // Cancelling ends the operational session: the next order cannot lean on what came before.
     operationalContext.clear()
     val hadWorkflow = activeWorkflow() != null
+    dropActiveProposal(); proposalCommand = null
     sessions.cancel(); floatingJob?.cancel()
     cancelClockAutomation?.invoke(); cancelClockAutomation = null
     workflow.cancel(); conversation.clear(); clarification=null; clarificationRequest=null; semanticDraft = null; pendingQuery = null; approvedQueryText = null
@@ -417,6 +433,21 @@ class MainViewModel @JvmOverloads constructor(
       }
       return
     }
+    activeProposal?.let { proposal ->
+      activeProposal = null
+      if (confirmation == proposal.command) {
+        confirmation = null
+        floatingState.value = floatingState.value.copy(needsConfirmation = false)
+        if (accept) executeInstinctProposal(proposal.id)
+        else {
+          InstinctProposalCenter.discard(getApplication(), proposal.id)
+          floatingState.value = floatingState.value.copy(status = "Propuesta de Instinct descartada. No se ejecutó nada.", error = null)
+          sessions.transition(floatingGeneration, com.example.session.SessionState.CANCELLED)
+        }
+        return
+      }
+      InstinctProposalCenter.discard(getApplication(), proposal.id)
+    }
     val learning = learningPreview
     learningPreview = null
     if (activeWorkflow()?.confirmed == false) {
@@ -542,7 +573,8 @@ class MainViewModel @JvmOverloads constructor(
         if (!inWorkflow) learnedPhrases.savePatternExample(request, command, result)
       }
     }
-    operationalContext.record(command, result)
+    // A proposal from Instinct is not the user's turn: it never becomes a reference for the next order.
+    if (command != proposalCommand) operationalContext.record(command, result)
     confirmation = result.confirmation
     if (result.needsCamera) cameraCommand = command
     if (result.needsContacts) contactsCommand = command
@@ -715,6 +747,7 @@ class MainViewModel @JvmOverloads constructor(
     }
     learningPreview = null
     patternExample = null
+    dropActiveProposal(); proposalCommand = null
     // A new request has one classification gateway. Continuations above retain their selected intent.
     semanticDraft = null; conversation.clear(); clarification = null; clarificationRequest = null
     confirmation=null; cameraCommand=null; contactsCommand=null; notificationsCommand=null; appChoiceCommand=null; contactChoiceCommand=null; calendarQuery=null
@@ -956,6 +989,121 @@ class MainViewModel @JvmOverloads constructor(
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, needsConfirmation = true, error = null,
       status = "El intento anterior pudo haberse realizado: ${PhoneCommandCodec.summary(command)}. " +
         "Revisalo antes de repetir. Confirmá solo si querés hacerlo de nuevo.")
+  }
+
+  /** The floating assistant is visible: Instinct's proposals go to this session instead of a notification. */
+  fun attachInstinctProposals() {
+    if (proposalsAttached) return
+    proposalsAttached = true
+    InstinctProposalCenter.attach(proposalListener)
+  }
+
+  /** The panel is no longer visible: proposals it could not show go back to notifications while they are valid. */
+  fun detachInstinctProposals() {
+    if (!proposalsAttached) return
+    proposalsAttached = false
+    InstinctProposalCenter.detach(proposalListener)
+    handBackProposals()
+  }
+
+  private fun handBackProposals() {
+    val shown = activeProposal?.takeIf { confirmation == it.command }
+    if (shown != null) {
+      activeProposal = null; confirmation = null
+      floatingState.value = floatingState.value.copy(needsConfirmation = false, status = null)
+    }
+    (listOfNotNull(shown) + waitingProposals).forEach { InstinctProposalCenter.handBack(getApplication(), it) }
+    waitingProposals.clear()
+    floatingState.value = floatingState.value.copy(proposalsWaiting = 0)
+  }
+
+  /** A shown proposal that the user replaced with another order is discarded: it never runs later. */
+  private fun dropActiveProposal() {
+    val proposal = activeProposal ?: return
+    activeProposal = null
+    InstinctProposalCenter.discard(getApplication(), proposal.id)
+  }
+
+  /**
+   * Busy means a request, draft, choice or confirmation is in progress; a proposal never replaces it. Typed text that
+   * was not sent is a draft too.
+   */
+  private fun proposalBusy(): Boolean {
+    val state = floatingState.value
+    return activeProposal != null || activeWorkflow() != null || semanticDraft != null || clarification != null ||
+      confirmation != null || pendingQuery != null || pendingFloatingAudio != null || decidingRequest || transcribingAudio ||
+      cameraCommand != null || contactsCommand != null || notificationsCommand != null || calendarQuery != null ||
+      state.text.isNotBlank() || state.attachment != null || state.contactOptions.isNotEmpty() || state.appOptions.isNotEmpty() ||
+      state.mode != FloatingMode.IDLE && state.mode != FloatingMode.TYPING
+  }
+
+  internal fun receiveInstinctProposal(proposal: ProposalBook.Proposal) {
+    if (proposalBusy()) {
+      if (waitingProposals.none { it.id == proposal.id }) waitingProposals.addLast(proposal)
+      floatingState.value = floatingState.value.copy(proposalsWaiting = waitingProposals.size)
+      return
+    }
+    presentProposal(proposal)
+  }
+
+  /** Shows the next waiting proposal once nothing is in progress. Expired or discarded ones are skipped. */
+  private fun presentWaitingProposal() {
+    while (waitingProposals.isNotEmpty() && !proposalBusy()) {
+      val next = waitingProposals.removeFirst()
+      floatingState.value = floatingState.value.copy(proposalsWaiting = waitingProposals.size)
+      if (InstinctProposalCenter.book.isPending(next.id)) { presentProposal(next); return }
+    }
+  }
+
+  private fun presentProposal(proposal: ProposalBook.Proposal) {
+    if (!InstinctProposalCenter.book.isPending(proposal.id)) return
+    learningPreview = null; patternExample = null
+    sessions.begin(com.example.session.SessionState.AWAITING_CONFIRMATION)
+    activeProposal = proposal
+    confirmation = proposal.command
+    floatingState.value = floatingState.value.copy(needsConfirmation = true, queryPreview = false, error = null,
+      proposalsWaiting = waitingProposals.size,
+      status = "Instinct propone: ${proposal.summary}. Confirmá o decí dale para hacerlo; si no, cancelala.")
+  }
+
+  /** «Confirmar» in an Instinct proposal notification. Never replaces a request in progress. */
+  fun confirmInstinctProposalFromNotification(id: Long, token: String?) {
+    if (proposalBusy()) {
+      val proposal = InstinctProposalCenter.book.pending().firstOrNull { it.id == id && it.token == token }
+      if (proposal == null) { retainDecisionRequest(unavailableProposal(InstinctProposalCenter.claim(getApplication(), id, token, fromNotification = true))); return }
+      receiveInstinctProposal(proposal)
+      floatingState.value = floatingState.value.copy(status = "Terminá o cancelá el pedido en curso: la propuesta de Instinct queda en espera.")
+      return
+    }
+    executeInstinctProposal(id, token, fromNotification = true)
+  }
+
+  private fun executeInstinctProposal(id: Long, token: String? = null, fromNotification: Boolean = false) {
+    when (val claim = InstinctProposalCenter.claim(getApplication(), id, token, fromNotification)) {
+      is ProposalBook.Claim.Granted -> {
+        val command = claim.proposal.command
+        if (!sessions.canExecute(floatingGeneration)) sessions.begin(com.example.session.SessionState.IDLE)
+        proposalCommand = command
+        routedRequestText = ""
+        retryLocalCommand = null; retryLocalText = null
+        // An event keeps its current confirmation: the plan preview before writing to the calendar.
+        if (command is PhoneCommand.CalendarEvent) {
+          sessions.transition(floatingGeneration, com.example.session.SessionState.AWAITING_CONFIRMATION)
+          previewWorkflow(listOf(command))
+        } else runPhoneCommand(command)
+      }
+      else -> {
+        sessions.transition(floatingGeneration, com.example.session.SessionState.FAILED)
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, error = unavailableProposal(claim), status = null)
+      }
+    }
+  }
+
+  private fun unavailableProposal(claim: ProposalBook.Claim): String = when (claim) {
+    ProposalBook.Claim.Expired -> "La propuesta de Instinct venció. No se ejecutó nada."
+    ProposalBook.Claim.Used -> "Esa propuesta ya se ejecutó o se descartó. No se repite."
+    ProposalBook.Claim.Changed -> "Cambió la configuración desde que llegó la propuesta. No se ejecutó nada."
+    else -> "Esa propuesta ya no está disponible. No se ejecutó nada."
   }
 
   private fun retainDecisionRequest(message: String) {
@@ -1218,6 +1366,8 @@ class MainViewModel @JvmOverloads constructor(
    */
   fun dismissFloatingAssistant(endOperationalContext: Boolean = true) {
     if (endOperationalContext) operationalContext.clear()
+    handBackProposals()
+    proposalCommand = null
     learningPreview = null
     patternExample = null
     cancelClockAutomation?.invoke()
@@ -1496,6 +1646,8 @@ class MainViewModel @JvmOverloads constructor(
   private var audioCallback: AudioDeviceCallback? = null
 
   init {
+    // A waiting proposal is shown as soon as the request in progress ends, whatever ended it.
+    viewModelScope.launch { floatingState.collect { if (waitingProposals.isNotEmpty()) presentWaitingProposal() } }
     val audioManager = application.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     val callback =
       object : AudioDeviceCallback() {
@@ -2063,6 +2215,7 @@ class MainViewModel @JvmOverloads constructor(
     amplitudeJob?.cancel()
     recorder.release()
     dismissFloatingAssistant(endOperationalContext = false)
+    detachInstinctProposals()
     super.onCleared()
   }
 
