@@ -9,8 +9,10 @@ import android.content.Intent
 import android.widget.RemoteViews
 import com.example.MainActivity
 import com.example.R
-import com.example.data.AssistantPreferencesRepository
-import kotlinx.coroutines.runBlocking
+import com.example.data.AssistantPreferencesCache
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class PingAssistWidgetProvider : AppWidgetProvider() {
 
@@ -19,23 +21,31 @@ class PingAssistWidgetProvider : AppWidgetProvider() {
     appWidgetManager: AppWidgetManager,
     appWidgetIds: IntArray,
   ) {
-    val contactName = runBlocking {
-      AssistantPreferencesRepository(context).getCurrentPreferences().pinnedContact?.displayName
+    val cache = AssistantPreferencesCache.of(context)
+    val cached = cache.current
+    if (cached != null) {
+      appWidgetIds.forEach { id -> updateWidget(context, appWidgetManager, id, cached.pinnedContact?.displayName) }
+      return
     }
-    for (widgetId in appWidgetIds) {
-      updateWidget(context, appWidgetManager, widgetId, contactName)
+    // Cold start: keep the broadcast alive while the first value loads, off the main thread.
+    val pending = goAsync()
+    CoroutineScope(Dispatchers.Default).launch {
+      try {
+        val name = cache.awaitCurrent().pinnedContact?.displayName
+        appWidgetIds.forEach { id -> updateWidget(context, appWidgetManager, id, name) }
+      } finally {
+        pending.finish()
+      }
     }
   }
 
   companion object {
-    fun requestUpdate(context: Context) {
+    /** [contactName] comes from the caller, which just wrote it, so the widget never shows the previous contact. */
+    fun requestUpdate(context: Context, contactName: String?) {
       val manager = AppWidgetManager.getInstance(context)
       val component = ComponentName(context, PingAssistWidgetProvider::class.java)
       val ids = manager.getAppWidgetIds(component)
       if (ids.isEmpty()) return
-      val contactName = runBlocking {
-        AssistantPreferencesRepository(context).getCurrentPreferences().pinnedContact?.displayName
-      }
       ids.forEach { id -> updateWidget(context, manager, id, contactName) }
     }
 

@@ -26,7 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.example.speech.GroqSettingsActivity
 import com.example.MainActivity
-import com.example.data.AssistantPreferencesRepository
+import com.example.data.AssistantPreferencesCache
 import com.example.context.SharedTextIntents
 import com.example.context.ContextRoutingEngine
 import com.example.ui.MainViewModel
@@ -35,7 +35,7 @@ import com.example.ui.screens.AssistOverlayScreen
 import com.example.ui.theme.PingAssistTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 
@@ -48,15 +48,18 @@ class AssistActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-    val prefs = runBlocking { AssistantPreferencesRepository(this@AssistActivity).getCurrentPreferences() }
-    if (intent?.action == ACTION_OPEN_CHAT && (ContextRoutingEngine.resolveRoute(this, prefs).contact ?: prefs.pinnedContact) == null) {
-      startActivity(Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_PROMPT_CONTACT_SETUP, true))
-      finish()
-      return
-    }
     if (intent?.action == ACTION_OPEN_CHAT) {
-      viewModel.openPinnedWhatsAppChat(prefs)
-      finish()
+      // Decided without blocking: immediate when preferences are loaded, otherwise once the first value arrives.
+      // Nothing is drawn meanwhile, so no screen shows stale or default preferences.
+      lifecycleScope.launch(start = CoroutineStart.UNDISPATCHED) {
+        val prefs = AssistantPreferencesCache.of(this@AssistActivity).awaitCurrent()
+        if ((ContextRoutingEngine.resolveRoute(this@AssistActivity, prefs).contact ?: prefs.pinnedContact) == null) {
+          startActivity(Intent(this@AssistActivity, MainActivity::class.java).putExtra(MainActivity.EXTRA_PROMPT_CONTACT_SETUP, true))
+        } else {
+          viewModel.openPinnedWhatsAppChat(prefs)
+        }
+        finish()
+      }
       return
     }
     viewModel.prepareFloatingAssistant()

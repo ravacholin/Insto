@@ -118,7 +118,8 @@ de borradores, para que «no, no le mandes nada» nunca complete un borrador.
 
 - `ALWAYS`: el comportamiento original, en cada llamada a Decisions.
 - `WHEN_DEGRADED` (**por defecto**): solo si Decisions falló hace poco (circuito con fallas o en prueba de
-  recuperación). Si no, Groq se consulta cuando hace falta.
+  recuperación) o, desde la Fase 5, si la extracción estructurada de Gemini falló de forma repetida dentro de la
+  ventana del circuito. Si no, Groq se consulta cuando hace falta.
 - `NEVER`: nunca en paralelo.
 
 La reproducción con los mismos casos y proveedores simulados mostró que con proveedores sanos la especulación gastaba
@@ -142,7 +143,7 @@ Los umbrales de `DecisionsPolicy` no cambiaron. Un fallo técnico (`Failure`) so
 mismo** pedido, o a Instinct si el pedido ya era una consulta general; nunca se usa para elegir otra intención. Las
 categorías quedan separadas así: no comprendido → `Rejected`; comprendido pero incompleto → `Incomplete` /
 `Clarification`; error del proveedor → `Failure`; acción no disponible o condición que impide ejecutar → `Rejected`
-con su mensaje. `Rejected` no lleva un motivo tipado (ver riesgos).
+con su mensaje. Desde la Fase 5, `Rejected` lleva además un motivo tipado (`RejectionReason`).
 
 ## C. Sesiones y ejecución
 
@@ -213,13 +214,116 @@ nuevo). Las capas se mantienen como defensa en profundidad.
 
 ## Riesgos residuales
 
-- `Rejected` no distingue con un tipo «no comprendido», «no disponible» y «condición»; solo el mensaje los diferencia.
 - El ledger vive en memoria del ViewModel: al cerrar el asistente se pierde. El reintento automático tampoco
   sobrevive al cierre, así que no hay una ruta de repetición afectada, pero un pedido nuevo idéntico se ejecuta como
   pedido nuevo.
-- `REJECTED` del cronómetro por accesibilidad («no pude comprobar el cambio») puede ocurrir después de tocar
-  controles; se registra como fallido, aunque el estado real es incierto. Conviene marcarlo `UNCERTAIN` en el futuro.
-- `WHEN_DEGRADED` usa solo las fallas de Decisions; una extracción de Gemini que falla seguido no reactiva la
-  especulación.
 - Las consultas del SMN y del calendario no pasan por `EXECUTING`: son lecturas sin efectos externos y conservan sus
   propias comprobaciones de identidad.
+- Resueltos en la Fase 5 (ver abajo): motivo tipado en `Rejected`, `REJECTED` del cronómetro como incierto y
+  especulación ante fallas de la extracción de Gemini.
+
+## Seguimiento: lecturas no bloqueantes, dependencias y riesgos residuales
+
+### Fase 1 — Sin `runBlocking` en el hilo principal
+
+Antes había 10 lecturas de DataStore bloqueantes en código de producción: 5 en `MainViewModel` (`runBlockingPrefs`),
+`AssistActivity.onCreate`, `PingQuickSettingsTileService.onStartListening`, dos en `PingAssistWidgetProvider` y una
+en `PlatformActionExecutor` (envío confirmado de WhatsApp). Las tres últimas no estaban en el análisis original, pero
+el criterio era que no quedara ninguna.
+
+- **`AssistantPreferencesCache`** (`com.example.data`): la crea `InstoApplication.onCreate` y expone
+  `StateFlow<AssistantPreferences?>` (`stateIn(Eagerly, null)` sobre el flujo del repositorio), `current` (nunca
+  bloquea) y `awaitCurrent()` (suspende solo hasta el primer valor). Un `IOException` de DataStore se trata como
+  preferencias vacías, como recomienda DataStore, en lugar de dejar la caché en `null` para siempre.
+- **`MainViewModel`**: `prepareFloatingAssistant` aplica el valor cacheado; en arranque en frío lanza la carga en
+  `viewModelScope` y el panel muestra «Instinct» hasta que llega. Las rutas que leen `floatingPrefs` justo después
+  (`dispatchFloatingAudio`, `dispatchFloatingTextQuery`, `sendFloatingAttachment`) son `suspend` y esperan dentro de
+  la corrutina del pedido, así que cancelar el pedido cancela la espera; después comprueban la identidad del pedido.
+  `openFloatingInstinct` y `openFloatingInstinctManually` corren en una corrutina `UNDISPATCHED`: con la caché cargada
+  se ejecutan de forma síncrona, igual que antes. En las sesiones de grabación el micrófono arranca antes de leer
+  preferencias, para no perder audio.
+- **`AssistActivity`**: `ACTION_OPEN_CHAT` decide en `lifecycleScope` y no dibuja nada mientras tanto.
+- **Tile**: pinta con el valor cacheado (o un estado neutro, sin «Set Contact») y se actualiza con cada cambio
+  mientras el sistema lo escucha (`onStartListening` → `onStopListening`).
+- **Widget**: usa el valor cacheado; en frío, `goAsync()` y carga fuera del hilo principal. `requestUpdate` recibe el
+  nombre recién guardado, para no mostrar el contacto anterior.
+- **`PlatformActionExecutor`**: el envío confirmado usa el valor cacheado; si todavía no cargó (no ocurre después de
+  una confirmación), no envía y pide reintentar, en lugar de elegir otra variante de WhatsApp.
+
+Pruebas: `NoBlockingCallsInProductionTest` recorre `app/src/main` y falla ante cualquier `runBlocking` (allowlist
+vacía); `AssistantPreferencesCacheTest` (null hasta el primer valor, espera sin bloquear, sigue cada cambio, archivo
+ilegible) y `AssistantPreferencesCacheRepositoryTest` (escrituras reales del repositorio llegan a la caché). Las
+pruebas Robolectric usan `TestInstoApplication`, que arranca con la caché cargada, y `awaitCachedPreferences` después
+de escribir preferencias, porque la caché las recibe de forma asíncrona.
+
+### Fase 3 — Dependencias y plugins
+
+- **Plugins quitados**: KSP, google-services y secrets (con sus bloques `secrets {}` y `googleServices {}`, la
+  importación de `MissingGoogleServicesStrategy`, `googleServices.missing.passthrough` y `.env.example`). Nada leía
+  `BuildConfig.GEMINI_API_KEY`: la clave de Gemini vive en el Keystore. `.gitignore` conserva `.env` como protección.
+- **Librerías quitadas**: las 25 líneas comentadas y su catálogo (Room, Moshi, Retrofit, Coil, CameraX, Firebase,
+  Credentials, Navigation, Accompanist, play-services-location, logging-interceptor), más `ui-tooling-preview` (no hay
+  `@Preview`), `espresso-core` y el Compose BOM / `ui-test-junit4` de `androidTest` (las pruebas instrumentadas no
+  los usan). `ui-tooling` queda en `debugImplementation` como herramienta de depuración.
+- **Catálogo**: plugins 5 → 2, versiones 41 → 15, librerías 51 → 25; dependencias declaradas en `app` 31 → 27 y 0
+  comentadas. Artefactos resueltos en release 106 → 131: Compose 1.11 se reparte en más módulos.
+- **Versiones**: Compose BOM 2024.09.00 → 2026.06.01 (Compose UI 1.11.4, Material 3 1.4.0), lifecycle 2.8.7 →
+  2.10.0, activity-compose 1.10.1 → 1.13.0, coroutines 1.10.2 → 1.11.0, Robolectric 4.16.1 → 4.18.1, androidx.test
+  core/runner 1.6.x → 1.7.0, org.json 20240303 → 20260814 (ahora en el catálogo). Compose BOM ≥ 2026.08 (Compose 1.12,
+  Material 3 1.5) y lifecycle 2.11 exigen `compileSdk 37`; no se subió `compileSdk` en este cambio. OkHttp sigue en
+  4.12.0.
+- **Lint**: el baseline perdió solo sus 13 entradas obsoletas (OkHttp 4.10.0, logging-interceptor, Retrofit, Moshi,
+  play-services-location, las versiones ya subidas y `UseTomlInstead` del `org.json` suelto); no se agregó ninguna.
+- **CI**: `.github/dependabot.yml` (Gradle y GitHub Actions, semanal, grupos `androidx` y `kotlin`, sin OkHttp 5) y
+  un paso que compara el SHA-256 de `app/libs/android-vad-webrtc-2.0.10.aar` con `app/libs/README.md`.
+
+### Fase 5 — Riesgos residuales
+
+- **Motivo tipado.** `InterpretationResult.Rejected(message, reason = NOT_UNDERSTOOD)` con `RejectionReason`:
+  `NOT_UNDERSTOOD`, `UNAVAILABLE`, `BLOCKING_CONDITION`, `UNSAFE_OR_HYPOTHETICAL` y `OUT_OF_SCOPE`. Los mensajes no
+  cambiaron. `RequestSafetyPolicy.refusal` separa hipótesis o cita y negación (`UNSAFE_OR_HYPOTHETICAL`), condición
+  (`BLOCKING_CONDITION`, con el mismo mensaje que la negación) y restricción de ruta (`UNAVAILABLE`);
+  `rejection(text)` sigue devolviendo el texto para sus otros llamadores. `PhoneRoute.Unsupported` y
+  `ConversationResult.Prompt` también llevan motivo (por defecto `UNAVAILABLE` y `NOT_UNDERSTOOD`), así que el que
+  viene del registro o del parser llega al coordinador. Casos asignados a mano: pedido pendiente →
+  `BLOCKING_CONDITION`; «Pedido cancelado.» → `UNSAFE_OR_HYPOTHETICAL`; acción del teléfono como tema de una búsqueda
+  o un mensaje y clima fuera del alcance del SMN → `OUT_OF_SCOPE`; las demás objeciones del `SemanticCommandGuard` y
+  de la validación de propuestas → `NOT_UNDERSTOOD`.
+- **Cronómetro por accesibilidad.** «No pude comprobar el cambio del cronómetro» se sigue mostrando igual
+  (`REJECTED`), pero lleva `effectUnverified = true` y el ledger lo registra como `DISPATCHED_UNCERTAIN`. Reenviar el
+  mismo pedido pide una confirmación nueva («El intento anterior pudo haberse realizado…») y no vuelve a abrir el
+  Reloj. «Activá Accesibilidad…» (nada se tocó) sigue siendo `FAILED` y se puede reintentar. Se marca incierto todo
+  `fail()` de la automatización, también cuando todavía no había tocado ningún control: es el lado seguro.
+- **Especulación ante fallas de extracción.** El coordinador observa la extracción de Gemini con una segunda
+  instancia de `DecisionsCircuitBreaker` (`record`, sin bloquear llamadas ni hacer pruebas de recuperación). Con dos
+  fallas seguidas (o una de cuota o «no disponible») se abre por 30 s, y mientras `openRecently()` sea verdadero
+  `WHEN_DEGRADED` vuelve a consultar a Groq en paralelo. Una extracción correcta lo cierra. Umbrales de
+  `DecisionsPolicy` sin cambios. Cifras en `docs/metrics/reliability-before-after.md`.
+- **`GroqKeyStore`.** `read()` devuelve `StoredKey`: `Missing`, `Present(value)` o `Unreadable` (clave del Keystore
+  invalidada o reemplazada, archivo dañado). `readValue()` / `GeminiSettings.readKey()` solo devuelven una clave
+  válida, así que una ilegible nunca habilita Decisions ni Groq. La pantalla «Voz e IA» muestra «Clave ilegible» y
+  «La clave guardada no se puede leer; volvé a cargarla.» para cada proveedor afectado, y permite borrar la de Groq.
+  `toString()` no incluye el valor y no se registra nada. La escritura sigue siendo atómica (archivo temporal y
+  `renameTo`). La clave AES es inyectable para pruebas.
+
+Pruebas nuevas: `RejectionReasonTest`; `ActionExecutionLedgerTest.anAutomationThatCouldNotVerifyItsEffectIsUncertainNotFailed`;
+`StopwatchAccessibilityRoutingTest.retryAfterAnUnverifiedStopwatchChangeAsksForANewConfirmation` (falla si se quita
+`effectUnverified`); `DecisionsCircuitBreakerTest.observedExtractionOpensOnlyAfterRepeatedRecentFailuresAndNeverBlocks`;
+escenario `extraction_5xx_sparse` y aserciones de reactivación en `InterpretationRoutingMetricsTest`;
+`GroqKeyStoreTest` (Keystore simulado: invalidación, clave reemplazada, archivo dañado, recarga, valor oculto);
+`KeySettingsUnreadableTest` (Robolectric, pantalla de ajustes). `WeatherIntentTest` ahora espera `OUT_OF_SCOPE` en
+el pedido de lluvia fuera de alcance (antes comparaba con el motivo por defecto).
+
+### Pendiente de prueba en un teléfono real
+
+- Arranque en frío real: abrir el asistente, el tile y el widget recién iniciado el proceso, y confirmar que no hay
+  bloqueo ni pantalla con preferencias por defecto (Robolectric solo cubre el camino con la caché cargada y la caché
+  aislada).
+- Tile de ajustes rápidos: actualización mientras está visible al cambiar el contacto.
+- Widget en arranque en frío (`goAsync`) y después de guardar un contacto.
+- APK debug con las dependencias nuevas (Compose 1.11, lifecycle 2.10, activity 1.13, coroutines 1.11): que abra y se
+  comporte igual.
+- Cronómetro de Reloj de Google con el servicio de accesibilidad real cuando la verificación falla después de tocar
+  un control.
+- Una clave invalidada de verdad por Android Keystore (por ejemplo al quitar el bloqueo de pantalla) y su recarga.
+

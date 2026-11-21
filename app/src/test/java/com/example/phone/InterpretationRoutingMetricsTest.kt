@@ -64,6 +64,8 @@ class InterpretationRoutingMetricsTest {
     val extraction: Fault = Fault.NONE,
     val groq: Fault = Fault.NONE,
     val decisionsUnsupported: Boolean = false,
+    /** Human pause between requests. Shorter pauses keep repeated extraction failures inside the circuit's window. */
+    val pauseMs: Long = 5_000,
   )
 
   private val scenarios = listOf(
@@ -73,6 +75,8 @@ class InterpretationRoutingMetricsTest {
     Scenario("decisions_unsupported", decisionsUnsupported = true),
     Scenario("extraction_5xx", extraction = Fault.SERVER),
     Scenario("extraction_timeout", extraction = Fault.TIMEOUT),
+    // Same failures, but too far apart: each one is outside the previous one's recovery window.
+    Scenario("extraction_5xx_sparse", extraction = Fault.SERVER, pauseMs = 40_000),
     Scenario("all_providers_down", decisions = Fault.SERVER, extraction = Fault.SERVER, groq = Fault.SERVER),
   )
 
@@ -93,10 +97,11 @@ class InterpretationRoutingMetricsTest {
     fun line(): String = String.format(Locale.ROOT,
       "ROUTING_METRICS %s cases=%d correct=%d/%d (%.2f%%) incorrect_accepted=%d false_rejections=%d unsafe=%d wrong_instinct=%d " +
         "lost_parameters=%d decisions=%d gemini_extraction=%d groq=%d groq_verify=%d calls_per_request=%.3f p50_ms=%d p95_ms=%d " +
-        "provider_requests=%d provider_p50_ms=%d provider_p95_ms=%d",
+        "provider_requests=%d provider_p50_ms=%d provider_p95_ms=%d provider_mean_ms=%d",
       label, cases, correct, positive, 100.0 * correct / positive, incorrect, falseRejections, unsafe, wrongInstinct,
       lostParameters, counts.decisions, counts.extraction, counts.groq, counts.verify,
-      total().toDouble() / cases, p(.5), p(.95), providerLatencies.size, p(.5, providerLatencies), p(.95, providerLatencies))
+      total().toDouble() / cases, p(.5), p(.95), providerLatencies.size, p(.5, providerLatencies), p(.95, providerLatencies),
+      if (providerLatencies.isEmpty()) 0 else providerLatencies.sum() / providerLatencies.size)
   }
 
   private suspend fun fault(fault: Fault, provider: String) {
@@ -112,6 +117,7 @@ class InterpretationRoutingMetricsTest {
     val parser = PhoneCommandParser(::now)
     // One breaker per run, on virtual time, as one app process would keep it across requests.
     val breaker = DecisionsCircuitBreaker(clock = { currentTime })
+    val extractionHealth = DecisionsCircuitBreaker(clock = { currentTime })
     for (case in corpus()) {
       val counts = summary.counts
       val misleading = listOf(PhoneCommand.Torch(true))
@@ -151,7 +157,7 @@ class InterpretationRoutingMetricsTest {
         case.group == "paraphrase"
       }
       val coordinator = GeminiCoordinator(HybridPhoneRouter({ true }, decisions), extraction, verifier = verifier,
-        fallback = groq, breaker = breaker, speculation = speculation)
+        fallback = groq, breaker = breaker, speculation = speculation, extractionHealth = extractionHealth)
       val started = currentTime
       val callsBefore = summary.total()
       val result = coordinator.interpret(InterpretationRequest(case.text, now = now()), parser.parse(case.text))
@@ -159,7 +165,7 @@ class InterpretationRoutingMetricsTest {
       if (summary.total() > callsBefore) summary.providerLatencies += currentTime - started
       record(summary, case, result)
       // Requests are separated by a human pause; the breaker's recovery window runs on the same clock.
-      delay(5_000)
+      delay(scenario.pauseMs)
     }
     return summary
   }
@@ -207,6 +213,15 @@ class InterpretationRoutingMetricsTest {
         if (policy == FallbackSpeculation.WHEN_DEGRADED) assertTrue(summary.label, summary.correct >= always.correct)
       }
     }
+    // Recent, repeated extraction failures reactivate speculation under the default; far-apart ones do not.
+    for (name in listOf("extraction_5xx", "extraction_timeout")) {
+      val default = results.getValue(name to FallbackSpeculation.WHEN_DEGRADED)
+      val never = results.getValue(name to FallbackSpeculation.NEVER)
+      assertTrue(default.label, default.counts.groq > never.counts.groq)
+      assertTrue(default.label, default.providerLatencies.sum() < never.providerLatencies.sum())
+    }
+    val sparse = results.getValue("extraction_5xx_sparse" to FallbackSpeculation.WHEN_DEGRADED)
+    assertEquals(sparse.label, results.getValue("extraction_5xx_sparse" to FallbackSpeculation.NEVER).counts.groq, sparse.counts.groq)
     val healthyAlways = results.getValue("healthy" to FallbackSpeculation.ALWAYS)
     val healthyDefault = results.getValue("healthy" to FallbackSpeculation.WHEN_DEGRADED)
     assertTrue("Healthy providers: speculation must not spend more Groq calls than needed",

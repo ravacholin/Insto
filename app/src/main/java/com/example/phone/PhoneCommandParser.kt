@@ -123,11 +123,11 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       return PhoneRoute.Unsupported("Ese pedido del teléfono todavía no está disponible. Podés abrir el Reloj o los ajustes para completarlo.")
     }
     if (Regex("^(?:necesito|quiero|me|pone|pon|encende|encender|encendeme|enciende|prende|prender|prendeme|apaga|apagar|apagame|activa|activar|inicia|iniciar|configura)\\b.*\\b(?:linterna|alarma|timer|temporizador|cronometro|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
-      return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.", recoverable = true)
+      return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.", recoverable = true, reason = RejectionReason.NOT_UNDERSTOOD)
     }
     if (requestHeadStart(original) != 0 &&
       Regex("\\b(?:linterna|alarmas?|timers?|temporizadores?|cronometro|volumen|wifi|bluetooth)\\b").containsMatchIn(s)) {
-      return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.", recoverable = true)
+      return PhoneRoute.Unsupported("Reconocí un pedido del teléfono, pero no todos sus detalles. No se envió a Instinct. Podés reformularlo.", recoverable = true, reason = RejectionReason.NOT_UNDERSTOOD)
     }
     return PhoneRoute.Instinct
   }

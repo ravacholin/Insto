@@ -1,6 +1,7 @@
 package com.example
 
 import android.app.Application
+import com.example.testsupport.awaitCachedPreferences
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
@@ -123,6 +124,7 @@ class FloatingContextTest {
       }))
     try {
       withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
+      awaitCachedPreferences(app) { it.pinnedContact?.phoneNumber == "+447700900123" }
       shadowOf(app.packageManager).installPackage(PackageInfo().apply {
         packageName = "com.whatsapp"; applicationInfo = ApplicationInfo().apply { packageName = "com.whatsapp" }
       })

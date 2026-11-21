@@ -87,7 +87,7 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
   fun resolve(id: String, text: String): PhoneRoute {
     val d = byId[id] ?: throw DecisionException("Intent ajeno al catálogo. El pedido se conserva.")
     d.unavailable?.let { return PhoneRoute.Unsupported(it) }
-    RequestSafetyPolicy.rejection(text)?.let { return PhoneRoute.Unsupported(it) }
+    RequestSafetyPolicy.refusal(text)?.let { return PhoneRoute.Unsupported(it.message, reason = it.reason) }
     val request = FoldedRequest.of(text)
     val syntax = PhoneCommandParser.canonicalRequest(PhoneCommandParser.normalize(text))
     if (matchPhrase(syntax) == null && RequestSafetyPolicy.hasJoinedActions(request.text))
@@ -98,14 +98,14 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
         Regex("\\b(?:despues|luego|manana|hoy)\\b").containsMatchIn(syntax) ||
         (parsed !is PhoneRoute.Local && (text.trimStart().firstOrNull() in listOf('¿', '"', '“', '«') || RequestSafetyPolicy.isQuestion(syntax) ||
           RequestSafetyPolicy.isExplicitQuery(syntax) || Regex("^(?:no |nunca |explica|conta|como |que es )").containsMatchIn(syntax))))) {
-      return PhoneRoute.Unsupported("El pedido incluye datos que esta acción no representa. No se ejecutó.")
+      return PhoneRoute.Unsupported("El pedido incluye datos que esta acción no representa. No se ejecutó.", reason = RejectionReason.NOT_UNDERSTOOD)
     }
     return when {
       parsed is PhoneRoute.Local && d.accepts(parsed.command) -> parsed
       // An explicit restriction or conflicting local interpretation cannot be erased by a fixed choice.
       parsed is PhoneRoute.Unsupported && !parsed.recoverable -> parsed
       d.fixed != null && parsed is PhoneRoute.Local && !(parsed.command is PhoneCommand.OpenApp &&
-        (d.fixed as? PhoneCommand.Platform)?.action in setOf(PlatformAction.DIALER_OPEN,PlatformAction.FILES_BROWSE,PlatformAction.ACCESSIBILITY_SETTINGS,PlatformAction.DISPLAY_SETTINGS,PlatformAction.RECORDER_OPEN,PlatformAction.CALENDAR_AGENDA,PlatformAction.ROUTINE_IMPORT)) -> PhoneRoute.Unsupported("La acción reconocida no coincide con el pedido. No se ejecutó; reformulalo.")
+        (d.fixed as? PhoneCommand.Platform)?.action in setOf(PlatformAction.DIALER_OPEN,PlatformAction.FILES_BROWSE,PlatformAction.ACCESSIBILITY_SETTINGS,PlatformAction.DISPLAY_SETTINGS,PlatformAction.RECORDER_OPEN,PlatformAction.CALENDAR_AGENDA,PlatformAction.ROUTINE_IMPORT)) -> PhoneRoute.Unsupported("La acción reconocida no coincide con el pedido. No se ejecutó; reformulalo.", reason = RejectionReason.NOT_UNDERSTOOD)
       d.fixed != null -> PhoneRoute.Local(d.fixed)
       parsed is PhoneRoute.Clarify -> parsed.copy(context = "intent:$id")
       else -> PhoneRoute.Clarify(d.prompt, "intent:$id")

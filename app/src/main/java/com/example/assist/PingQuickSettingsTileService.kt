@@ -7,17 +7,52 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import com.example.context.ContextRoutingEngine
 import com.example.data.AssistantActivationMode
-import com.example.data.AssistantPreferencesRepository
-import kotlinx.coroutines.runBlocking
+import com.example.data.AssistantPreferences
+import com.example.data.AssistantPreferencesCache
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 
 class PingQuickSettingsTileService : TileService() {
+  /** Lives from onStartListening to onStopListening: the tile follows preference changes only while visible. */
+  private var listening: CoroutineScope? = null
 
   override fun onStartListening() {
     super.onStartListening()
-    val prefs = runBlocking { AssistantPreferencesRepository(this@PingQuickSettingsTileService).getCurrentPreferences() }
-    val route = ContextRoutingEngine.resolveRoute(this, prefs)
+    val cache = AssistantPreferencesCache.of(this)
+    // Paint at once from the cache (or neutral during a cold start), then whenever the value changes.
+    render(cache.current)
+    listening?.cancel()
+    listening = MainScope().also { scope ->
+      scope.launch { cache.preferences.filterNotNull().collect { render(it) } }
+    }
+  }
 
+  override fun onStopListening() {
+    listening?.cancel()
+    listening = null
+    super.onStopListening()
+  }
+
+  override fun onDestroy() {
+    listening?.cancel()
+    listening = null
+    super.onDestroy()
+  }
+
+  private fun render(prefs: AssistantPreferences?) {
     val tile = qsTile ?: return
+    if (prefs == null) {
+      // Not loaded yet: neither a contact nor a missing-contact prompt, since neither is known.
+      tile.state = Tile.STATE_INACTIVE
+      tile.label = "PingAssist"
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = null
+      tile.updateTile()
+      return
+    }
+    val route = ContextRoutingEngine.resolveRoute(this, prefs)
     val contact = route.contact
     if (contact != null) {
       tile.state = Tile.STATE_ACTIVE

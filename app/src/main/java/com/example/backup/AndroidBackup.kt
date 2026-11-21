@@ -87,7 +87,7 @@ class StoreCredentialAccess(context: Context) : CredentialAccess {
   private val groq = GroqKeyStore(context, "groq")
   private val geminiKeys = GroqKeyStore(context, "gemini")
   private val gemini = GeminiSettings(context)
-  override fun groqKey() = groq.read()
+  override fun groqKey() = groq.readValue()
   override fun saveGroqKey(value: String) = groq.save(value)
   override fun clearGroqKey() = groq.clear()
   override fun geminiKey() = gemini.readKey()

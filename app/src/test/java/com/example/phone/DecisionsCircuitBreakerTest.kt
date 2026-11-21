@@ -53,4 +53,21 @@ class DecisionsCircuitBreakerTest {
     }
     assertNotNull(breaker.acquire())
   }
+
+  @Test fun observedExtractionOpensOnlyAfterRepeatedRecentFailuresAndNeverBlocks() {
+    var now = 0L
+    val health = DecisionsCircuitBreaker(clock = { now })
+    health.record(GeminiFailureKind.SERVER)
+    assertFalse("One failure is not repeated", health.openRecently())
+    health.record(GeminiFailureKind.TIMEOUT)
+    assertTrue(health.openRecently())
+    now += 29_999
+    assertTrue(health.openRecently())
+    now += 1
+    assertFalse("Outside the recovery window the failures are no longer recent", health.openRecently())
+    health.record(GeminiFailureKind.SERVER)
+    assertTrue(health.openRecently())
+    health.record(null)
+    assertFalse("A successful extraction closes it", health.openRecently())
+  }
 }

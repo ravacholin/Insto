@@ -1,6 +1,7 @@
 package com.example
 
 import android.app.Application
+import com.example.testsupport.awaitCachedPreferences
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -32,6 +33,7 @@ class InstinctEntryPointsTest {
   @Before fun configureInstinct() {
     AutoSendCoordinator.disarm()
     runBlocking { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
+    awaitCachedPreferences(app) { it.pinnedContact?.phoneNumber == "+447700900123" }
     shadowOf(app.packageManager).installPackage(PackageInfo().apply {
       packageName = "com.whatsapp"
       applicationInfo = ApplicationInfo().apply { packageName = "com.whatsapp" }

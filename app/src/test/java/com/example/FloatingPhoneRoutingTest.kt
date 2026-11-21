@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.testsupport.localActionDecisions
+import com.example.testsupport.awaitCachedPreferences
 
 import android.app.Application
 import android.content.Intent
@@ -126,6 +127,7 @@ class FloatingPhoneRoutingTest {
     val disconnect = ConnectedAccessibility.start(app)
     try {
       withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
+      awaitCachedPreferences(app) { it.pinnedContact?.phoneNumber == "+447700900123" }
       shadowOf(app.packageManager).installPackage(PackageInfo().apply {
         packageName = "com.whatsapp"
         applicationInfo = ApplicationInfo().apply { packageName = "com.whatsapp" }

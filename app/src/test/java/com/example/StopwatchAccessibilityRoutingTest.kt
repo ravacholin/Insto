@@ -51,6 +51,33 @@ class StopwatchAccessibilityRoutingTest {
     } finally { vm.dismissFloatingAssistant(); disconnect(); Dispatchers.resetMain() }
   }
 
+  @Test fun retryAfterAnUnverifiedStopwatchChangeAsksForANewConfirmation() = runTest {
+    Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    installGoogleClock(app)
+    val disconnect = ConnectedAccessibility.start(app)
+    val vm = MainViewModel(app, hybridRouter = localActionDecisions())
+    try {
+      vm.updateFloatingText("iniciar un cronómetro")
+      vm.sendFloatingText { fail("A stopwatch must not go to WhatsApp") }
+      runCurrent()
+      shadowOf(Looper.getMainLooper()).idle()
+      assertEquals("com.google.android.deskclock", shadowOf(app).nextStartedActivity.component!!.packageName)
+      // The Clock never shows the expected state: «no pude comprobar el cambio», as before.
+      shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(9))
+      assertTrue(vm.floatingAssistant.value.error!!.startsWith("No pude comprobar el cambio del cronómetro."))
+      assertFalse(vm.floatingAssistant.value.needsConfirmation)
+
+      // Sending the same text again must not touch the Clock on its own: it may already be running.
+      vm.sendFloatingText { fail("A stopwatch must not go to WhatsApp") }
+      runCurrent()
+      shadowOf(Looper.getMainLooper()).idle()
+      assertNull(shadowOf(app).nextStartedActivity)
+      assertTrue(vm.floatingAssistant.value.needsConfirmation)
+      assertTrue(vm.floatingAssistant.value.status!!.startsWith("El intento anterior pudo haberse realizado"))
+    } finally { vm.dismissFloatingAssistant(); disconnect(); Dispatchers.resetMain() }
+  }
+
   @Test fun closingBeforeTheClockLaunchCancelsTheQueuedOperation() = runTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()

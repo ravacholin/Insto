@@ -170,9 +170,12 @@ class MainViewModel @JvmOverloads constructor(
 ) : AndroidViewModel(application) {
 
   private val repository = AssistantPreferencesRepository(application)
+  /** Never read on the main thread through DataStore: the cached value, or a suspension during a cold start. */
+  private val preferencesCache = com.example.data.AssistantPreferencesCache.of(application)
+  private suspend fun currentPrefs(): AssistantPreferences = preferencesCache.awaitCurrent()
   private val vocabularyHints = VocabularyHintProvider(application, learnedPhrases)
   private val audioTranscriber = audioTranscriber ?: GroqTranscriber(
-    { GroqKeyStore(application).read() }, prompt = vocabularyHints::cached,
+    { GroqKeyStore(application).readValue() }, prompt = vocabularyHints::cached,
   )
   private val recorder = VoiceRecorderManager(application)
   private val floatingState = MutableStateFlow(FloatingAssistantState())
@@ -197,7 +200,7 @@ class MainViewModel @JvmOverloads constructor(
   private val phoneParser = PhoneCommandParser()
   private val phoneExecutor = PhoneActionExecutor(application, preferredMediaPackage = operationalContext::preferredMediaPackage)
   private val conversation = ConversationSession()
-  private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).read() })
+  private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).readValue() })
   private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor,
     verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter, lookupLearnedPhrase = learnedPhrases::lookup,
     lookupLearnedPattern = learnedPhrases::lookupPattern, operationalContext = operationalContext)
@@ -503,7 +506,7 @@ class MainViewModel @JvmOverloads constructor(
     val ticket = executions.open(session, command)
     val result = phoneExecutor.execute(command, confirmed)
     // An automation result arrives later; anything else is final now.
-    if (result.stopwatchAutomation == null) executions.complete(ticket, result.outcome)
+    if (result.stopwatchAutomation == null) executions.complete(ticket, result)
     if (learning != null && result.confirmation == command) learningPreview = learning
     applyPhoneActionResult(command, confirmed, result, learning)
     result.stopwatchAutomation?.let { operation ->
@@ -511,7 +514,7 @@ class MainViewModel @JvmOverloads constructor(
       floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING)
       cancelClockAutomation = com.example.assist.PingAutoSendAccessibilityService.requestStopwatch(operation) { completed ->
         // A callback delivered twice records and applies its outcome once.
-        if (executions.complete(ticket, completed.outcome) && generation == floatingGeneration) {
+        if (executions.complete(ticket, completed) && generation == floatingGeneration) {
           cancelClockAutomation = null
           applyPhoneActionResult(command, confirmed, completed, learning)
         }
@@ -969,16 +972,13 @@ class MainViewModel @JvmOverloads constructor(
 
   fun prepareFloatingAssistant() {
     runCatching {TemporaryModeManager(getApplication()).reconcile()}
-    val prefs = runBlockingPrefs(getApplication())
-    vocabularyHints.refresh(viewModelScope, prefs)
-    floatingPrefs = prefs
     floatingReturnPackage = com.example.assist.AutoSendCoordinator.lastKnownForegroundPackage
-    floatingContact = prefs.pinnedContact
-    // Loading routing preferences during a send must not erase the active text/recording state.
-    floatingState.value = floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct",
-      autoSendHealth = floatingContact?.let {
-        runCatching { com.example.assist.AutoSendHealthReader.read(getApplication(), prefs.preferredFlavor) }.getOrNull()
-      })
+    val cached = preferencesCache.current
+    if (cached != null) applyFloatingPrefs(cached)
+    else if (floatingPrefsLoad?.isActive != true) {
+      // Cold start: the panel shows "Instinct" until the first value arrives; nothing waits on the main thread.
+      floatingPrefsLoad = viewModelScope.launch { applyFloatingPrefs(currentPrefs()) }
+    }
     if (activeWorkflow() != null) {
       syncWorkflow()
       floatingState.value = floatingState.value.copy(status = "Hay una secuencia pendiente. Revisá los pasos antes de continuar.")
@@ -986,6 +986,31 @@ class MainViewModel @JvmOverloads constructor(
     workflowLoadError?.let {floatingState.value = floatingState.value.copy(error = it)}
     val gemini = com.example.phone.GeminiSettings(getApplication())
     floatingState.value = floatingState.value.copy(geminiConfigured = gemini.readKey() != null, geminiEnabled = gemini.isEnabled())
+  }
+
+  private var floatingPrefsLoad: Job? = null
+
+  private fun applyFloatingPrefs(prefs: AssistantPreferences) {
+    vocabularyHints.refresh(viewModelScope, prefs)
+    floatingPrefs = prefs
+    floatingContact = prefs.pinnedContact
+    // Loading routing preferences during a send must not erase the active text/recording state.
+    floatingState.value = floatingState.value.copy(contactName = floatingContact?.displayName ?: "Instinct",
+      autoSendHealth = floatingContact?.let {
+        runCatching { com.example.assist.AutoSendHealthReader.read(getApplication(), prefs.preferredFlavor) }.getOrNull()
+      })
+  }
+
+  /**
+   * [prepareFloatingAssistant] for code that reads [floatingPrefs] right after it. With the cache loaded this never
+   * suspends, so the request runs exactly as before; during a cold start it waits for the first value inside the
+   * request's own coroutine, so cancelling the request also cancels the wait.
+   */
+  private suspend fun prepareFloatingAssistantWithPrefs(): Boolean {
+    val generation = floatingGeneration
+    prepareFloatingAssistant()
+    if (preferencesCache.current == null) applyFloatingPrefs(currentPrefs())
+    return generation == floatingGeneration
   }
 
   fun setFloatingContext(context: SharedTextContext?, error: String? = null) {
@@ -1117,9 +1142,14 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun sendFloatingAttachment(onDispatched: () -> Unit) {
-    if (floatingState.value.mode == FloatingMode.SENDING) return
+    if (floatingState.value.mode == FloatingMode.SENDING || floatingState.value.attachment == null) return
+    // Synchronous whenever preferences are loaded; during a cold start it waits without blocking.
+    viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { sendFloatingAttachmentNow(onDispatched) }
+  }
+
+  private suspend fun sendFloatingAttachmentNow(onDispatched: () -> Unit) {
+    if (!prepareFloatingAssistantWithPrefs() || floatingState.value.mode == FloatingMode.SENDING) return
     val attachment = floatingState.value.attachment ?: return
-    prepareFloatingAssistant()
     val contact = floatingContact
     val prefs = floatingPrefs
     if (contact == null || prefs == null) {
@@ -1299,8 +1329,8 @@ class MainViewModel @JvmOverloads constructor(
     }
   }
 
-  private fun dispatchFloatingAudio(audio: RecordedAudio, onDispatched: () -> Unit) {
-    prepareFloatingAssistant()
+  private suspend fun dispatchFloatingAudio(audio: RecordedAudio, onDispatched: () -> Unit) {
+    if (!prepareFloatingAssistantWithPrefs()) return
     val contact = floatingContact
     val prefs = floatingPrefs
     if (contact == null || prefs == null) {
@@ -1328,10 +1358,19 @@ class MainViewModel @JvmOverloads constructor(
   }
 
   fun openFloatingInstinct(onDispatched: () -> Unit) {
+    if (floatingState.value.mode == FloatingMode.SENDING) return
+    // Synchronous whenever preferences are loaded; during a cold start it waits without blocking.
+    viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+      val generation = floatingGeneration
+      val prefs = currentPrefs()
+      if (generation == floatingGeneration) openFloatingInstinct(prefs, onDispatched)
+    }
+  }
+
+  private fun openFloatingInstinct(prefs: AssistantPreferences, onDispatched: () -> Unit) {
     val state = floatingState.value
     if (state.mode == FloatingMode.SENDING) return
     val app = getApplication<Application>()
-    val prefs = runBlockingPrefs(app)
     val contact = prefs.pinnedContact
     if (contact == null) {
       floatingState.value = state.copy(error = "Configurá el contacto de Instinct para abrir WhatsApp.")
@@ -1361,10 +1400,18 @@ class MainViewModel @JvmOverloads constructor(
    * never arms the accessibility service. After an uncertain send it only opens the chat, so nothing is sent twice.
    */
   fun openFloatingInstinctManually(onDispatched: () -> Unit) {
+    if (floatingState.value.mode == FloatingMode.SENDING) return
+    viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+      val generation = floatingGeneration
+      val prefs = currentPrefs()
+      if (generation == floatingGeneration) openFloatingInstinctManually(prefs, onDispatched)
+    }
+  }
+
+  private fun openFloatingInstinctManually(prefs: AssistantPreferences, onDispatched: () -> Unit) {
     val state = floatingState.value
     if (state.mode == FloatingMode.SENDING) return
     val app = getApplication<Application>()
-    val prefs = runBlockingPrefs(app)
     val contact = prefs.pinnedContact ?: run {
       floatingState.value = state.copy(error = "Configurá el contacto de Instinct para abrir WhatsApp.")
       return
@@ -1409,8 +1456,8 @@ class MainViewModel @JvmOverloads constructor(
     if (com.example.BuildConfig.DEBUG) android.util.Log.d("InstoVoiceLatency", latency.summary())
   }
 
-  private fun dispatchFloatingTextQuery(text: String, onDispatched: () -> Unit) {
-    prepareFloatingAssistant()
+  private suspend fun dispatchFloatingTextQuery(text: String, onDispatched: () -> Unit) {
+    if (!prepareFloatingAssistantWithPrefs()) return
     val failureMode = if (pendingFloatingAudio != null) FloatingMode.AUDIO_READY else FloatingMode.TYPING
     val contact = floatingContact
     val prefs = floatingPrefs
@@ -1514,7 +1561,7 @@ class MainViewModel @JvmOverloads constructor(
       repository.savePinnedContact(name, phone)
       val updated = repository.getCurrentPreferences().pinnedContact
       ShortcutHelper.syncShortcuts(getApplication(), updated)
-      PingAssistWidgetProvider.requestUpdate(getApplication())
+      PingAssistWidgetProvider.requestUpdate(getApplication(), updated?.displayName)
       bannerState.value = "Pinned ${updated?.displayName ?: phone} as your target contact." to false
     }
   }
@@ -1645,7 +1692,6 @@ class MainViewModel @JvmOverloads constructor(
     dynamicHoldLocked = false
 
     val app = getApplication<Application>()
-    val prefs = runBlockingPrefs(app)
     val hasMicPermission =
       ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
@@ -1693,7 +1739,8 @@ class MainViewModel @JvmOverloads constructor(
               lockedIntoVoice = true
               startedRecordingPhaseAt = elapsed
               silenceAccumulatedMs = 0L
-              EyesFreeFeedbackManager.playStartCue(app, prefs.eyesFreeAudioCues)
+              // The recorder already runs, so a cold-start wait for preferences loses no audio.
+              EyesFreeFeedbackManager.playStartCue(app, currentPrefs().eyesFreeAudioCues)
               recordingState.value =
                 RecordingUiState.Recording(
                   elapsedMs = elapsed,
@@ -1756,11 +1803,13 @@ class MainViewModel @JvmOverloads constructor(
     dynamicSessionJob = null
 
     val app = getApplication<Application>()
-    val prefs = runBlockingPrefs(app)
 
+    // The microphone starts before preferences are needed, so no syllable waits for them.
     if (recorder.startRecording().isFailure) {
-      openPinnedWhatsAppChat(prefs)
-      onFinished()
+      holdSessionJob = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+        openPinnedWhatsAppChat(currentPrefs())
+        onFinished()
+      }
       return
     }
     recordingState.value = RecordingUiState.HoldPending
@@ -1769,6 +1818,7 @@ class MainViewModel @JvmOverloads constructor(
       viewModelScope.launch {
         val releasedAsTap =
           withTimeoutOrNull(HOLD_GRACE_MS) { HotkeyHoldTracker.awaitRelease(heldKey) } != null
+        val prefs = currentPrefs()
         if (releasedAsTap) {
           recorder.cancelRecording()
           recordingState.value = RecordingUiState.Idle
@@ -1973,10 +2023,6 @@ class MainViewModel @JvmOverloads constructor(
           }
         onComplete(success)
       }
-  }
-
-  private fun runBlockingPrefs(context: Context): AssistantPreferences {
-    return kotlinx.coroutines.runBlocking { repository.getCurrentPreferences() }
   }
 
   private fun logAction(

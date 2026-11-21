@@ -102,7 +102,7 @@ class StructuredCommandClient(
         val commands = o.getJSONArray("commands")
         if (!o.getBoolean("supported")) {
           require(commands.length() == 0)
-          return InterpretationResult.Rejected("El pedido no está disponible. No se ejecutó ni se envió.")
+          return InterpretationResult.Rejected("El pedido no está disponible. No se ejecutó ni se envió.", RejectionReason.UNAVAILABLE)
         }
         require(commands.length() in 1..10)
         val decoded = (0 until commands.length()).map { PhoneCommandCodec.decode(commands.getJSONObject(it)) }
@@ -121,7 +121,7 @@ class StructuredCommandClient(
       if (kind in listOf("instinct", "unsupported")) {
         require(steps.length() == 0)
         return if (kind == "instinct") InterpretationResult.Query() else
-          InterpretationResult.Rejected("Ese pedido incluye una operación o restricción no admitida. No se ejecutó ni se envió.")
+          InterpretationResult.Rejected("Ese pedido incluye una operación o restricción no admitida. No se ejecutó ni se envió.", RejectionReason.UNAVAILABLE)
       }
       require(kind in listOf("plan", "draft") && steps.length() in 1..10)
       val drafts = (0 until steps.length()).map { index ->

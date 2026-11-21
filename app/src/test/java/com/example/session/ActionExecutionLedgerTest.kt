@@ -53,6 +53,24 @@ class ActionExecutionLedgerTest {
     assertFalse(ledger.needsReconfirmation(message))
   }
 
+  @Test fun anAutomationThatCouldNotVerifyItsEffectIsUncertainNotFailed() {
+    val ledger = ActionExecutionLedger()
+    val stopwatch = PhoneCommand.Stopwatch(com.example.phone.StopwatchOp.START)
+    val unverified = com.example.phone.PhoneActionResult("No pude comprobar el cambio del cronómetro.",
+      outcome = PhoneActionOutcome.REJECTED, effectUnverified = true)
+    assertEquals(DispatchState.DISPATCHED_UNCERTAIN, DispatchState.of(unverified))
+    assertTrue(ledger.complete(ledger.open(1, stopwatch), unverified))
+    assertEquals(DispatchState.DISPATCHED_UNCERTAIN, ledger.lastState(stopwatch))
+    // Like UNCERTAIN: repeating it needs a new, explicit confirmation.
+    assertTrue(ledger.needsReconfirmation(stopwatch))
+    // A refusal before any effect (accessibility off) stays a plain failure that can be retried.
+    val refused = com.example.phone.PhoneActionResult("Activá Accesibilidad de Insto y reintentá el cronómetro.",
+      outcome = PhoneActionOutcome.REJECTED)
+    ledger.complete(ledger.open(2, stopwatch), refused)
+    assertEquals(DispatchState.FAILED, ledger.lastState(stopwatch))
+    assertFalse(ledger.needsReconfirmation(stopwatch))
+  }
+
   @Test fun cancellingAfterDispatchKeepsTheOutcomeAndNeverRunsAgain() {
     val sessions = SessionLifecycle()
     val ledger = ActionExecutionLedger()

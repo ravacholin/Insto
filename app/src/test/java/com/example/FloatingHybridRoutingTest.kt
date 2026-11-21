@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.emptyLearnedPhrasesForTest
+import com.example.testsupport.awaitCachedPreferences
 
 import android.app.Application
 import android.content.Intent
@@ -124,6 +125,7 @@ class FloatingHybridRoutingTest {
     }))
     try {
       withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
+      awaitCachedPreferences(app) { it.pinnedContact?.phoneNumber == "+447700900123" }
       shadowOf(app.packageManager).installPackage(PackageInfo().apply {
         packageName = "com.whatsapp"
         applicationInfo = ApplicationInfo().apply {packageName="com.whatsapp"}
@@ -191,6 +193,7 @@ class FloatingHybridRoutingTest {
       learnedPhrases = emptyLearnedPhrasesForTest())
     try {
       withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).savePinnedContact("Instinct", "+447700900123") }
+      awaitCachedPreferences(app) { it.pinnedContact?.phoneNumber == "+447700900123" }
       shadowOf(app.packageManager).installPackage(PackageInfo().apply {
         packageName = "com.whatsapp"
         applicationInfo = ApplicationInfo().apply { packageName = "com.whatsapp" }
@@ -233,6 +236,7 @@ class FloatingHybridRoutingTest {
     Dispatchers.setMain(StandardTestDispatcher(testScheduler))
     val app = ApplicationProvider.getApplicationContext<Application>()
     withContext(Dispatchers.IO) { AssistantPreferencesRepository(app).clearPinnedContact() }
+    awaitCachedPreferences(app) { it.pinnedContact == null }
     var calls = 0
     var cancelled = false
     val hybrid = HybridPhoneRouter({ true }, DecisionClassifier {

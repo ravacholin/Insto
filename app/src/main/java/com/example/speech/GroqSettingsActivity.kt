@@ -61,10 +61,14 @@ class GroqSettingsActivity : ComponentActivity() {
         var section by rememberSaveable { mutableStateOf(requestedProvider) }
         val snackbars = remember { SnackbarHostState() }
         var value by remember { mutableStateOf("") }
-        var configured by remember { mutableStateOf(store.read() != null) }
+        val initialGroq = remember { store.read().status }
+        var configured by remember { mutableStateOf(initialGroq == StoredKey.Status.PRESENT) }
+        var groqUnreadable by remember { mutableStateOf(initialGroq == StoredKey.Status.UNREADABLE) }
         var message by remember { mutableStateOf<String?>(null) }
         var geminiValue by remember { mutableStateOf("") }
-        var geminiConfigured by remember { mutableStateOf(gemini.readKey() != null) }
+        val initialGemini = remember { gemini.keyStatus() }
+        var geminiConfigured by remember { mutableStateOf(initialGemini == StoredKey.Status.PRESENT) }
+        var geminiUnreadable by remember { mutableStateOf(initialGemini == StoredKey.Status.UNREADABLE) }
         var hybridEnabled by remember { mutableStateOf(gemini.isEnabled()) }
         val scope = rememberCoroutineScope()
         val assistantPrefs by preferences.preferencesFlow.collectAsState(initial = null)
@@ -126,19 +130,26 @@ class GroqSettingsActivity : ComponentActivity() {
                 when (section) {
                   null -> {
                     SettingsSection("Transcripción con Groq") {
-                      ConnectionStatus(if (configured) "Clave guardada" else "Sin clave", configured)
+                      ConnectionStatus(when {
+                        configured -> "Clave guardada"
+                        groqUnreadable -> "Clave ilegible"
+                        else -> "Sin clave"
+                      }, configured)
+                      if (groqUnreadable) SettingsDescription(GroqKeyStore.UNREADABLE_MESSAGE)
                       SettingsDescription("Convierte tus grabaciones en texto para interpretar pedidos de voz.")
                       OutlinedButton(onClick = { section = PROVIDER_GROQ }) { Text("Configurar Groq") }
                     }
                     SettingsSection("Interpretación con Gemini") {
                       ConnectionStatus(
                         label = when {
+                          geminiUnreadable -> "Clave ilegible"
                           !geminiConfigured -> "Sin clave"
                           hybridEnabled -> "Activo"
                           else -> "En pausa"
                         },
                         active = geminiConfigured && hybridEnabled,
                       )
+                      if (geminiUnreadable) SettingsDescription(GroqKeyStore.UNREADABLE_MESSAGE)
                       SettingsDescription("Ayuda a entender pedidos que los comandos locales no reconocen.")
                       OutlinedButton(onClick = { section = PROVIDER_GEMINI }) { Text("Configurar Gemini") }
                     }
@@ -150,13 +161,18 @@ class GroqSettingsActivity : ComponentActivity() {
                   PROVIDER_GEMINI -> SettingsSection("Gemini Decisions") {
                     SettingsDescription("Los comandos reconocidos se resuelven en el teléfono. Gemini interpreta pedidos nuevos y te pide confirmación antes de ejecutar propuestas generativas.")
                     SettingsDescription("Requiere internet. El texto se procesa según los términos de Google. PingAssist no comparte contactos, archivos ni notificaciones con Gemini.")
-                    SettingsDescription(if (geminiConfigured) "Clave cifrada guardada en este teléfono." else "Agregá tu clave de Google AI Studio para activar Gemini.")
+                    SettingsDescription(when {
+                      geminiConfigured -> "Clave cifrada guardada en este teléfono."
+                      geminiUnreadable -> GroqKeyStore.UNREADABLE_MESSAGE
+                      else -> "Agregá tu clave de Google AI Studio para activar Gemini."
+                    })
                     OutlinedTextField(geminiValue, { geminiValue = it }, label = { Text("Clave de Gemini") }, singleLine = true,
                       visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
                     Button(onClick = {
                       runCatching { gemini.saveKey(geminiValue) }.onSuccess {
                         geminiValue = ""
                         geminiConfigured = true
+                        geminiUnreadable = false
                         hybridEnabled = true
                         if (requestedProvider == PROVIDER_GEMINI) {
                           setResult(RESULT_OK)
@@ -194,7 +210,7 @@ class GroqSettingsActivity : ComponentActivity() {
                       }
                       TextButton(onClick = {
                         probeJob?.cancel(); probing = false
-                        runCatching { gemini.clear() }.onSuccess { geminiConfigured = false; hybridEnabled = false; geminiValue = ""; message = "Clave de Gemini borrada." }
+                        runCatching { gemini.clear() }.onSuccess { geminiConfigured = false; geminiUnreadable = false; hybridEnabled = false; geminiValue = ""; message = "Clave de Gemini borrada." }
                           .onFailure { message = "No se pudo borrar la clave de Gemini." }
                       }) { Text("Borrar clave de Gemini", color = MaterialTheme.colorScheme.error) }
                     }
@@ -205,13 +221,18 @@ class GroqSettingsActivity : ComponentActivity() {
                     SettingsSection("Clave de Groq") {
                       SettingsDescription("Groq recibe una copia de tu grabación para transcribirla. Si el pedido es para Instinct, el audio original se envía por WhatsApp. En algunos casos, Groq recibe texto para verificar una interpretación de Gemini.")
                       SettingsDescription("Requiere internet. El plan gratuito tiene cuotas. Tu clave se guarda cifrada en este teléfono.")
-                      SettingsDescription(if (configured) "Clave guardada. Podés reemplazarla o borrarla." else "Agregá tu clave personal de Groq.")
+                      SettingsDescription(when {
+                        configured -> "Clave guardada. Podés reemplazarla o borrarla."
+                        groqUnreadable -> GroqKeyStore.UNREADABLE_MESSAGE
+                        else -> "Agregá tu clave personal de Groq."
+                      })
                       OutlinedTextField(value, { value = it }, label = { Text("Clave de Groq") }, singleLine = true,
                         visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
                       Button(onClick = {
                         runCatching { store.save(value) }.onSuccess {
                           value = ""
                           configured = true
+                          groqUnreadable = false
                           if (requestedProvider == PROVIDER_GROQ) {
                             setResult(RESULT_OK)
                             finish()
@@ -221,8 +242,8 @@ class GroqSettingsActivity : ComponentActivity() {
                         }
                           .onFailure { message = "No se pudo guardar la clave. Revisá el valor e intentá otra vez." }
                       }, enabled = value.isNotBlank()) { Text(if (requestedProvider == PROVIDER_GROQ) "Guardar y volver" else "Guardar clave") }
-                      if (configured) TextButton(onClick = {
-                        runCatching { store.clear() }.onSuccess { configured = false; value = ""; message = "Clave borrada." }
+                      if (configured || groqUnreadable) TextButton(onClick = {
+                        runCatching { store.clear() }.onSuccess { configured = false; groqUnreadable = false; value = ""; message = "Clave borrada." }
                           .onFailure { message = "No se pudo borrar la clave." }
                       }) { Text("Borrar clave de Groq", color = MaterialTheme.colorScheme.error) }
                       TextButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))) } }) { Text("Abrir Groq para obtener una clave") }

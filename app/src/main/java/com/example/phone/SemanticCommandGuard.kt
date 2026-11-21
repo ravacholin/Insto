@@ -20,7 +20,7 @@ object SemanticCommandGuard {
     data object Accepted : Verdict
     /** The request is understood but a datum is ambiguous; [context] continues the existing clarification. */
     data class NeedsClarification(val prompt: String, val context: String) : Verdict
-    data class Rejected(val reason: String) : Verdict
+    data class Rejected(val reason: String, val kind: RejectionReason = RejectionReason.NOT_UNDERSTOOD) : Verdict
   }
 
   /**
@@ -40,7 +40,7 @@ object SemanticCommandGuard {
     return when (verdict) {
       Verdict.Accepted -> result
       is Verdict.NeedsClarification -> InterpretationResult.Clarification(verdict.prompt, verdict.context)
-      is Verdict.Rejected -> InterpretationResult.Rejected(verdict.reason)
+      is Verdict.Rejected -> InterpretationResult.Rejected(verdict.reason, verdict.kind)
     }
   }
 
@@ -66,7 +66,8 @@ object SemanticCommandGuard {
       val stepSyntax = PhoneCommandParser.canonicalRequest(PhoneCommandParser.normalize(RequestSafetyPolicy.withoutQuotedText(step)))
       val candidates = paired?.let(::listOf) ?: commands
       if (subjectHead.containsMatchIn(stepSyntax) && candidates.any(::isDeviceEffect))
-        return Verdict.Rejected("La acción del teléfono aparece como tema de una búsqueda o un mensaje, no como orden. No se ejecutó.")
+        return Verdict.Rejected("La acción del teléfono aparece como tema de una búsqueda o un mensaje, no como orden. No se ejecutó.",
+          RejectionReason.OUT_OF_SCOPE)
       direction(stepSyntax, candidates)?.let { return Verdict.Rejected(it) }
       foreignTarget(stepSyntax, candidates)?.let { return Verdict.Rejected(it) }
     }
