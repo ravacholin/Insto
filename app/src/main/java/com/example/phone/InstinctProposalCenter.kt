@@ -37,9 +37,11 @@ class InstinctProposalSettings(context: Context) {
   fun isEnabled(): Boolean = Build.VERSION.SDK_INT >= MIN_SDK && runCatching { enabled.readText() == "true" }.getOrDefault(false)
 
   fun setEnabled(value: Boolean) {
-    if (value) enabled.writeText("true")
+    if (value) { enabled.writeText("true"); InstinctStatePublisher.rearm(app) }
     else {
       if (enabled.exists()) enabled.delete()
+      // The state's heartbeat stops with the switch.
+      InstinctStatePublisher.rearm(app)
       // Replies are cut first: discarding below must not answer Instinct either.
       InstinctProposalCenter.acks.clear()
       // Turning it off discards every pending proposal and scheduled order: nothing can run after this.
@@ -280,7 +282,9 @@ object InstinctProposalCenter {
       when (check) {
         is ProposalCheck.Invalid -> reply(app, acks.resolve(ticket, index, InstinctAck.invalid(check)))
         // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
-        is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index, AckEntry(AckKind.OK, check.order, answer(app, check.kind), informative = true)))
+        is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index,
+          if (check.kind == ProposalCheck.QueryKind.STATE) stateAnswer(app, check.order)
+          else AckEntry(AckKind.OK, check.order, answer(app, check.kind), informative = true)))
         // «Nunca» refuses at once, whatever the hour; Confirmar and the quiet hours are decided when it runs.
         is ProposalCheck.Valid -> if (refusedByPolicy(app, check.command)) {
           reply(app, acks.resolve(ticket, index, AckEntry(AckKind.ERROR, check.order, InstinctAutonomyPolicy.REFUSED)))
@@ -367,6 +371,8 @@ object InstinctProposalCenter {
   /** The outcome of [proposal] for Instinct. Only the first outcome of each line and one follow-up are ever sent. */
   fun report(context: Context, proposalId: Long, entry: AckEntry) {
     bind(context)
+    // An order of Instinct ran (or may have): a fresh state follows in the log, so Instinct sees the effect.
+    if (entry.kind == AckKind.OK || entry.kind == AckKind.UNCERTAIN) InstinctStatePublisher.afterOrder(context)
     reply(context, acks.report(proposalId, entry))
     // In the log a waiting order is closed when it lapses, whatever the chat's handle: check it then.
     if (entry.kind == AckKind.WAITING && ackChannel().usesLog && replyMode() != InstinctReplyMode.NEVER) {
@@ -404,6 +410,24 @@ object InstinctProposalCenter {
     }
   }
 
+  /**
+   * «#insto ver estado»: publishes the state in the log now, even unchanged, and never consumes the brake. The state
+   * only goes to the log: with the channel on WhatsApp the reply is an error and carries no field of the state.
+   */
+  internal fun stateAnswer(context: Context, order: String): AckEntry {
+    val app = context.applicationContext
+    val configured = InstinctLogSettings(app).configured()
+    // Off the main thread (the calendar is a query); it publishes even when nothing changed.
+    if (configured) InstinctStatePublisher.publishAsync(app, InstinctState.Reason.QUERY)
+    return when {
+      !InstinctProposalSettings(app).channel().usesLog -> AckEntry(AckKind.ERROR, order, STATE_ONLY_LOG, informative = true)
+      !configured ->
+        AckEntry(AckKind.ERROR, order, "la bitácora no está configurada; no se publicó el estado.", informative = true)
+      else -> AckEntry(AckKind.OK, order, "estado publicado en la bitácora; leelo con action=estado.", informative = true)
+    }
+  }
+  const val STATE_ONLY_LOG = "el estado solo se publica en la bitácora"
+
   /** The answer to a query. Names of enabled routines only, never their steps. */
   internal fun answer(context: Context, kind: ProposalCheck.QueryKind): String = when (kind) {
     ProposalCheck.QueryKind.CATALOG -> InstinctProtocolCatalog.summary(InstinctRoutineGrants(context).access().enabledNames())
@@ -413,6 +437,7 @@ object InstinctProposalCenter {
       1 -> "Se canceló 1 orden programada."
       else -> "Se cancelaron $n órdenes programadas."
     }
+    ProposalCheck.QueryKind.STATE -> stateAnswer(context, kind.phrase).message
   }
 
   /** A deferred order: stored for later, never run now. Instinct hears «#insto-programada» or why not. */

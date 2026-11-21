@@ -34,12 +34,13 @@ class InstinctLogSettings(context: Context) {
     if (newToken != null && !InstinctLogConfig.validToken(newToken)) return false
     urlFile.writeText(cleanUrl)
     newToken?.let(tokenFile::writeText)
-    // Events that waited for a configuration go out now.
+    // Events that waited for a configuration go out now, and the phone's state starts being published.
     InstinctLog.rearm(app)
+    InstinctStatePublisher.rearm(app)
     return true
   }
 
-  fun clear() { urlFile.delete(); tokenFile.delete() }
+  fun clear() { urlFile.delete(); tokenFile.delete(); InstinctStatePublisher.rearm(app) }
 }
 
 /**
@@ -73,6 +74,13 @@ object InstinctLog {
       outbox(app).add(events)
       schedule(app)
     }
+  }
+
+  /** Writes ready-made [events] (the phone's state, for example) to the outbox and arms the job. Never throws. */
+  fun enqueueEvents(context: Context, events: List<InstinctLogEvent>) {
+    if (events.isEmpty()) return
+    val app = context.applicationContext
+    runCatching { outbox(app).add(events); schedule(app) }
   }
 
   /**
@@ -182,9 +190,11 @@ class InstinctLogJobService : JobService() {
   override fun onStopJob(params: JobParameters): Boolean = true
 }
 
-/** After a boot the job is armed again if events are pending. Not exported. */
+/** After a boot: the log's job if events are pending and the state's heartbeat. Not exported. */
 class InstinctLogBootReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
-    if (intent.action == Intent.ACTION_BOOT_COMPLETED) runCatching { InstinctLog.rearm(context) }
+    if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+    runCatching { InstinctLog.rearm(context) }
+    runCatching { InstinctStatePublisher.rearm(context) }
   }
 }

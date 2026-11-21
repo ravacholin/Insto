@@ -106,6 +106,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       SettingsChoices(InstinctAckChannel.entries, channel, { settings.setChannel(it); revision++ }, label = ::channelLabel,
         itemModifier = { Modifier.testTag("instinct_channel_${it.name.lowercase()}") })
       if (channel.usesLog) InstinctLogConfiguration(revision) { revision++ }
+      InstinctStateSection(revision) { revision++ }
       InstinctScheduledList(revision) { revision++ }
       InstinctRoutineSwitches(revision) { revision++ }
       InstinctCatalogActions(replyMode, channel, revision) { revision++ }
@@ -310,6 +311,49 @@ private fun InstinctLogConfiguration(revision: Int, onChange: () -> Unit) {
   }
 }
 
+/**
+ * «Estado para Instinct» (1.16.0): always on while the log is configured. Only an informative line, «Publicar estado
+ * ahora» and, once, the calendar permission with what it is for.
+ */
+@Composable
+private fun InstinctStateSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  var notice by remember { mutableStateOf<String?>(null) }
+  val line = remember(revision) { com.example.phone.InstinctStatePublisher.diagnosis(context) }
+  val configured = remember(revision) { InstinctLogSettings(context).configured() }
+  val calendar = remember(revision) { context.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED }
+  val askCalendar = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onChange() }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_state")) {
+    Text("Estado para Instinct", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("Con la bitácora configurada, Insto publica ahí un resumen del teléfono para que Instinct decida con contexto: " +
+      "modo de sonido y No molestar, hora de la próxima alarma, evento en curso y próximo, si hay auriculares o Bluetooth, si está " +
+      "bloqueado, el modo temporal y las órdenes programadas. Nunca volumen, batería, red, ubicación, contactos ni notificaciones.")
+    SettingsDescription(line, modifier = Modifier.testTag("instinct_state_line"))
+    if (!calendar) {
+      SettingsDescription("Para el evento en curso y el próximo, Insto necesita leer el calendario (solo título y horario). Sin permiso, el campo sale «sin permiso».")
+      OutlinedButton(onClick = { askCalendar.launch(Manifest.permission.READ_CALENDAR) },
+        modifier = Modifier.testTag("instinct_state_calendar")) { Text("Permitir leer el calendario") }
+    }
+    OutlinedButton(onClick = {
+      notice = "Publicando…"
+      scope.launch {
+        val outcome = withContext(Dispatchers.IO) {
+          com.example.phone.InstinctStatePublisher.publish(context, com.example.phone.InstinctState.Reason.MANUAL)
+        }
+        notice = when (outcome) {
+          com.example.phone.InstinctStatePublisher.Outcome.PUBLISHED -> "Estado agregado a la bandeja de la bitácora."
+          com.example.phone.InstinctStatePublisher.Outcome.NOT_CONFIGURED -> "Falta configurar la bitácora."
+          com.example.phone.InstinctStatePublisher.Outcome.DISABLED -> "«Recibir órdenes de Instinct» está apagado."
+          com.example.phone.InstinctStatePublisher.Outcome.UNCHANGED -> "No se publicó."
+        }
+        onChange()
+      }
+    }, enabled = configured, modifier = Modifier.testTag("instinct_state_publish")) { Text("Publicar estado ahora") }
+    notice?.let { SettingsDescription(it) }
+  }
+}
+
 internal fun replyModeLabel(mode: InstinctReplyMode): String = when (mode) {
   InstinctReplyMode.NEVER -> "Nunca"
   InstinctReplyMode.PROBLEMS -> "Solo errores y esperas"
@@ -346,6 +390,8 @@ private fun ProposalDiagnostics(contact: PinnedContact?, revision: Int, onRefres
       if (InstinctProposalSettings(context).channel().usesLog || InstinctLog.outbox(context).size() > 0) InstinctLog.diagnosis(context) else null
     }
     logLine?.let { SettingsDescription(it, modifier = Modifier.testTag("instinct_log_diagnosis")) }
+    val stateLine = remember(revision) { com.example.phone.InstinctStatePublisher.diagnosis(context) }
+    SettingsDescription(stateLine, modifier = Modifier.testTag("instinct_state_diagnosis"))
     TextButton(onClick = onRefresh) { Text("Actualizar diagnóstico") }
   }
 }

@@ -58,6 +58,7 @@ Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega so
 #insto ver catálogo
 #insto ver programadas
 #insto cancelar programadas
+#insto ver estado
 
 Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
 

@@ -64,6 +64,21 @@ object InstinctProtocolCatalog {
       appendLine()
       appendLine(InstinctAutonomyCatalog.text(autonomy))
       appendLine()
+      // The state only travels through the log: without it Instinct has nothing to read.
+      if (log != null) {
+        appendLine("Estado del teléfono (solo lectura, si la persona configuró la bitácora):")
+        appendLine("Insto publica en la bitácora un evento de tipo «${InstinctState.KIND}» cuando algo cambia (agrupado cada 30 segundos), cada 30 minutos aunque no cambie nada y después de cada orden tuya que se ejecutó. Para leer el último:")
+        if (log.url != null && log.token != null) appendLine("GET ${InstinctLogConfig.stateUrl(log.url, log.token)}")
+        else {
+          appendLine("GET <URL>?token=<token>&action=estado")
+          appendLine(InstinctCatalogLog.ASK)
+        }
+        appendLine("La respuesta es {ok, estado} con estado null o {recibido, evento_id, ocurrido, tipo, orden, detalle, mensaje_id, protocolo}. ocurrido dice cuándo se tomó. detalle es una línea «clave=valor; clave=valor» con estos campos:")
+        appendLine("sonido: normal, vibración o silencio. dnd: sí o no (No molestar). alarma: la hora de la próxima alarma, o ninguna. evento: «ahora <título> HH:MM–HH:MM», «próximo <título> HH:MM–HH:MM» (en las próximas 12 horas) o libre. audio: no, o sí con el tipo (auriculares o Bluetooth). bloqueado: sí o no. modo_temporal: no, o cuál y hasta qué hora. programadas: ninguna, o cuántas órdenes tuyas hay programadas y la próxima hora.")
+        appendLine("Un campo puede decir «${InstinctState.NO_DATA}» o «${InstinctState.NO_PERMISSION}». El estado es una foto: puede tener hasta 30 segundos de demora.")
+        appendLine("Antes de una orden que dependa del estado (silencio, No molestar, alarmas, calendario), mirá el último estado; si tiene más de 30 minutos, pedí la consulta «${ProposalCheck.QueryKind.STATE.phrase}» y esperá a que aparezca el nuevo.")
+        appendLine()
+      }
       appendLine("Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas):")
       ProposalCheck.QueryKind.entries.forEach { appendLine(example(it.phrase)) }
       appendLine()
@@ -94,6 +109,7 @@ object InstinctProtocolCatalog {
         appendLine("${AckKind.ERROR.code}: no se ejecutó (no se entendió, no está permitida o falló).")
         appendLine("${AckKind.UNCERTAIN.code}: pudo haberse hecho; Insto no la repite.")
         appendLine("${AckKind.SCHEDULED.code}: quedó programada.")
+        appendLine("${InstinctState.KIND}: el estado del teléfono (ver «Estado del teléfono»); no es el resultado de una orden.")
         appendLine("Después de una espera o de una orden programada puede llegar otro evento de la misma orden: ${AckKind.OK.code}, ${AckKind.ERROR.code}, ${AckKind.DISCARDED.code} o ${AckKind.EXPIRED.code}, aunque haya pasado mucho tiempo. Si la persona deshace lo que hiciste, llega ${AckKind.UNDONE.code}.")
         appendLine("orden es tu orden (recortada a ${InstinctAck.MAX_ORDER_CHARS} caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).")
         append("Los eventos son informativos: no los respondas con nuevas órdenes, salvo una sola orden corregida después de un ${AckKind.ERROR.code}. Nunca repitas una orden después de ${AckKind.UNCERTAIN.code} ni de ${AckKind.WAITING.code}. Antes de repetir o corregir una orden, consultá la bitácora.")

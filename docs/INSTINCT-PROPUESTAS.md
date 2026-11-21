@@ -6,7 +6,7 @@ Desde 1.14.0, además: Insto le puede **responder** a Instinct con el resultado 
 
 Desde 1.15.0, los acuses pueden ir a una **bitácora** en Google Sheets en lugar del chat, para no llenarlo de mensajes ([Bitácora](#bitácora-1150)). Las órdenes siguen llegando por WhatsApp exactamente igual.
 
-Desde 1.16.0, qué hace Instinct solo se elige **por tipo de acción** ([Autonomía por acción](#autonomía-por-acción-1160)), con horas de silencio y un ajuste automático cuando deshacés mucho.
+Desde 1.16.0, qué hace Instinct solo se elige **por tipo de acción** ([Autonomía por acción](#autonomía-por-acción-1160)), con horas de silencio y un ajuste automático cuando deshacés mucho. Con la bitácora configurada, Insto además publica el **estado del teléfono** para que Instinct decida con contexto ([Estado del teléfono](#estado-del-teléfono-1160)).
 
 La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. En **Autonomía** elegís, por categoría, si Instinct lo hace solo, espera tu confirmación o nunca. Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
 
@@ -292,6 +292,55 @@ GET <URL>?token=<token>&since=<ISO>&limit=50
 ### Diagnóstico
 
 Una línea más, sin contenido: «Bitácora: última escritura HH:MM · pendientes N» o «Bitácora: no se pudo escribir (motivo: sin red / token rechazado / respuesta inválida / HTTP NNN / falta la URL o el token) · pendientes N». Aparece con Bitácora o Ambos, o mientras queden eventos en la bandeja.
+
+## Estado del teléfono (1.16.0)
+
+Hasta 1.15.0 Instinct actuaba a ciegas. Ahora Insto publica **siempre** un resumen del teléfono en la bitácora: si la bitácora está configurada y «Recibir órdenes de Instinct» está encendido, el estado se publica. No hay interruptores por campo: los campos son fijos y de solo lectura.
+
+| Campo | Contenido | Fuente |
+| --- | --- | --- |
+| `sonido` | modo de timbre: normal, vibración o silencio | `AudioManager` |
+| `dnd` | si No molestar está activo | `NotificationManager` |
+| `alarma` | hora de la próxima alarma (solo la hora, nunca la etiqueta) o «ninguna» | `AlarmManager.getNextAlarmClock()` |
+| `evento` | título, inicio y fin del evento en curso y del próximo en las 12 horas siguientes, o «libre» | `CalendarContract.Instances` (sin los eventos de todo el día) |
+| `audio` | si hay auriculares o audio Bluetooth (sí/no y tipo, nunca el nombre del dispositivo) | `AudioManager.getDevices` |
+| `bloqueado` | si la pantalla está bloqueada | `KeyguardManager` |
+| `modo_temporal` | si hay un modo temporal activo y hasta qué hora | `TemporaryModeManager` |
+| `programadas` | cuántas órdenes de Instinct hay programadas y la próxima hora | `InstinctScheduler` |
+
+- **Nunca** se incluyen volumen, batería, red ni wifi, ni ubicación, contactos, contenido de notificaciones, uso de apps, SSID, nombres de dispositivos ni ningún identificador.
+- `evento` necesita `READ_CALENDAR`. Se pide una sola vez, desde **Ajustes → Propuestas de Instinct → Estado para Instinct → «Permitir leer el calendario»**, con una línea que explica para qué es. Sin permiso el campo sale `sin permiso` y Insto no lo vuelve a pedir solo.
+- Si un campo falla al leerse, sale `sin datos` y el snapshot igual se publica.
+- La lógica pura (`InstinctStateSnapshot`, `InstinctState`, `InstinctStateDebouncer`) está separada del lector de Android (`InstinctStateReader`).
+
+### Publicación
+
+Va como un evento de bitácora `kind=estado`, por la misma bandeja, el mismo envío y los mismos reintentos. `order` y `message` quedan vacíos; `detail` lleva una línea compacta, recortada a 600 caracteres:
+
+```text
+sonido=vibración; dnd=no; alarma=07:00; evento=ahora Clase 17:00–18:00; audio=no; bloqueado=sí; modo_temporal=no; programadas=ninguna
+```
+
+Pasa por la misma guardia anti-bucle que los acuses: cada valor se aplana (saltos de línea y caracteres de control a espacios), se le quitan `#`, `;` y `=` (así un título de evento no puede escribir «#insto …» ni inventar campos) y el evento entero pasa por `InstinctLogEvents.safe`.
+
+**Cuándo se publica:**
+
+1. **Cuando cambia** algún campo: `RINGER_MODE_CHANGED`, `ACTION_INTERRUPTION_FILTER_CHANGED`, `NEXT_ALARM_CLOCK_CHANGED`, la conexión y desconexión de audio (`AudioDeviceCallback` y `ACTION_HEADSET_PLUG`), `USER_PRESENT`, `SCREEN_OFF` y los cambios del calendario (un `ContentObserver` sobre el proveedor del calendario, que incluye `Instances`, solo con el permiso). Se registran en tiempo de ejecución desde «Insto · notificaciones», que ya está vivo. Los cambios se agrupan 30 segundos y solo se publica si algo difiere del último estado enviado.
+2. **Cada 30 minutos** como latido, aunque no cambie nada, con un job periódico de `JobScheduler` con restricción de red. Si otro motivo lo publicó hace menos de 25 minutos, el latido se saltea.
+3. **Después de cada orden de Instinct** que se ejecutó (o con resultado incierto), un segundo y medio después, para que vea el efecto.
+4. Con **`#insto ver estado`**: consulta de solo lectura, no consume el freno y publica aunque no haya cambios. El acuse es `#insto-ok ver estado → estado publicado en la bitácora; leelo con action=estado.`
+
+**Sale solo por la bitácora**, nunca por WhatsApp, sea cual sea el «Canal de estados». Con el canal en WhatsApp, `ver estado` responde `#insto-error ver estado → el estado solo se publica en la bitácora` (y, si la bitácora está configurada, igual lo publica ahí). Sin bitácora no se publica nada y el diagnóstico lo dice.
+
+El último estado publicado se guarda, con su hora, en `instinct-state-last.json` (`noBackupFilesDir`), para comparar. En Ajustes hay una sola línea informativa («Estado para Instinct: último envío HH:MM») y el botón **«Publicar estado ahora»**. El latido se cancela al apagar «Recibir órdenes de Instinct» o borrar la bitácora, y se reprograma en `BOOT_COMPLETED`.
+
+### Apps Script
+
+`GET ?token=…&action=estado` devuelve `{ok, estado}`, con el último evento `estado` (o `null`). Un `GET` sin `action` se comporta exactamente como en 1.15.0.
+
+### Para Instinct
+
+Con la bitácora, el catálogo («Protocolo Insto v4») suma la sección «Estado del teléfono»: qué campos hay, cómo leerlos (`action=estado`) y la regla **«antes de una orden que dependa del estado (silencio, No molestar, alarmas, calendario), mirá el último estado; si tiene más de 30 minutos, pedí la consulta «ver estado» y esperá»**. Con el canal en WhatsApp esa sección no aparece, porque Instinct no tiene cómo leer la bitácora.
 
 ## Idempotencia y vencimiento
 

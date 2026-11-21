@@ -75,6 +75,14 @@ object InstinctLogEvents {
   fun test(atMillis: Long, zone: TimeZone = TimeZone.getDefault(), id: String = UUID.randomUUID().toString()): InstinctLogEvent =
     InstinctLogEvent(id, iso(atMillis, zone), TEST_KIND, "", "Prueba de la bitácora desde Insto.", "", InstinctProtocolCatalog.TITLE)
 
+  /**
+   * The phone's state (1.16.0): kind «estado», no order, the compact `clave=valor` line as detail, no message. Null
+   * when it would not pass the anti-loop guard.
+   */
+  fun state(snapshot: InstinctStateSnapshot, atMillis: Long, zone: TimeZone = TimeZone.getDefault(),
+    id: String = UUID.randomUUID().toString()): InstinctLogEvent? =
+    InstinctLogEvent(id, iso(atMillis, zone), InstinctState.KIND, "", snapshot.detail(), "", InstinctProtocolCatalog.TITLE).takeIf(::safe)
+
   /** Anti-loop guard, field by field: no field may start with «#insto » nor hold a line Insto would read as an order. */
   fun safe(event: InstinctLogEvent): Boolean = event.fields.all { field ->
     InstinctAck.safe(field) && !field.trimStart().startsWith("${InstinctProposalProtocol.PREFIX} ") &&
@@ -100,6 +108,9 @@ object InstinctLogConfig {
 
   /** How Instinct reads the log, with the real values or placeholders. */
   fun readUrl(url: String, token: String): String = "$url?token=$token&since=<ISO>&limit=50"
+
+  /** How Instinct reads the last state (1.16.0). */
+  fun stateUrl(url: String, token: String): String = "$url?token=$token&action=estado"
 }
 
 /**

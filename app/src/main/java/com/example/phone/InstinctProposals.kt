@@ -37,7 +37,9 @@ sealed interface ProposalCheck {
   enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN }
   /** [readOnly] queries change nothing; «cancelar programadas» only cancels Insto's own pending orders. */
   enum class QueryKind(val phrase: String, val readOnly: Boolean = true) {
-    CATALOG("ver catálogo"), SCHEDULED("ver programadas"), CANCEL_SCHEDULED("cancelar programadas", readOnly = false)
+    CATALOG("ver catálogo"), SCHEDULED("ver programadas"), CANCEL_SCHEDULED("cancelar programadas", readOnly = false),
+    /** Publishes the phone's state in the log now (1.16.0). Changes nothing on the phone. */
+    STATE("ver estado")
   }
 }
 
