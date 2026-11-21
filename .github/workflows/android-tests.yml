@@ -50,7 +50,7 @@ jobs:
         id: unit
         run: ./gradlew --no-daemon --stacktrace testDebugUnitTest assembleDebug
       - name: Upload verified debug APK
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: insto-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
@@ -71,7 +71,7 @@ jobs:
           PYREPORT
       - name: Upload unit test reports
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: android-unit-test-reports
           path: |
@@ -91,7 +91,7 @@ jobs:
         run: ./gradlew --no-daemon lintDebug
       - name: Upload Android lint report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: android-lint-report
           path: app/build/reports/lint-results-debug.*
@@ -104,7 +104,7 @@ jobs:
       - name: Upload JaCoCo coverage
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: android-unit-test-coverage
           path: app/build/reports/coverage/
