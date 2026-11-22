@@ -488,6 +488,86 @@ object InstinctDoorbell {
     return "El script tocó el timbre, pero no llegó en 30 segundos. Revisá que ntfy esté abierto y sin restricción de batería."
   }
 
+  /** One step of «Probar de punta a punta»: [ok] null when it could not be checked. */
+  data class Step(val name: String, val ok: Boolean?, val detail: String) {
+    override fun toString(): String = (when (ok) { true -> "✓ "; false -> "✗ "; null -> "– " }) + "$name: $detail"
+  }
+
+  /** How long «Probar de punta a punta» waits for the push; tests shorten it. */
+  internal var endToEndWaitMillis = InstinctDoorbellPolicy.TEST_WAIT_MILLIS
+
+  /** The order «Probar de punta a punta» publishes: read-only, it says what would happen and runs nothing. */
+  const val END_TO_END_LINE = "#insto probar ver estado"
+
+  /**
+   * «Probar de punta a punta» (1.19.0): publishes in the mailbox, signed with the mailbox's key, one order that only
+   * answers (`#insto probar ver estado`: it runs nothing, changes no volume and sets no alarm), lets the script ring,
+   * and tells apart registration, delivery, decryption, verification, dispatch and result. Waits up to 30 seconds.
+   * Blocking: call it off the main thread.
+   */
+  fun endToEnd(context: Context): List<Step> {
+    val app = context.applicationContext
+    val s = settings(app)
+    val log = InstinctLogSettings(app)
+    val url = log.url(); val token = log.token(); val key = InstinctMailboxSettings(app).key()
+    if (url == null || token == null) return listOf(Step("Bitácora", false, "falta configurar la URL y el token."))
+    if (key == null || InstinctMailboxSettings(app).blocker() != null) return listOf(Step("Buzón", false, "encendé el buzón y guardá la clave."))
+    val steps = ArrayList<Step>()
+    val registered = s.endpoint() != null && s.state().informedAt != null && !s.state().informPending
+    steps += Step("Registro", registered, if (registered) "endpoint ${s.maskedEndpoint()}, el script lo tiene." else
+      "el script todavía no tiene el endpoint (${s.state().failure ?: "esperando al distribuidor"}).")
+    if (!registered) return steps
+    val before = s.state()
+    val id = java.util.UUID.randomUUID().toString()
+    val at = InstinctLogEvents.iso(InstinctMailbox.clock())
+    val lines = listOf(END_TO_END_LINE)
+    val order = MailboxOrder(id, at, lines, InstinctMailboxSignature.sign(key, InstinctMailboxSignature.canonical(id, at, lines)))
+    val published = runCatching { client().post(url, InstinctMailboxPoll.orderBody(token, order)) }.getOrNull()
+    if (published !is InstinctLogClient.Raw.Body || runCatching { org.json.JSONObject(published.text ?: "").optBoolean("ok") }.getOrDefault(false) != true) {
+      steps += Step("Entrega del push", false, "no se pudo publicar la orden de prueba en el buzón.")
+      return steps
+    }
+    val seen = InstinctMailbox.seen(app)
+    val started = System.nanoTime()
+    fun elapsed() = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+    while (elapsed() < endToEndWaitMillis && !(s.state().rings > before.rings && seen.contains(id))) Thread.sleep(250)
+    val after = s.state()
+    val delivered = after.rings > before.rings
+    steps += Step("Entrega del push", delivered, if (delivered) "llegó en ${elapsed() / 1000} s." else
+      "no llegó en 30 s: ahora Insto funciona solo con la revisión periódica. Revisá ntfy (abierto y sin restricción de batería).")
+    steps += when {
+      after.encryptedPushes > before.encryptedPushes -> Step("Descifrado", true, "cifrado RFC 8291, descifrado con las claves de Insto.")
+      after.decryptFailures > before.decryptFailures -> Step("Descifrado", false, "llegó cifrado pero no se pudo descifrar.")
+      after.plainPushes > before.plainPushes -> Step("Descifrado", false, "llegó sin cifrar (modo heredado, no conforme con UnifiedPush).")
+      else -> Step("Descifrado", null, "sin push que descifrar.")
+    }
+    if (!seen.contains(id)) runCatching { InstinctMailbox.poll(app) }
+    val verified = seen.contains(id)
+    steps += Step("Verificación de la orden", verified, if (verified) "firma, vigencia e id válidos." else "la orden de prueba no se verificó.")
+    val direct = s.state().directOrders > before.directOrders
+    steps += Step("Despacho", if (verified) true else null, when {
+      direct -> "por el timbre, sin leer la planilla."
+      verified -> "por el sondeo del buzón (la orden no vino dentro del timbre)."
+      else -> "no se despachó."
+    })
+    val answered = InstinctLog.lastMessage == InstinctMailboxSignature.messageId(id)
+    steps += Step("Resultado", if (InstinctProposalSettings(app).replyMode() == InstinctReplyMode.NEVER) null else answered, when {
+      InstinctProposalSettings(app).replyMode() == InstinctReplyMode.NEVER -> "«Responderle a Instinct» está en Nunca: no hay respuesta que ver."
+      answered -> "la respuesta de la prueba quedó en la bitácora. No se ejecutó nada."
+      else -> "no se registró la respuesta de la prueba."
+    })
+    return steps
+  }
+
+  /** The doorbell in detail, for Settings. Never a key nor the whole endpoint. */
+  fun details(context: Context): List<String> {
+    val app = context.applicationContext
+    val s = settings(app)
+    val box = InstinctMailboxSettings(app)
+    return InstinctDoorbellText.details(s.state(), distributor(app), s.endpoint(), s.withOrder(), InstinctMailbox.status(app)?.at,
+      InstinctPushDispatcher.inbox(app).size(), backupMinutes(app, box.intervalMinutes())) { InstinctDeferral.clock(it, Calendar.getInstance()) }
+  }
+
   /** The masked endpoint and whether the script has it, for Settings. */
   fun status(context: Context): String {
     val s = settings(context)

@@ -257,4 +257,17 @@ class InstinctDoorbellTest {
     assertFalse(state.encode().contains("p256dh"))
   }
 
+
+  @Test fun `without a registration or a ring, the details explain that Insto only polls`() {
+    val clock: (Long) -> String = { "09:30" }
+    val none = InstinctDoorbellText.details(DoorbellState(), null, null, false, null, 0, 15, clock)
+    assertTrue(none.last(), none.last().contains("solo con la revisión periódica (cada 15 min)"))
+    val quiet = InstinctDoorbellText.details(registered.copy(informedAt = 1L), "io.heckel.ntfy", endpoint, false, 1L, 0, 15, clock)
+    assertTrue(quiet.last().contains("Todavía no llegó ningún timbre"))
+    val working = InstinctDoorbellText.details(registered.copy(informedAt = 1L, lastRingAt = 2L, encryptionConfirmed = true), "io.heckel.ntfy", endpoint, false, 1L, 1, 15, clock)
+    assertTrue(working.joinToString(), working.none { it.contains("revisión periódica (cada") })
+    assertTrue(working.joinToString(), working.any { it == "Cola de recepción: 1 pendiente · rechazados por cola llena 0 · «tomadas» por avisar 0 · fallos de disco 0" })
+    assertFalse(working.joinToString().contains(endpoint))
+  }
+
 }

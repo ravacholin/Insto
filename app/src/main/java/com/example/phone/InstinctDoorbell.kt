@@ -382,6 +382,41 @@ object InstinctDoorbellText {
     else -> InstinctDoorbellScript.OLD_SCRIPT_WITH_ORDER.replaceFirstChar { it.uppercaseChar() } + "."
   }
 
+  /**
+   * 1.19.0: the doorbell in detail, for Settings, one line each. Times through [clock]; never the endpoint (only its
+   * mask), a key, a token nor any content. [lastPoll] is the mailbox's last poll; [inbox] the entries waiting.
+   */
+  fun details(state: DoorbellState, distributor: String?, endpoint: String?, withOrder: Boolean, lastPoll: Long?, inbox: Int,
+    backupMinutes: Int, clock: (Long) -> String): List<String> = buildList {
+    add("Distribuidor: " + (distributor ?: "ninguno elegido"))
+    add("Registro: " + when {
+      state.failure != null -> "con problemas (${state.failure})"
+      endpoint == null -> "pendiente: el distribuidor todavía no dio el endpoint"
+      state.temporaryEndpoint -> "registrado con un distribuidor de respaldo (puede cambiar)"
+      else -> "registrado"
+    })
+    add(encryption(state, endpoint != null, withOrder))
+    add(status(endpoint, state, clock))
+    add("Última recepción push: " + (state.lastRingAt?.let(clock) ?: "ninguna"))
+    add("Última orden directa validada: " + (state.lastDirectAt?.let(clock) ?: "ninguna"))
+    add("Último sondeo del buzón: " + (lastPoll?.let(clock) ?: "ninguno") + " · respaldo cada $backupMinutes min")
+    add("Duplicados descartados ${state.duplicates} · fallos de descifrado ${state.decryptFailures} · fallos de verificación ${state.badPayloads}" +
+      " · sin cifrar ${state.plainPushes} · inciertas ${state.uncertain}")
+    add("Cola de recepción: $inbox pendiente" + (if (inbox == 1) "" else "s") + " · rechazados por cola llena ${state.queueRejected}" +
+      " · «tomadas» por avisar ${state.pendingTaken.size} · fallos de disco ${state.storageFailures}")
+    add("Último error: " + (state.lastError ?: "ninguno"))
+    onlyPolling(state, endpoint, backupMinutes)?.let(::add)
+  }
+
+  /** Why Insto works only by polling now, or null when the push is working. */
+  fun onlyPolling(state: DoorbellState, endpoint: String?, backupMinutes: Int): String? = when {
+    endpoint == null || state.failure != null ->
+      "Ahora Insto funciona solo con la revisión periódica (cada $backupMinutes min): el timbre no está registrado. Las órdenes llegan igual, más tarde."
+    state.lastRingAt == null ->
+      "Todavía no llegó ningún timbre: hasta que llegue, Insto depende de la revisión periódica. Probalo de punta a punta."
+    else -> null
+  }
+
   /** 1.19.0: whether the doorbell travels encrypted (RFC 8291), and whether the order can travel inside it. */
   fun encryption(state: DoorbellState, hasEndpoint: Boolean, withOrder: Boolean): String = when {
     !hasEndpoint -> "Cifrado: esperando el registro con el distribuidor."

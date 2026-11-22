@@ -487,7 +487,8 @@ private fun InstinctMailboxSection(replyMode: InstinctReplyMode, revision: Int, 
 
 /**
  * «Timbre instantáneo (ntfy)» (1.17.0): a UnifiedPush push that only says «hay algo en el buzón». Off by default; it
- * needs the mailbox on and a distributor. The endpoint is only ever shown masked.
+ * needs the mailbox on and a distributor. The endpoint is only ever shown masked. 1.19.0: the encryption line, the
+ * detail of the transport and «Probar de punta a punta».
  */
 @Composable
 private fun InstinctDoorbellSection(revision: Int, onChange: () -> Unit) {
@@ -502,6 +503,13 @@ private fun InstinctDoorbellSection(revision: Int, onChange: () -> Unit) {
   val status = remember(revision) { doorbell.status(context) }
   val withOrder = remember(revision) { settings.withOrder() }
   val withOrderStatus = remember(revision) { doorbell.withOrderStatus(context) }
+  val encryption = remember(revision) { doorbell.encryptionStatus(context) }
+  // Read off the main thread: the inbox and the states are files.
+  var details by remember { mutableStateOf<List<String>>(emptyList()) }
+  LaunchedEffect(revision, enabled) {
+    details = if (enabled) withContext(Dispatchers.IO) { runCatching { doorbell.details(context) }.getOrDefault(emptyList()) } else emptyList()
+  }
+  var steps by remember { mutableStateOf<List<String>>(emptyList()) }
   var notice by remember { mutableStateOf<String?>(null) }
   var busy by remember { mutableStateOf(false) }
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_doorbell")) {
@@ -521,6 +529,7 @@ private fun InstinctDoorbellSection(revision: Int, onChange: () -> Unit) {
     }
     if (enabled) {
       SettingsDescription(status, modifier = Modifier.testTag("instinct_doorbell_status"))
+      SettingsDescription(encryption, modifier = Modifier.testTag("instinct_doorbell_encryption"))
       // 1.18.0: the signed order inside the doorbell. Off by default; the script hears it like the endpoint.
       Column(Modifier.testTag("instinct_doorbell_with_order")) {
         SettingsSwitch(com.example.phone.InstinctDoorbellText.WITH_ORDER_LABEL, withOrder,
@@ -534,6 +543,20 @@ private fun InstinctDoorbellSection(revision: Int, onChange: () -> Unit) {
           busy = false; onChange()
         }
       }, enabled = !busy, modifier = Modifier.testTag("instinct_doorbell_test")) { Text("Probar timbre") }
+      OutlinedButton(onClick = {
+        busy = true; notice = "Publicando una orden de prueba que no ejecuta nada…"; steps = emptyList()
+        scope.launch {
+          steps = withContext(Dispatchers.IO) { runCatching { doorbell.endToEnd(context).map { it.toString() } }.getOrDefault(listOf("No se pudo probar.")) }
+          notice = null; busy = false; onChange()
+        }
+      }, enabled = !busy, modifier = Modifier.testTag("instinct_doorbell_end_to_end")) { Text("Probar de punta a punta") }
+      SettingsDescription("La prueba de punta a punta publica en el buzón una orden de solo lectura («${com.example.phone.InstinctDoorbell.END_TO_END_LINE}»): " +
+        "no cambia el volumen, no crea alarmas ni ejecuta nada.")
+      Column(Modifier.testTag("instinct_doorbell_steps")) { steps.forEach { SettingsDescription(it) } }
+      if (details.isNotEmpty()) {
+        Text("Detalle del timbre", style = MaterialTheme.typography.bodyMedium)
+        Column(Modifier.testTag("instinct_doorbell_details")) { details.forEach { SettingsDescription(it) } }
+      }
     }
     notice?.let { SettingsDescription(it) }
   }

@@ -51,6 +51,8 @@ class InstinctDoorbellFlowTest {
   /** The script answers like 1.19.0 (it saves the sealed doorbell); false: like 1.18.0. */
   private var scriptSeals = true
   private var scriptRelay = false
+  /** What the fake script does after storing an order: ring the phone, or nothing. */
+  private var ringOnOrder: ((MailboxOrder) -> Unit)? = null
   private val ringJobs = mutableListOf<Long?>()
   private val followUps = mutableListOf<Long?>()
   private val mailboxJobs = mutableListOf<Long?>()
@@ -108,6 +110,13 @@ class InstinctDoorbellFlowTest {
       } else {
         val body = JSONObject(ex.bodyText())
         when (body.optString("action")) {
+          "orden" -> {
+            // The script stores it and rings: the relay's encrypted order when [scriptRings], nothing otherwise.
+            val o = MailboxOrder(body.getString("id"), body.getString("at"), (0 until body.getJSONArray("lines").length()).map { body.getJSONArray("lines").getString(it) }, body.getString("sig"))
+            inbox += o
+            ringOnOrder?.invoke(o)
+            FakeHttp.Reply(200, JSONObject().put("ok", true).put("id", o.id).toString())
+          }
           "tomadas" -> { val ids = body.getJSONArray("ids"); (0 until ids.length()).forEach { taken += ids.getString(it) }; FakeHttp.Reply(200, """{"ok":true}""") }
           "timbre" -> {
             scriptBodies += body
@@ -148,6 +157,7 @@ class InstinctDoorbellFlowTest {
   }
 
   @After fun tearDown() {
+    InstinctDoorbell.endToEndWaitMillis = InstinctDoorbellPolicy.TEST_WAIT_MILLIS
     InstinctDoorbell.setWithOrder(app, false)
     InstinctDoorbell.setEnabled(app, false)
     box.setIntervalMinutes(5)
@@ -751,6 +761,52 @@ class InstinctDoorbellFlowTest {
     val token = register()
     deliver(UnifiedPush.ACTION_TEMP_UNAVAILABLE, token)
     assertTrue(InstinctDoorbell.diagnosis(app), InstinctDoorbell.diagnosis(app).contains("no está disponible"))
+  }
+
+
+  // 1.19.0: diagnosis and «Probar de punta a punta»
+
+  @Test fun `end to end through the encrypted doorbell tells every step apart and runs nothing`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 3, 0)
+    ringOnOrder = { o -> ringWith(token, payload(o)) }
+    InstinctDoorbell.endToEndWaitMillis = 2_000
+    val steps = InstinctDoorbell.endToEnd(app)
+    assertEquals(steps.joinToString("\n"), listOf("Registro", "Entrega del push", "Descifrado", "Verificación de la orden", "Despacho", "Resultado"), steps.map { it.name })
+    assertTrue(steps.joinToString("\n"), steps.all { it.ok == true })
+    assertTrue(steps.single { it.name == "Despacho" }.detail.contains("sin leer la planilla"))
+    assertEquals("nothing changed on the phone", 3, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(0, gets)
+  }
+
+  @Test fun `end to end without push says Insto is only polling and still verifies through the poll`() {
+    register()
+    InstinctDoorbell.endToEndWaitMillis = 300
+    val steps = InstinctDoorbell.endToEnd(app)
+    val delivery = steps.single { it.name == "Entrega del push" }
+    assertEquals(false, delivery.ok)
+    assertTrue(delivery.detail.contains("solo con la revisión periódica"))
+    assertEquals(true, steps.single { it.name == "Verificación de la orden" }.ok)
+    assertTrue(steps.single { it.name == "Despacho" }.detail.contains("sondeo"))
+  }
+
+  @Test fun `end to end with the doorbell not registered stops at the registration`() {
+    InstinctDoorbell.setEnabled(app, true)
+    val steps = InstinctDoorbell.endToEnd(app)
+    assertEquals(false, steps.single().ok)
+    assertEquals("Registro", steps.single().name)
+  }
+
+  @Test fun `the details show every part of the transport and no secret`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    ringWith(token, PLAIN)
+    val lines = InstinctDoorbell.details(app)
+    val text = lines.joinToString("\n")
+    listOf("Distribuidor:", "Registro: registrado", "Cifrado RFC 8291", "Endpoint ••••", "Última recepción push:", "Última orden directa validada:",
+      "Último sondeo del buzón:", "Duplicados descartados", "Cola de recepción:", "Último error:").forEach { assertTrue("$it in\n$text", text.contains(it)) }
+    listOf(endpoint, publicKeys().p256dh, publicKeys().auth, token, key).forEach { assertFalse(text.contains(it)) }
   }
 
 }
