@@ -98,6 +98,8 @@ object InstinctMailbox {
   private const val STATUS_FILE = "instinct-mailbox-status.json"
   /** Immediate polls closer than this to the last one are skipped: the Apps Script quota is not spent on bursts. */
   private const val MIN_SPACING_MILLIS = 20_000L
+  /** The record of seen ids could not be written: a disk problem, not the network. */
+  const val STORAGE_FAILURE = "no se pudo guardar el registro de órdenes vistas"
 
   internal var clock: () -> Long = { InstinctScheduler.wallClock() }
   internal var client: () -> InstinctMailboxClient = { InstinctMailboxClient(InstinctLog.client()) }
@@ -180,11 +182,15 @@ object InstinctMailbox {
       is InstinctMailboxClient.Fetch.Failed -> return status(app, Result.Failed(fetched.reason))
       is InstinctMailboxClient.Fetch.Orders -> fetched.orders
     }
-    // Verified and marked seen on disk before anything else: a valid order is dispatched at most once.
-    val outcome = InstinctMailboxPoll.process(orders, key, clock(), seen(app))
-    // Every id read, also the refused ones, so they never come back. If this fails nothing repeats: they are seen.
-    if (outcome.taken.isNotEmpty()) runCatching { client().take(url, token, outcome.taken) }
+    // Verified and marked seen on disk before anything else: a valid order is dispatched at most once. If the record
+    // cannot be written nothing runs and nothing is marked taken: the next poll reads them again.
+    val outcome = try { InstinctMailboxPoll.process(orders, key, clock(), seen(app)) } catch (_: Exception) {
+      return status(app, Result.Failed(STORAGE_FAILURE))
+    }
+    // 1.19.0: run first, then tell the sheet. Every id read, also the refused ones, is marked taken so it never comes
+    // back; if that fails nothing repeats (they are seen) and the next poll marks them.
     outcome.valid.forEach { order -> runCatching { InstinctProposalIntake.onMailbox(app, order) } }
+    if (outcome.taken.isNotEmpty()) runCatching { client().take(url, token, outcome.taken) }
     return status(app, Result.Done(outcome.valid.size, outcome.badSignatures, outcome.expired))
   }
 

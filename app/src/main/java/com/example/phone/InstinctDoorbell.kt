@@ -115,6 +115,8 @@ data class DoorbellState(
   val encryptedPushes: Int = 0,
   val plainPushes: Int = 0,
   val decryptFailures: Int = 0,
+  /** Ids of direct orders the sheet must still hear as taken (`POST tomadas`); never anything else of the order. */
+  val pendingTaken: List<String> = emptyList(),
 ) {
   fun encode(): String = JSONObject().put("confirmed", confirmed).put("informPending", informPending).put("rings", rings).put("ringPolls", ringPolls)
     .put("withOrderConfirmed", withOrderConfirmed).put("directOrders", directOrders).put("badPayloads", badPayloads)
@@ -126,11 +128,14 @@ data class DoorbellState(
       token?.let { put("token", it) }; distributor?.let { put("distributor", it) }; informedAt?.let { put("informedAt", it) }
       failure?.let { put("failure", it) }; lastRingAt?.let { put("lastRingAt", it) }; lastDirectAt?.let { put("lastDirectAt", it) }
       lastError?.let { put("lastError", it) }; keysFingerprint?.let { put("keysFingerprint", it) }
+      if (pendingTaken.isNotEmpty()) put("pendingTaken", JSONArray(pendingTaken))
     }.toString()
 
   companion object {
+    const val MAX_PENDING_TAKEN = 50
+
     fun decode(text: String): DoorbellState = runCatching {
-      require(text.length <= 8_192)
+      require(text.length <= 16_384)
       val o = JSONObject(text)
       DoorbellState(o.optString("token").takeIf(UnifiedPush::validToken), o.optString("distributor").takeIf { it.isNotEmpty() },
         o.optBoolean("confirmed"), o.optLong("informedAt", 0L).takeIf { it > 0 }, o.optBoolean("informPending"),
@@ -139,7 +144,8 @@ data class DoorbellState(
         o.optInt("duplicates"), o.optInt("queueRejected"), o.optInt("uncertain"), o.optInt("storageFailures"),
         o.optLong("lastDirectAt", 0L).takeIf { it > 0 }, o.optString("lastError").takeIf { it.isNotEmpty() }?.take(200),
         o.optBoolean("encryptionConfirmed"), o.optBoolean("relayConfirmed"), o.optBoolean("perOrderRing"), o.optBoolean("temporaryEndpoint"),
-        o.optString("keysFingerprint").takeIf { it.isNotEmpty() }, o.optInt("encryptedPushes"), o.optInt("plainPushes"), o.optInt("decryptFailures"))
+        o.optString("keysFingerprint").takeIf { it.isNotEmpty() }, o.optInt("encryptedPushes"), o.optInt("plainPushes"), o.optInt("decryptFailures"),
+        o.optJSONArray("pendingTaken")?.let { a -> (0 until minOf(a.length(), MAX_PENDING_TAKEN)).map { a.optString(it) }.filter { it.isNotEmpty() } }.orEmpty())
     }.getOrDefault(DoorbellState())
   }
 }

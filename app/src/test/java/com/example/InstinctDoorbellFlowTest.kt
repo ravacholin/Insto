@@ -55,6 +55,7 @@ class InstinctDoorbellFlowTest {
   private val followUps = mutableListOf<Long?>()
   private val mailboxJobs = mutableListOf<Long?>()
   private val drainJobs = mutableListOf<Long?>()
+  private val takeJobs = mutableListOf<Long?>()
   private val cancelled = mutableListOf<String>()
   private var gets = 0
   private var online = true
@@ -94,6 +95,7 @@ class InstinctDoorbellFlowTest {
     InstinctDoorbell.schedule = { context, kind, delay ->
       when (kind) {
         "inform" -> InstinctDoorbell.informNow(context); "follow-up" -> followUps += delay; "drain" -> drainJobs += delay
+        "take" -> { takeJobs += delay; InstinctDoorbell.takeNow(context) }
         else -> ringJobs += delay
       }
     }
@@ -336,18 +338,49 @@ class InstinctDoorbellFlowTest {
     assertEquals("without reading the sheet", 0, gets)
     assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
     assertEquals(1, bell.state().directOrders)
-    assertEquals("a poll about 60 seconds later", listOf<Long?>(60_000L), followUps)
+    // 1.19.0: the script rings per order, so the sheet only hears «tomada»; no follow-up poll.
+    assertTrue(followUps.isEmpty())
+    assertEquals(listOf<Long?>(0L), takeJobs)
+    assertTrue(order.id in taken)
+    assertTrue(bell.state().pendingTaken.isEmpty())
+    assertEquals(0, gets)
     assertTrue(InstinctDoorbell.diagnosis(app), InstinctDoorbell.diagnosis(app).contains("órdenes directas 1 · payload inválido 0"))
-    // The follow-up poll marks it taken and never runs it again.
+    // Nor the same doorbell delivered twice, nor a later poll.
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringWith(token, payload(order))
+    InstinctMailbox.poll(app)
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
+  }
+
+  @Test fun `with a script older than 1_19_0 a direct order is followed by a poll about 60 seconds later`() {
+    scriptSeals = false
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    val order = order("#insto poner el volumen al 40 por ciento")
+    inbox += order
+    ringClear(token, payload(order))
+    assertEquals(listOf<Long?>(60_000L), followUps)
+    assertTrue(takeJobs.isEmpty())
     audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
     InstinctDoorbell.followUp(app)
     assertEquals(1, gets)
     assertTrue(order.id in taken)
     assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
-    // Nor the same doorbell delivered twice.
+  }
+
+  @Test fun `without network the direct order still runs and tomadas is retried later`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    online = false
+    val down = FakeHttp { throw java.io.IOException("sin red") }
+    InstinctMailbox.client = { InstinctMailboxClient(InstinctLogClient(OkHttpClient.Builder().addInterceptor(down).build())) }
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    val order = order("#insto poner el volumen al 40 por ciento")
     ringWith(token, payload(order))
-    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
-    assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
+    assertTrue("it ran without network", audio.getStreamVolume(AudioManager.STREAM_MUSIC) > 0)
+    assertEquals(listOf(order.id.lowercase()), bell.state().pendingTaken)
+    assertTrue("the job retries", InstinctDoorbell.takeNow(app))
   }
 
   @Test fun `an order the poll took first is not run again by its doorbell`() {

@@ -243,4 +243,18 @@ class InstinctDoorbellTest {
     listOf(on, chat).forEach { assertFalse(it.contains("ntfy")); assertFalse(it.contains(endpoint)) }
     assertTrue("the chat copy still never reads as orders", InstinctAck.safe(chat))
   }
+
+  @Test fun `the 1_19_0 state survives a restart and a 1_18_0 state reads with safe defaults`() {
+    val state = DoorbellState(distributor = "io.heckel.ntfy", confirmed = true, encryptionConfirmed = true, relayConfirmed = true,
+      perOrderRing = true, duplicates = 3, uncertain = 1, decryptFailures = 2, lastError = "x", pendingTaken = listOf("a", "b"),
+      keysFingerprint = "0123456789ab", lastDirectAt = 5L)
+    assertEquals(state, DoorbellState.decode(state.encode()))
+    val old = DoorbellState.decode("""{"token":"tok-1234","distributor":"io.heckel.ntfy","confirmed":true,"rings":4,"withOrderConfirmed":true}""")
+    assertEquals("tok-1234", old.token)
+    assertFalse("encryption is never assumed", old.encryptionConfirmed)
+    assertFalse(old.perOrderRing)
+    assertTrue(old.pendingTaken.isEmpty())
+    assertFalse(state.encode().contains("p256dh"))
+  }
+
 }

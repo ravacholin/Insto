@@ -81,6 +81,9 @@ object InstinctDoorbell {
   internal const val KIND_RING = "ring"
   /** The poll ~60 seconds after an order that came inside the doorbell (1.18.0). */
   internal const val KIND_FOLLOW_UP = "follow-up"
+  /** 1.19.0: tells the sheet which orders of the doorbell were taken. */
+  internal const val KIND_TAKE = "take"
+  private const val TAKE_JOB_ID = 7_322
   /** 1.19.0: drains the push inbox if the process died before dispatching it. */
   internal const val KIND_DRAIN = "drain"
   private const val DRAIN_JOB_ID = 7_321
@@ -344,9 +347,31 @@ object InstinctDoorbell {
     InstinctPushDispatcher.inbox(context).add(PushEntry.Kind.RING)
   }
 
-  /** After an order of the doorbell was handed over: a poll ~60 seconds later marks it taken in the sheet. */
+  /**
+   * After an order of the doorbell was handed over, the sheet must hear it was taken. A 1.19.0 script rings for every
+   * new order, so a `POST tomadas` with its id is enough (a job with the network and backoff), without reading the sheet.
+   * An older script skips rings within 5 seconds: then a poll ~60 seconds later also picks up any order it skipped.
+   */
   internal fun afterDirect(context: Context, order: MailboxOrder) {
-    schedule(context.applicationContext, KIND_FOLLOW_UP, InstinctDoorbellPolicy.FOLLOW_UP_MILLIS)
+    val app = context.applicationContext
+    val s = settings(app)
+    if (!s.state().perOrderRing) { schedule(app, KIND_FOLLOW_UP, InstinctDoorbellPolicy.FOLLOW_UP_MILLIS); return }
+    s.update { it.copy(pendingTaken = (it.pendingTaken + order.id.lowercase()).distinct().takeLast(DoorbellState.MAX_PENDING_TAKEN)) }
+    schedule(app, KIND_TAKE, 0L)
+  }
+
+  /** The `tomadas` job: true when it should retry (no network, the script failed). Never runs or reads an order. */
+  fun takeNow(context: Context): Boolean {
+    val app = context.applicationContext
+    val s = settings(app)
+    val ids = s.state().pendingTaken
+    if (ids.isEmpty()) return false
+    val log = InstinctLogSettings(app)
+    val url = log.url() ?: return false
+    val token = log.token() ?: return false
+    val ok = runCatching { InstinctMailbox.client().take(url, token, ids) }.getOrDefault(false)
+    if (ok) s.update { state -> state.copy(pendingTaken = state.pendingTaken - ids.toSet()) }
+    return !ok
   }
 
   /** The follow-up poll's job: it respects the gate like a ring (a running poll, the 5-second window, no network). */
@@ -362,6 +387,8 @@ object InstinctDoorbell {
     countPoll(app)
     val result = runCatching { InstinctMailbox.poll(app) }.getOrElse { InstinctMailbox.Result.Failed(InstinctLogClient.Failure.NETWORK.label) }
     if (result is InstinctMailbox.Result.Failed && result.reason == InstinctLogClient.Failure.NETWORK.label) schedule(app, KIND_RING, null)
+    if (result is InstinctMailbox.Result.Failed && result.reason != "apagado")
+      settings(app).update { it.copy(lastError = "el sondeo por timbre falló (${result.reason.take(120)})") }
     return result
   }
 
@@ -431,6 +458,7 @@ object InstinctDoorbell {
     val s = settings(app)
     if (s.enabled()) register(app)
     if (s.state().informPending || (s.enabled() && s.endpoint() != null)) inform(app)
+    if (s.state().pendingTaken.isNotEmpty()) schedule(app, KIND_TAKE, 0L)
     // A boot or an update with pushes still on disk: dispatch them (each order is verified again).
     if (InstinctPushDispatcher.inbox(app).size() > 0) InstinctPushDispatcher.kick(app)
   }
@@ -491,7 +519,7 @@ object InstinctDoorbell {
   }.getOrDefault(true)
 
   private fun jobId(kind: String) = when (kind) {
-    KIND_RING -> RING_JOB_ID; KIND_FOLLOW_UP -> FOLLOW_UP_JOB_ID; KIND_DRAIN -> DRAIN_JOB_ID; else -> INFORM_JOB_ID
+    KIND_RING -> RING_JOB_ID; KIND_FOLLOW_UP -> FOLLOW_UP_JOB_ID; KIND_DRAIN -> DRAIN_JOB_ID; KIND_TAKE -> TAKE_JOB_ID; else -> INFORM_JOB_ID
   }
 
   private fun cancelJob(context: Context, kind: String) {
@@ -507,7 +535,7 @@ object InstinctDoorbell {
       .setRequiredNetworkType(if (kind == KIND_DRAIN) JobInfo.NETWORK_TYPE_NONE else JobInfo.NETWORK_TYPE_ANY)
       .setExtras(PersistableBundle().apply { putString(EXTRA_KIND, kind) })
     val job = when {
-      kind == KIND_INFORM -> builder().setBackoffCriteria(BACKOFF_MILLIS, JobInfo.BACKOFF_POLICY_EXPONENTIAL).build()
+      kind == KIND_INFORM || kind == KIND_TAKE -> builder().setBackoffCriteria(BACKOFF_MILLIS, JobInfo.BACKOFF_POLICY_EXPONENTIAL).build()
       delayMillis != null -> builder().setMinimumLatency(delayMillis).build()
       Build.VERSION.SDK_INT >= 31 -> builder().setExpedited(true).build()
       else -> builder().build()
@@ -530,6 +558,7 @@ class InstinctDoorbellJobService : JobService() {
       val retry = when (kind) {
         InstinctDoorbell.KIND_RING -> { runCatching { InstinctDoorbell.pollForRing(app) }; false }
         InstinctDoorbell.KIND_FOLLOW_UP -> { runCatching { InstinctDoorbell.followUp(app) }; false }
+        InstinctDoorbell.KIND_TAKE -> runCatching { InstinctDoorbell.takeNow(app) }.getOrDefault(true)
         InstinctDoorbell.KIND_DRAIN -> {
           runCatching { InstinctPushDispatcher.drain(app); InstinctPushDispatcher.awaitIdle(InstinctDoorbellPolicy.JOB_WAIT_MILLIS) }; false
         }
