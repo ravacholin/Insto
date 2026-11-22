@@ -182,7 +182,8 @@ RFC 8291 sin criptografía escrita a mano. 1.19.0 lo resuelve sin criptografía 
 
 - Una orden completa y autenticada se ejecuta **sin leer la planilla**: verificar, reclamar, `onMailbox`.
 - La reconciliación es un `POST tomadas` del id (job con red y reintentos), no un sondeo completo. Un sondeo de
-  seguimiento solo se hace si el script no confirmó que toca el timbre por cada orden (scripts anteriores a 1.19.0).
+  seguimiento solo se hace si el script no confirmó que toca el timbre por cada orden (`cadaOrden`, scripts anteriores
+  a 1.19.0).
 - El script de 1.19.0 manda cada orden nueva cifrada sin la espera de 5 s (con un tope de 30 por minuto); el timbre
   simple conserva la espera.
 - En el sondeo, `onMailbox` va **antes** del `POST tomadas`: la orden se ejecuta apenas se reclama.
@@ -202,3 +203,90 @@ de solo lectura (`#insto probar ver estado`), sin tocar el volumen, crear alarma
 La interpretación de órdenes, `SemanticCommandGuard`, la autonomía (Nunca / Confirmar / Solo), el freno anti-bucle,
 las rutinas, «Deshacer», las órdenes programadas, los disparadores, las restricciones para abrir actividades en segundo
 plano, la vía WhatsApp y el formato firmado `insto-v4`.
+
+## 7. 1.18.0 frente a 1.19.0
+
+| Aspecto | 1.18.0 | 1.19.0 |
+| --- | --- | --- |
+| Hilo principal en `onReceive` | espera hasta 20 s (`task.get`) | vuelve enseguida; solo `goAsync()` y encolar |
+| `finish()` | en un `finally`, sin garantía de unicidad | exactamente una vez (`OnceFinisher`), probado |
+| Hilos | `CachedThreadPool` sin límite; un `Thread` por job | 1 receptor (cola 16), 1 despachador, 1 ejecutor de jobs |
+| `MESSAGE_ACK` | antes de procesar | después de guardar en disco |
+| Persistencia de lo recibido | ninguna | `instinct-push-inbox.json` + job de rescate |
+| Conector UnifiedPush | escrito a mano | biblioteca oficial 3.3.6 |
+| Cifrado RFC 8291 | no (texto en claro) | sí: timbre simple cifrado por Insto; orden cifrada con relé opcional |
+| Mensaje en claro | podía ejecutar una orden firmada | solo hace sondear (con el cifrado confirmado) |
+| Orden directa → planilla | sondeo completo a los 60 s | `POST tomadas` del id |
+| Sondeo: ejecución vs. «tomadas» | primero «tomadas» (hasta 15 s), después ejecuta | primero ejecuta |
+| Ráfaga de órdenes | un timbre cada 5 s; el resto, al sondeo | un timbre por orden (30/min) con el script nuevo |
+| Muerte del proceso a mitad | se pierde en silencio (la recupera el respaldo) | se reanuda; si ya estaba reclamada, `incierta` |
+| Fallo de disco en `seen` | se informaba como «sin red» | no ejecuta, se reintenta y se diagnostica |
+| Diagnóstico | contadores | detalle por etapa y prueba de punta a punta |
+
+## 8. Pruebas
+
+Ejecutadas en este entorno (Linux, JDK 21, Android SDK 36.1, Robolectric), no en un teléfono:
+
+- `./gradlew lintDebug testDebugUnitTest assembleDebug` y `:app:minifyReleaseWithR8`: 1136 pruebas, 0 fallos, 1 omitida
+  preexistente; lint sin errores nuevos; R8 de release sin clases faltantes.
+- `python3 scripts/test-phone-core.py`: 703. `node scripts/test-bitacora-gs.js`: 32. `npm test` del relé: 9.
+- Cobertura nueva: `InstinctPushInboxTest` (cola, concurrencia de 20 hilos, clasificación), `InstinctDoorbellFlowTest`
+  (no bloquear, `finish` único, cola llena, muerte del proceso, `incierta`, ráfaga de 20, push y sondeo a la vez,
+  repetidos durante la ejecución, biblioteca real con token y acuse, migración, cifrado, degradación, descifrado fallido,
+  tamaño, endpoint nuevo, sin red, script viejo, pantalla bloqueada, actividad en segundo plano, Nunca, Confirmar,
+  punta a punta), `InstinctMailboxFlowTest` (ejecutar antes de «tomadas», fallo de disco, Apps Script caído),
+  `InstinctPushCryptoTest` (ejemplo de RFC 8291 y vectores del relé descifrados con Tink, mensaje alterado) y el relé
+  (ejemplo de RFC 8291 byte a byte, secreto, hosts, tamaños).
+
+**No probado de verdad:** ntfy real (ni `ntfy.sh` ni propio), Cloudflare Workers real, Apps Script real enviando
+`Content-Encoding: aes128gcm` con `UrlFetchApp`, un distribuidor real con la biblioteca, Doze real y Android 16 real.
+Las pruebas de Robolectric usan la biblioteca y su base de datos reales, pero un `KeyManager` sin Android Keystore.
+
+## 9. Riesgos residuales
+
+- **`UrlFetchApp` y `Content-Encoding`:** está documentado que se pueden fijar cabeceras, pero no se verificó en Google
+  que respete `Content-Encoding: aes128gcm` y un cuerpo binario sin tocarlo. Si no, ntfy recibiría otra cosa y el timbre
+  contaría como «no se pudo descifrar» (el respaldo sigue funcionando). Es lo primero a verificar en el teléfono.
+- **ntfy y mensajes binarios:** ntfy reenvía cuerpos binarios de UnifiedPush; la versión instalada debe ser reciente.
+- **Tink suma tamaño** (Tink y protobuf llegan con la biblioteca); R8 lo recorta en release.
+- **La biblioteca usa una API marcada como obsoleta** (`MessagingReceiver`) para poder acusar después de guardar. Está
+  soportada y documentada, pero una versión futura podría quitarla.
+- **Ventana de `incierta`:** si el proceso muere entre reclamar y quitar de la cola, la orden se informa incierta aunque
+  haya corrido. Es la opción conservadora: nunca se repite.
+- **El relé ve la orden en claro** mientras la cifra, como antes ntfy. Es opcional y propio.
+- **El modo heredado sigue aceptando órdenes en claro** mientras el script no se actualice (compatibilidad con 1.18.0).
+
+## 10. Configuración manual
+
+1. Apps Script: pegar `docs/instinct-bitacora.gs` de 1.19.0 (conservar `TOKEN`) e implementar una versión nueva.
+2. Opcional, orden cifrada en el timbre: desplegar `relay/insto-webpush-relay` (ver su README), completar `RELAY_URL` y
+   `RELAY_SECRET` en el script y encender «Incluir la orden en el timbre». Nada se desplegó ni activó automáticamente.
+
+## 11. Prueba en un Motorola con Android 16
+
+Preparación: Insto 1.19.0 instalado, ntfy actualizado desde F-Droid o Play Store, el buzón funcionando (bitácora, clave),
+y `adb` conectado por si hace falta mirar Logcat (Insto no escribe contenido ni claves ahí).
+
+1. **Batería:** Ajustes de Android → Apps → ntfy → Batería → *Sin restricciones*. Lo mismo para Insto. En Motorola,
+   revisá también *Ajustes → Batería → Optimización* y sacá a las dos apps.
+2. **Script:** pegá el `.gs` de 1.19.0, implementá una versión nueva y, si es la primera vez, ejecutá `autorizarTimbre`.
+3. **Registro:** en Insto, Ajustes → Propuestas de Instinct → Buzón → «Timbre instantáneo (ntfy)». Apagalo y prendelo si
+   venías de 1.18.0. En ntfy debe aparecer la suscripción «Insto: timbre del buzón de Instinct».
+   Esperado en «Detalle del timbre»: «Registro: registrado» y «Cifrado RFC 8291: activo».
+4. **Punta a punta:** «Probar de punta a punta». Esperado: las seis etapas con ✓ y «Despacho: por el sondeo del buzón»
+   (sin relé) o «por el timbre, sin leer la planilla» (con relé). Si «Descifrado» dice que llegó sin cifrar o no se pudo
+   descifrar, el problema está entre `UrlFetchApp` y ntfy (riesgo de la sección 9).
+5. **Pantalla bloqueada:** bloqueá el teléfono, esperá un minuto y mandá desde Instinct (o con el `curl` de la guía del
+   buzón) `#insto ver estado`. La respuesta debe aparecer en la bitácora en segundos. Una orden de volumen con el
+   teléfono bloqueado queda esperando confirmación (regla existente).
+6. **Proceso muerto:** `adb shell am force-stop <paquete de Insto>`, mandá una orden y abrí ntfy: la orden debe correr
+   cuando el distribuidor despierte a Insto, o como mucho con el sondeo de respaldo.
+7. **Reinicio:** reiniciá el teléfono, no abras Insto, mandá una orden: debe llegar por el timbre.
+8. **Sin red:** modo avión, mandá una orden desde otro dispositivo, sacá el modo avión: llega una vez (ntfy reintenta o el
+   respaldo la toma). Mirá en el detalle que «Duplicados descartados» no se dispare por error y que no haya ejecución doble.
+9. **ntfy detenido:** forzá la detención de ntfy, mandá una orden: llega con el sondeo de respaldo (15 min si el timbre
+   sonó en las últimas 24 h). El detalle explica que Insto funciona solo por sondeo si el timbre no llega.
+10. **Doze:** `adb shell dumpsys deviceidle force-idle`, mandá una orden, `adb shell dumpsys deviceidle unforce`. Anotá
+    la demora: `Urgency: high` debería hacer que ntfy la entregue.
+
+Anotá en cada paso la hora de envío y la de «Última recepción push» para medir la latencia real.

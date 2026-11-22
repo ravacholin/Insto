@@ -1,4 +1,4 @@
-# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.18.0)
+# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.19.0)
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
@@ -11,6 +11,8 @@ Desde 1.16.0, qué hace Instinct solo se elige **por tipo de acción** ([Autonom
 Desde 1.17.0, un **timbre** push con ntfy hace que una orden del buzón se tome en segundos ([Timbre](#timbre-1170)), y las órdenes pueden quedar **armadas** para que el teléfono las dispare solo: al terminar o empezar un evento, al conectar o desconectar auriculares, al desbloquear ([Disparadores por estado](#disparadores-por-estado-1170)) o todos los días, los días hábiles o los fines de semana hasta una fecha ([Órdenes recurrentes](#órdenes-recurrentes-1170)).
 
 Desde 1.18.0, la orden firmada puede viajar **dentro del timbre** y ejecutarse apenas llega, sin leer la planilla ([Orden directa en el timbre](#orden-directa-en-el-timbre-1180)); Insto publica en la planilla un **catálogo vivo** con las reglas vigentes, para que Instinct no dependa de una copia pegada ([Catálogo vivo](#catálogo-vivo-1180)), e Instinct puede **probar** una orden antes de mandarla ([Probar una orden](#probar-una-orden-1180)). Protocolo Insto v6.
+
+Desde 1.19.0, el timbre usa la biblioteca oficial de UnifiedPush y viaja **cifrado según RFC 8291**; la recepción ya no bloquea Android, lo recibido queda en una cola en disco que sobrevive a la muerte del proceso y una orden completa y autenticada se ejecuta sin leer la planilla ([Timbre cifrado y transporte confiable](#timbre-cifrado-y-transporte-confiable-1190)). Para Instinct no cambia nada: Protocolo Insto v6.
 
 La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. En **Autonomía** elegís, por categoría, si Instinct lo hace solo, espera tu confirmación o nunca. Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
 
@@ -452,7 +454,7 @@ Con el buzón, una orden tarda lo que tarde el próximo sondeo: de 5 a 15 minuto
 
 ### Transporte: UnifiedPush con ntfy
 
-- Insto implementa a mano el lado *connector* de [UnifiedPush](https://unifiedpush.org/) para Android (especificación AND_3), con un `BroadcastReceiver` (`InstinctDoorbellReceiver`) y un servicio vacío para `RAISE_TO_FOREGROUND`. No usa la biblioteca `connector` ni Firebase, y no agrega dependencias.
+- **Desde 1.19.0**, el lado *connector* de [UnifiedPush](https://unifiedpush.org/) es la biblioteca oficial `org.unifiedpush.android:connector` (ver [1.19.0](#timbre-cifrado-y-transporte-confiable-1190)). Hasta 1.18.0 Insto lo implementaba a mano (`InstinctDoorbellReceiver`); lo que sigue describe ese diseño, que 1.19.0 reemplaza en registro, tokens, acuses y cifrado. Sin Firebase ni Google Play Services.
 - El distribuidor es la app **ntfy**. Insto busca los distribuidores instalados (las apps que reciben `org.unifiedpush.android.distributor.REGISTER`). Si hay varios, se elige uno en Ajustes; si no hay ninguno, dice «Instalá ntfy para usar el timbre».
 - **Registro:** `REGISTER` con un token aleatorio (UUID) por registro. En Android 14 o posterior, el broadcast comparte la identidad de Insto (`setShareIdentityEnabled`); antes, va el `PendingIntent` `pi` inmutable que pide la especificación. Se agrega `application` (el nombre del paquete) para distribuidores anteriores a AND_3. Al reiniciar el teléfono se vuelve a registrar con el mismo token.
 - **El receptor está exportado**, porque el distribuidor es otra app. Todo pedido con un token que Insto no registró se ignora. Un `MESSAGE` **ignora el contenido**: lo mande quien lo mande y diga lo que diga, lo único que hace es sondear el buzón. Si trae `id`, se confirma con `MESSAGE_ACK`.
@@ -473,7 +475,7 @@ Un `POST` o un `GET` sin estas acciones se comporta exactamente igual que en 1.1
 
 ### Qué hace Insto cuando suena
 
-- Con `goAsync()`, sondea el buzón enseguida, fuera del hilo principal, y espera como mucho **20 segundos** antes de soltar el broadcast (el sondeo sigue si tarda más).
+- Con `goAsync()`, sondea el buzón enseguida, fuera del hilo principal. (Hasta 1.18.0 el hilo principal esperaba hasta 20 segundos; desde 1.19.0 no espera nada: ver [1.19.0](#timbre-cifrado-y-transporte-confiable-1190).)
 - **Ningún timbre se pierde por el espaciado.** Para el timbre, la separación mínima entre sondeos es de **5 segundos** (no los 20 de los sondeos inmediatos al abrir Insto o al llegar un mensaje de WhatsApp). Si suena dentro de esa ventana, se programa un sondeo para cuando termine. Si suena mientras hay un sondeo en curso, ese sondeo vuelve a leer el buzón al terminar (pudo haber leído la planilla antes de que se anotara la orden). Sin red, queda un job con restricción de red: *expedited* desde Android 12 (`setExpedited`), común en versiones anteriores.
 - **Intervalo de respaldo:** mientras el timbre está activo y sonó en las últimas 24 horas, el sondeo periódico pasa a ser cada **15 minutos**, aunque hayas elegido 2 o 5. Así se ahorra cuota de Apps Script. Si en 24 horas no suena ninguna vez, vuelve al intervalo que elegiste.
 
@@ -512,6 +514,70 @@ Al tocar el timbre a mano, el diagnóstico suma un timbre y un sondeo; la orden 
 - El timbre solo acelera: nunca saltea la firma, la lista blanca, la autonomía ni el freno. Una orden que llega por el timbre es idéntica a una del sondeo.
 - El script toca el timbre como mucho una vez cada 5 segundos; varias órdenes seguidas igual se leen todas en el mismo sondeo.
 - ntfy reenvía el texto `insto-timbre` sin cifrar; como no lleva nada, no importa qué diga. Con la [orden directa](#orden-directa-en-el-timbre-1180) encendida, ntfy ve las líneas de la orden (no puede cambiarlas: la firma lo impide).
+
+## Timbre cifrado y transporte confiable (1.19.0)
+
+Diseño completo, auditoría y riesgos: [`architecture/instinct-push-reliability.md`](architecture/instinct-push-reliability.md).
+
+### Recepción sin bloqueos
+
+- `onReceive()` solo toma `goAsync()` y encola el trabajo en un hilo propio (`insto-push-rx`, cola de 16). Vuelve enseguida: nunca espera disco, red ni una ejecución. `PendingResult.finish()` se llama **una sola vez**, también si el trabajo falla o la cola está llena.
+- El hilo receptor hace lo liviano: la biblioteca verifica el token y descifra; Insto clasifica y guarda el mensaje en la **cola durable** `instinct-push-inbox.json` (`noBackupFilesDir`, escritura atómica). Recién después la biblioteca manda `MESSAGE_ACK`: lo confirmado al distribuidor ya está en disco.
+- Un despachador de un solo hilo (`insto-push-dispatch`) atiende la cola; el hilo receptor lo espera como mucho **8 segundos** y suelta el broadcast. Un job de rescate (30 s, sin red) vacía lo que quede si el proceso muere; también al reiniciar el teléfono y al abrir Insto.
+- Cola acotada: 32 entradas, los timbres sin orden se funden en uno, una orden repetida no entra dos veces y una orden vence con la ventana de su firma (15 minutos). Los jobs del timbre corren en un solo ejecutor: ningún hilo por notificación.
+
+### Una sola ejecución
+
+- Una orden de la cola pasa por `InstinctMailboxSignature.verify` (firma, 15/2 minutos, id visto) y por `InstinctMailboxSeen.claimAll` sobre el registro que comparten el push, el sondeo periódico, el de respaldo, el que dispara WhatsApp y el de seguimiento. Solo el que gana la ejecuta, con la misma entrada que el sondeo (`InstinctProposalIntake.onMailbox`): mismo validador, autonomía, freno, «Deshacer», programadas y disparadores.
+- Una orden recuperada después de un cierre se **revalida** (firma, vigencia, visto, buzón encendido y clave) antes de seguir. Si un proceso la reclamó y murió antes de entregarla, no se sabe si corrió: se informa `incierta` en la bitácora y **no se repite**.
+- Si el registro de ids no se puede escribir, no se ejecuta nada: la orden se reintenta 3 veces y después queda para el sondeo.
+
+### UnifiedPush con la biblioteca oficial
+
+- `org.unifiedpush.android:connector` **3.3.6** (Apache 2.0; trae Tink 1.24.0). Maneja el token, el registro (identidad compartida en Android 14+, `pi` antes), `MESSAGE_ACK`, `UNREGISTERED`, los distribuidores de respaldo y las **claves de Web Push**: P-256 y un secreto `auth` por registro, con la privada cifrada por el Android Keystore. Descifra RFC 8291 (`aes128gcm`) con Tink.
+- Insto declara su propio receptor (`InstinctPushReceiver`, prioridad 0): el de la biblioteca no corre y el acuse sale después de guardar.
+- **Migración desde 1.18.0:** si queda el token del conector manual, se le manda `UNREGISTER` al distribuidor y se registra de nuevo con la biblioteca; el endpoint cambia y se le avisa al script. Interruptores, clave y bitácora se conservan.
+
+### Dos modalidades cifradas
+
+Apps Script no tiene ECDH ni AES-GCM, así que no puede cifrar RFC 8291 sin criptografía escrita a mano. Por eso:
+
+| Modalidad | Qué viaja | Qué hace falta |
+| --- | --- | --- |
+| **A. Timbre cifrado simple** (por defecto) | `insto-timbre` cifrado por Insto para sus propias claves (Tink). El script lo publica tal cual con `Content-Encoding: aes128gcm`, `TTL: 300` y `Urgency: high`. Insto lee la orden de la planilla. | El `instinct-bitacora.gs` de 1.19.0. |
+| **B. Timbre cifrado con orden** (opcional, apagada) | La orden firmada, cifrada por un relé propio en Cloudflare Workers (`relay/insto-webpush-relay`). Insto la ejecuta sin leer la planilla. | «Incluir la orden en el timbre» encendido y `RELAY_URL`/`RELAY_SECRET` en el script. Si el relé falla, suena la modalidad A. |
+
+El cifrado protege el transporte; **la firma HMAC sigue autorizando la orden**. Ninguno reemplaza al otro.
+
+- Cuando el script confirma el cifrado (`cifrado:true`), un mensaje que llega **en claro** ya no puede ejecutar una orden: solo hace revisar el buzón, y se cuenta como «sin cifrar».
+- Con un script anterior a 1.19.0 el timbre sigue en claro, como en 1.18.0 (**modo heredado, no conforme con UnifiedPush**), y Ajustes lo dice.
+
+### Apps Script (1.19.0)
+
+| Pedido | Qué hace |
+| --- | --- |
+| `POST {token, action:"timbre", endpoint, conOrden, cifrado:{timbre[, p256dh, auth]} \| null}` | Además del endpoint, guarda el timbre cifrado (y, solo con la orden en el timbre, las claves públicas para el relé) en las propiedades del script. Responde `{ok, timbre, conOrden, cifrado, rele, cadaOrden:true}`. Sin `cifrado` (Insto 1.18.0) responde exactamente lo de antes. |
+| `POST {token, action:"orden", …}` | Con el timbre cifrado guardado, **cada orden nueva toca el timbre**, sin la espera de 5 segundos y con un tope de 30 por minuto. Sin él, como en 1.18.0. |
+| `POST {token, action:"probar-timbre"}` | Usa el timbre cifrado y agrega `cifrado:true`. |
+
+### Latencia y reconciliación
+
+- Orden directa: verificar, reclamar, ejecutar. Sin pedido a la planilla.
+- Después, la planilla solo recibe `POST tomadas` con ese id (job con red y backoff). El sondeo de seguimiento a los 60 segundos queda solo para scripts anteriores a 1.19.0, que se saltean timbres dentro de los 5 segundos.
+- En cualquier sondeo, la orden se ejecuta **antes** de marcar «tomadas».
+- El sondeo periódico de respaldo sigue siempre: Insto nunca depende solo del push.
+
+### Ajustes y diagnóstico
+
+- **Ajustes → Propuestas de Instinct → Buzón → Timbre:** una línea de cifrado y **«Detalle del timbre»**: distribuidor, registro, cifrado, endpoint enmascarado, última recepción push, última orden directa validada, último sondeo del buzón, duplicados descartados, fallos de descifrado y de verificación, cola de recepción y último error, más una explicación cuando Insto funciona solo por sondeo.
+- **«Probar de punta a punta»** publica en el buzón, firmada con tu clave, la orden de solo lectura `#insto probar ver estado` (no cambia el volumen, no crea alarmas, no ejecuta nada) y muestra por separado: registro, entrega del push, descifrado, verificación, despacho (por el timbre o por sondeo) y resultado.
+
+### Para actualizar
+
+1. Pegá el `instinct-bitacora.gs` de 1.19.0 (conservá `const TOKEN`) e implementá una versión nueva. Si el permiso de `UrlFetchApp` ya estaba dado, no hace falta repetir `autorizarTimbre`.
+2. Actualizá Insto. Con el timbre encendido, se registra de nuevo con la biblioteca y le pasa al script el endpoint nuevo y el timbre cifrado.
+3. Tocá «Probar de punta a punta». La línea de cifrado tiene que decir «Cifrado RFC 8291: activo».
+4. (Opcional) Para la orden cifrada dentro del timbre, desplegá el relé siguiendo [`relay/insto-webpush-relay/README.md`](../relay/insto-webpush-relay/README.md).
 
 ## Disparadores por estado (1.17.0)
 
@@ -696,7 +762,8 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 - **Bitácora (1.15.0, apagada por defecto):** con «Bitácora» o «Ambos», ahora sí sale algo del teléfono, solo hacia el Apps Script que vos configuraste: la orden recortada a 80 caracteres, el texto de resultado que Insto ya te muestra, el tipo de acuse, la hora y un hash corto del mensaje (12 dígitos hexadecimales). **Nunca** el texto del mensaje de Instinct ni datos del teléfono (contactos, número, ubicación, notificaciones). La URL, el token y la bandeja de salida viven en `noBackupFilesDir`: nunca entran en copias de seguridad. La bitácora queda en tu planilla de Google, con los permisos que le des.
 - **Estado del teléfono (1.16.0):** con la bitácora configurada, sale hacia tu Apps Script un resumen con campos fijos (modo de sonido, No molestar, hora de la próxima alarma, título y horario del evento en curso y del próximo, si hay auriculares o Bluetooth, si está bloqueado, el modo temporal y las programadas). Nunca volumen, batería, red, ubicación, contactos, notificaciones, uso de apps ni identificadores.
 - **Buzón (1.16.0, apagado por defecto):** Insto lee de tu Apps Script las órdenes firmadas y las marca como tomadas. La clave vive solo en `noBackupFilesDir` y en Instinct; nunca en la planilla, en el diagnóstico ni en WhatsApp. Los contadores de autonomía (`instinct-trust.json`) y los ids vistos del buzón son solo contadores e identificadores, sin texto.
-- **Orden directa en el timbre (1.18.0, apagada por defecto):** con la opción encendida, el push que reenvía ntfy lleva el id, la hora, las líneas `#insto` y la firma de cada orden nueva. ntfy (el servidor público `ntfy.sh` o el tuyo) **puede ver esas líneas, pero no cambiarlas ni inventar otras**: sin la clave no hay firma válida. Nunca viajan el token, la clave ni otra cosa del teléfono. Con tu propio servidor ntfy no las ve nadie más. El payload nunca se loguea ni se guarda.
+- **Timbre cifrado (1.19.0):** con el script de 1.19.0, ntfy solo ve un mensaje cifrado (RFC 8291). Con la orden en el timbre y el relé configurado, la orden la ve en claro solo tu relé mientras la cifra; sin relé, la orden no viaja en el timbre. Las claves públicas (`p256dh`, `auth`) van solo a tu Apps Script y, desde ahí, a tu relé; la privada nunca sale del Android Keystore.
+- **Orden directa en el timbre (1.18.0, apagada por defecto):** con un script anterior a 1.19.0 y la opción encendida, el push que reenvía ntfy lleva el id, la hora, las líneas `#insto` y la firma de cada orden nueva. ntfy (el servidor público `ntfy.sh` o el tuyo) **puede ver esas líneas, pero no cambiarlas ni inventar otras**: sin la clave no hay firma válida. Nunca viajan el token, la clave ni otra cosa del teléfono. Con tu propio servidor ntfy no las ve nadie más. El payload nunca se loguea ni se guarda.
 - **Catálogo vivo (1.18.0):** sale hacia tu Apps Script lo mismo que ya decía el catálogo de texto: las formas, los límites, los nombres de las rutinas habilitadas, la autonomía, las horas de silencio y qué canales están encendidos (sí/no). Nunca URL, token, clave ni endpoint.
 - `#insto probar` (1.18.0) no hace nada en el teléfono ni guarda nada: solo responde por el acuse.
 - Fuera de la bitácora, la única red en uso es la del clima que ya existía (SMN y Open-Meteo), y solo cuando se dispara una orden con condición.
