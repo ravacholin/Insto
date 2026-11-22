@@ -166,10 +166,11 @@ Ejecutadas en este entorno (Linux, JDK 21, Android SDK 36.1, Robolectric 4.18.1)
 - `node scripts/test-bitacora-gs.js`: **32/32** (el Apps Script no cambia en 1.20.0).
 - `npm test` del relé: **9/9** (sin cambios; vectores de RFC 8291 intactos).
 - Regresiones de 1.19.0 que siguen pasando: `InstinctPushInboxTest`, `InstinctDoorbellFlowTest`,
-  `InstinctMailboxFlowTest`, `InstinctPushCryptoTest`, `InstinctDoorbellTest`, `InstinctMailboxTest`. Cuatro pruebas
-  cambiaron a propósito porque fijaban el bloqueo global por pantalla bloqueada (ahora un volumen corre bloqueado y un
-  temporizador espera), una porque el acuse ahora dice «Verificado: …» y una porque un modo temporal autorizado ya no
-  pide confirmación.
+  `InstinctMailboxFlowTest`, `InstinctPushCryptoTest`, `InstinctDoorbellTest`, `InstinctMailboxTest`. Siete pruebas
+  existentes se adaptaron a propósito: cinco fijaban el bloqueo global por pantalla bloqueada (`InstinctProbeTest`,
+  `InstinctAutonomyFlowTest`, `InstinctDoorbellFlowTest`, `InstinctReplyFlowTest`, `InstinctProposalFlowTest`: ahora
+  un volumen corre bloqueado y un temporizador espera; la de respuestas además recibe «Verificado: …»), una comparaba el
+  texto del motivo de bloqueo y una esperaba que un modo temporal autorizado pidiera confirmación.
 - Interrupciones simuladas (Robolectric, `InstinctExecutionFlowTest`): antes de persistir (la cola push la retiene),
   después de recibir en la cola, antes y después de reclamar, antes de la propuesta, después de la propuesta y antes
   del despacho, durante el despacho, después del efecto y antes del resultado (relectura), durante la verificación, y
