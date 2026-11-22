@@ -155,7 +155,7 @@ class InstinctReplyFlowTest {
     val proposal = InstinctProposalCenter.book.pending().single()
     MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest()).confirmInstinctProposalFromNotification(proposal.id, proposal.token)
     assertEquals(2, sent.size)
-    assertEquals("#insto-ok poner el volumen al 35 por ciento → Volumen multimedia ajustado.", sent[1])
+    assertEquals("#insto-ok poner el volumen al 35 por ciento → Volumen multimedia ajustado. Verificado: quedó en 5 de 15.", sent[1])
   }
 
   @Test fun `a waiting order is followed up when discarded`() {

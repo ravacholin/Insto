@@ -509,8 +509,24 @@ object InstinctProposalCenter {
     }
   }
 
-  fun report(context: Context, proposal: ProposalBook.Proposal, result: PhoneActionResult) =
-    report(context, proposal.id, InstinctAck.entry(proposal.order, result))
+  /**
+   * The result of [proposal] run by the panel or the notification: checked against the phone when it can be (without
+   * a reading from before: «the requested state holds», never «this order produced it»), then reported (1.20.0).
+   */
+  fun report(context: Context, proposal: ProposalBook.Proposal, result: PhoneActionResult) {
+    val execution = proposal.executionId
+    if (execution == null || InstinctAck.needsUser(result) ||
+      (result.outcome != PhoneActionOutcome.COMPLETED && result.outcome != PhoneActionOutcome.HANDOFF)) {
+      report(context, proposal.id, InstinctAck.entry(proposal.order, result)); return
+    }
+    val observation = runCatching { outcomeVerifier(context).verify(proposal.command, null, result) }
+      .getOrDefault(Observation(OutcomeVerdict.NOT_OBSERVABLE, detail = ActionOutcomeRules.HANDED_OFF))
+    val entry = ActionOutcomeRules.ack(proposal.order, result, observation)
+    InstinctExecutions.move(context, execution, ActionOutcomeRules.state(observation), result = entry.message,
+      reason = observation.detail.takeIf { observation.verdict != OutcomeVerdict.VERIFIED && observation.verdict != OutcomeVerdict.NOT_OBSERVABLE },
+      attribution = observation.attribution.takeIf { observation.verdict == OutcomeVerdict.VERIFIED })
+    report(context, proposal.id, entry)
+  }
 
   /** Waiting orders whose reply handle is about to lapse expire now and tell Instinct. */
   internal fun sweepReplies(context: Context) {
@@ -762,6 +778,9 @@ object InstinctProposalCenter {
     }
     if (isRoutine(proposal.command)) { runRoutineInBackground(context, proposal); return }
     val capture = InstinctUndoActions.capture(context, proposal.command)
+    // Read before running, so the check after it can tell «changed by this order» from «it already was so» (1.20.0).
+    val verifier = outcomeVerifier(context)
+    val before = runCatching { verifier.read(proposal.command) }.getOrNull()
     val result = PhoneActionExecutor(context).execute(proposal.command)
     when {
       // Maybe it happened: never offered again, so it is never repeated.
@@ -786,15 +805,31 @@ object InstinctProposalCenter {
         } else report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, "ya había una orden igual esperando confirmación; no se duplica."))
       }
       else -> {
+        InstinctExecutions.move(context, execution, ExecutionState.VERIFYING)
+        val observation = runCatching { verifier.verify(proposal.command, before, result) }
+          .getOrDefault(Observation(OutcomeVerdict.NOT_OBSERVABLE, detail = ActionOutcomeRules.HANDED_OFF))
+        val entry = ActionOutcomeRules.ack(proposal.order, result, observation)
+        InstinctExecutions.move(context, execution, ActionOutcomeRules.state(observation), result = entry.message,
+          reason = observation.detail.takeIf { observation.verdict == OutcomeVerdict.NOT_ACHIEVED || observation.verdict == OutcomeVerdict.INDETERMINATE },
+          attribution = observation.attribution.takeIf { observation.verdict == OutcomeVerdict.VERIFIED })
+        if (observation.verdict == OutcomeVerdict.NOT_ACHIEVED) {
+          // Android said yes, the phone says no: reported as not done, never as done.
+          InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.FAILED, entry.message)
+          notifyResult(context, proposal, "Instinct pidió: ${proposal.summary}", entry.message)
+          report(context, proposal.id, entry); return
+        }
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.EXECUTED)
         InstinctTrust.record(context, proposal.command, TrustEvent.EJECUTADA)
         val undo = capture?.let { InstinctUndoActions.complete(context, it) }
           ?.let { undos.offer(proposal.id, proposal.order, listOf(it), category = InstinctTrust.category(proposal.command)) }
         notifyResult(context, proposal, "Instinct hizo: ${proposal.summary}", result.message, undo)
-        report(context, proposal, result)
+        report(context, proposal.id, entry)
       }
     }
   }
+
+  /** Reads back what an action did (1.20.0); a seam for tests. */
+  internal var outcomeVerifier: (Context) -> ActionOutcomeVerifier = { AndroidActionOutcomeVerifier(it) }
 
   const val NOT_RECORDED = "no se pudo registrar el comienzo de la ejecución; no se ejecutó."
 
@@ -818,15 +853,32 @@ object InstinctProposalCenter {
     val executor = PhoneActionExecutor(context)
     val reversals = ArrayList<Reversal>()
     val irreversible = ArrayList<PhoneCommand>()
+    val verifier = outcomeVerifier(context)
+    var verified = 0
     val run = InstinctRoutineRun(runner, { blocker(context, it, foreground = false) }) { step ->
       val capture = InstinctUndoActions.capture(context, step)
-      executor.execute(step).also { result ->
-        if (InstinctAck.kindOf(result) == AckKind.OK) {
-          val reversal = capture?.let { InstinctUndoActions.complete(context, it) }
-          if (reversal != null) reversals += reversal else irreversible += step
+      val before = runCatching { verifier.read(step) }.getOrNull()
+      executor.execute(step).let { result ->
+        if (InstinctAck.kindOf(result) != AckKind.OK) return@let result
+        // Each step is checked like a single order: not reached stops the routine, unconfirmed stops it as uncertain.
+        val observation = runCatching { verifier.verify(step, before, result) }.getOrNull()
+        when (observation?.verdict) {
+          OutcomeVerdict.NOT_ACHIEVED -> return@let result.copy(message = "no se logró: ${observation.detail}", outcome = PhoneActionOutcome.REJECTED)
+          OutcomeVerdict.INDETERMINATE -> return@let result.copy(message = "no se pudo confirmar: ${observation.detail}", outcome = PhoneActionOutcome.UNCERTAIN)
+          OutcomeVerdict.VERIFIED -> verified++
+          else -> Unit
         }
+        val reversal = capture?.let { InstinctUndoActions.complete(context, it) }
+        if (reversal != null) reversals += reversal else irreversible += step
+        result
       }
     }.run(routine)
+    InstinctExecutions.move(context, proposal.executionId, when {
+      run.finished && verified == routine.commands.size -> ExecutionState.VERIFIED
+      run.finished -> ExecutionState.HANDED_OFF
+      run.uncertain -> ExecutionState.UNCERTAIN
+      else -> ExecutionState.FAILED
+    }, result = run.summary, reason = run.reason, attribution = ExecutionAttribution.CAUSED.takeIf { run.finished && verified == routine.commands.size })
     val undo = undos.offer(proposal.id, proposal.order, reversals, irreversible, category = InstinctCategory.RUTINAS)
     if (run.finished) InstinctTrust.record(context, InstinctCategory.RUTINAS, TrustEvent.EJECUTADA)
     InstinctProposalIntake.diagnose(if (run.finished) InstinctProposalIntake.Diagnosis.EXECUTED else InstinctProposalIntake.Diagnosis.FAILED,

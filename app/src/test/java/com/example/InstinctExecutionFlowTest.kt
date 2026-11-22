@@ -114,6 +114,7 @@ class InstinctExecutionFlowTest {
     InstinctProposalCenter.clock = android.os.SystemClock::elapsedRealtime
     InstinctScheduler.wallClock = System::currentTimeMillis
     InstinctMailbox.clock = { InstinctScheduler.wallClock() }
+    InstinctProposalCenter.outcomeVerifier = { AndroidActionOutcomeVerifier(it) }
     InstinctExecutionJournal.resetAll()
   }
 
@@ -358,5 +359,60 @@ class InstinctExecutionFlowTest {
     InstinctExecutionRecoveryManager.recover(app)
     assertEquals(0, volume())
     InstinctAutonomySettings(app).set(InstinctCategory.VOLUMEN, InstinctAutonomy.SOLO)
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Verification (fase 2)
+  // ---------------------------------------------------------------------------------------------------------------
+
+  @Test fun `a volume order is read back - verified, changed by it, and said so to Instinct`() {
+    val o = order("#insto poner el volumen al 40 por ciento")
+    push(o)
+    val row = journal.forMessage(o.id).single()
+    assertEquals(ExecutionState.VERIFIED, row.state)
+    assertEquals(ExecutionAttribution.CAUSED, row.attribution)
+    val ok = events().single { it.kind == "ok" }
+    assertTrue(ok.detail, ok.detail.contains("Verificado: quedó en ${max() * 40 / 100} de ${max()}"))
+  }
+
+  @Test fun `a volume already at the level is verified as already so, not as caused`() {
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, max() * 40 / 100, 0)
+    val o = order("#insto poner el volumen al 40 por ciento")
+    push(o)
+    assertEquals(ExecutionAttribution.ALREADY, journal.forMessage(o.id).single().attribution)
+  }
+
+  @Test fun `Do not disturb is verified by the effective filter`() {
+    shadowOf(app.getSystemService(android.app.NotificationManager::class.java)).setNotificationPolicyAccessGranted(true)
+    val o = order("#insto activar no molestar")
+    push(o)
+    val row = journal.forMessage(o.id).single()
+    assertEquals("$row ${row.reason} ${row.result}", ExecutionState.VERIFIED, row.state)
+  }
+
+  @Test fun `when the phone does not reach the requested state it is reported as not done`() {
+    // Android accepted the call but the reading says otherwise (a cap, a policy, another app).
+    InstinctProposalCenter.outcomeVerifier = { object : ActionOutcomeVerifier {
+      override fun read(command: PhoneCommand) = DeviceReading(volume = 2, volumeMax = 15)
+    } }
+    val o = order("#insto poner el volumen al 40 por ciento")
+    push(o)
+    val row = journal.forMessage(o.id).single()
+    assertEquals(ExecutionState.FAILED, row.state)
+    val error = events().single { it.kind == "error" }
+    assertTrue(error.detail, error.detail.startsWith("No se logró"))
+    assertEquals(0, events().count { it.kind == "ok" })
+  }
+
+  @Test fun `the torch without a camera report is handed off, never verified`() {
+    shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
+    InstinctProposalCenter.outcomeVerifier = { object : ActionOutcomeVerifier {
+      override fun read(command: PhoneCommand) = DeviceReading(torch = null)
+    } }
+    val o = order("#insto prender la linterna")
+    push(o)
+    val row = journal.forMessage(o.id).single()
+    assertTrue("$row ${row.reason}", row.state == ExecutionState.HANDED_OFF || row.state == ExecutionState.FAILED)
+    assertNotEquals(ExecutionState.VERIFIED, row.state)
   }
 }
