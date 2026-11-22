@@ -12,12 +12,17 @@ enum class BackupCategory(val id: String, val label: String) {
   ASSISTANT("assistant", "Contactos y ajustes del asistente"),
   PHRASES("phrases", "Frases aprendidas"),
   ROUTINES("routines", "Rutinas"),
-  PLACES("places", "Lugares guardados");
+  PLACES("places", "Lugares guardados"),
+  /** 1.20.0: receiving orders, autonomy, log, mailbox, doorbell and recurring orders. Older copies do not have it. */
+  INSTINCT("instinct", "Instinct: órdenes, bitácora, buzón y timbre");
 
   companion object {
     fun byId(id: String): BackupCategory? = entries.firstOrNull { it.id == id }
-    /** Restore order: least sensitive first, credentials last, so an earlier failure never touches the keys. */
-    val restoreOrder = listOf(PLACES, ROUTINES, PHRASES, ASSISTANT, CREDENTIALS)
+    /**
+     * Restore order: least sensitive first, secrets last, so an earlier failure never touches the keys. Instinct goes
+     * after the assistant (its contact) and before the API keys.
+     */
+    val restoreOrder = listOf(PLACES, ROUTINES, PHRASES, ASSISTANT, INSTINCT, CREDENTIALS)
   }
 }
 
@@ -103,7 +108,8 @@ object BackupFormat {
       createdAt = root.optString("createdAt").take(40),
       appVersionName = app?.optString("versionName")?.takeIf { it.isNotBlank() }?.take(40),
       appVersionCode = app?.optLong("versionCode")?.takeIf { it > 0 },
-      includesCredentials = root.optBoolean("includesCredentials", false) && BackupCategory.CREDENTIALS in categories,
+      includesCredentials = root.optBoolean("includesCredentials", false) &&
+        (BackupCategory.CREDENTIALS in categories || BackupCategory.INSTINCT in categories),
       categories = categories,
       unknownCategories = unknown,
     )

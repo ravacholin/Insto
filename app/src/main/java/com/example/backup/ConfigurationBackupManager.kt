@@ -8,7 +8,9 @@ import org.json.JSONObject
 enum class RestoreMode { MERGE, REPLACE }
 
 /** Choices that need explicit consent. Existing keys are never replaced by a merge without them. */
-data class RestoreOptions(val replaceGroqKey: Boolean = false, val replaceGeminiKey: Boolean = false)
+data class RestoreOptions(val replaceGroqKey: Boolean = false, val replaceGeminiKey: Boolean = false,
+  /** 1.20.0: in a merge, replace the log's token and the mailbox's key when the copy's differ. */
+  val replaceInstinctSecrets: Boolean = false)
 
 /** What a category holds, for the preview. Never contains a secret. */
 data class CategorySummary(val description: String)
@@ -35,6 +37,8 @@ interface BackupSection {
   val version: Int get() = 1
   /** The category content, or null when there is nothing to save. */
   suspend fun export(): JSONObject?
+  /** The same without any API key, token or authentication key when [secrets] is false (a copy without secrets). */
+  suspend fun export(secrets: Boolean): JSONObject? = export()
   /** Describes what exists now, for the export dialog, or null when empty. */
   suspend fun describeCurrent(): String?
   /** Full validation without writing. Throws [IllegalArgumentException] with a message for the user. */
@@ -129,16 +133,20 @@ class ConfigurationBackupManager(
   fun interruptedRestore(): List<String>? = marker.pending()
   fun dismissInterruptedRestore() = marker.end()
 
-  /** Encrypts the selected categories. API keys exist in clear only in memory, inside this call. */
-  suspend fun export(selection: Set<BackupCategory>, password: CharArray): ByteArray {
+  /**
+   * Encrypts the selected categories. API keys exist in clear only in memory, inside this call. With [secrets] false
+   * (1.20.0, «copia sin secretos») no API key, token or authentication key goes in, Instinct's included.
+   */
+  suspend fun export(selection: Set<BackupCategory>, password: CharArray, secrets: Boolean = true): ByteArray {
     BackupCrypto.checkPassword(password)
     val categories = linkedMapOf<BackupCategory, JSONObject>()
     for (section in sections) {
       if (section.category !in selection) continue
-      section.export()?.let { categories[section.category] = it.put("v", section.version) }
+      if (!secrets && section.category == BackupCategory.CREDENTIALS) continue
+      section.export(secrets)?.let { categories[section.category] = it.put("v", section.version) }
     }
     val payload = BackupPayload(BackupFormat.timestamp(clock()), appVersionName, appVersionCode,
-      BackupCategory.CREDENTIALS in categories, categories)
+      secrets && (BackupCategory.CREDENTIALS in categories || categories[BackupCategory.INSTINCT]?.let(::hasInstinctSecrets) == true), categories)
     val plain = BackupFormat.encode(payload)
     try {
       return BackupCrypto.encrypt(plain, password, random, iterations)
@@ -243,6 +251,9 @@ class ConfigurationBackupManager(
     return RestoreReport(true, prepared.flatMap { (category, change) -> change.changes.map { "${category.label}: $it" } },
       prepared.flatMap { it.second.attention })
   }
+
+  private fun hasInstinctSecrets(json: JSONObject): Boolean =
+    json.optJSONObject("mailbox")?.has("key") == true || json.optJSONObject("log")?.has("token") == true
 
   private fun message(error: Exception): String = when (error) {
     is IllegalArgumentException, is IllegalStateException, is BackupException -> error.message ?: "Contenido no válido."

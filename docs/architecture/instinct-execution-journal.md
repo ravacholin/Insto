@@ -311,3 +311,27 @@ la ventana que Android le da a Insto; lo que llega por el sondeo de respaldo, cu
 restauraciones y las programadas usan `setExactAndAllowWhileIdle`. Lo que Android pospone queda en el diario
 (`RECEIVED`) y se continúa si sigue vigente; si venció, se informa `vencida`.
 
+## 10. Backup completo (fase 6)
+
+El `.insto` de 1.12.0 se extiende sin cambiar su cifrado (AES-256-GCM, PBKDF2-HMAC-SHA256, cabecera autenticada) ni
+su esquema (sigue en 1): se agrega la categoría versionada `instinct`. Una copia de 1.12.0–1.19.0 no la tiene y se
+restaura igual; un Insto anterior que abre una copia de 1.20.0 la informa como categoría desconocida y restaura el
+resto.
+
+- **Copia completa**: incluye las claves de Groq y Gemini, el token de la bitácora y la clave del buzón.
+- **Copia sin secretos**: ninguna clave de API, token ni clave de autenticación (la URL del Apps Script sí: es
+  configuración).
+- Importar escribe archivos de configuración directamente: no arma jobs, no registra el timbre, no avisa al script, no
+  publica el catálogo y no ejecuta nada. «Recibir órdenes», el buzón y el timbre **se restauran apagados** y lo que
+  estaba encendido queda como pedido de reactivación (`instinct-reactivation.json`, sin secretos).
+- **Reactivar Instinct en este teléfono** (Ajustes → Propuestas de Instinct) es la autorización conjunta: revisa
+  permisos, enciende, prueba bitácora y buzón, registra UnifiedPush de nuevo (claves Web Push y endpoint propios de
+  este teléfono, timbre cifrado regenerado; el script recibe el endpoint nuevo), vuelve a programar las recurrentes
+  (revalidadas; nunca una orden única consumida o vencida), rearma los jobs y publica el catálogo. Lo que no se pudo
+  hacer queda pendiente; lo hecho no se repite.
+- Nunca se exporta: el endpoint, el timbre cifrado, el estado del timbre, la base de la biblioteca UnifiedPush, las
+  claves del Keystore, el diario de ejecución ni las colas.
+
+El inventario completo está en `backup/BackupInventory.kt` y en las notas de 1.20.0; `BackupInventoryTest` lee el
+código y falla si aparece un archivo, una clave de preferencias, un DataStore o unas SharedPreferences sin clasificar.
+

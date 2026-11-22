@@ -70,7 +70,7 @@ def main():
         "assist/AutoSendGuard.kt", "assist/ShareConfirmationPolicy.kt", "assist/ShareSendAttempt.kt",
         "assist/WhatsAppSelectors.kt", "assist/AutoSendMetrics.kt", "assist/AutoSendHealth.kt",
         "data/AssistantModels.kt", "backup/BackupCrypto.kt", "backup/BackupFormat.kt",
-        "backup/ConfigurationBackupManager.kt", "backup/BackupSections.kt",
+        "backup/ConfigurationBackupManager.kt", "backup/BackupSections.kt", "backup/InstinctBackupSection.kt", "backup/BackupInventory.kt",
         "whatsapp/PhoneNumberUtils.kt", "speech/AudioTranscriber.kt",
         "speech/GroqTranscriber.kt", "speech/VocabularyHints.kt",
         "session/SessionLifecycle.kt", "session/ActionExecutionLedger.kt")]

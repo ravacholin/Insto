@@ -88,6 +88,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       contact == null -> "Configurá primero el contacto de Instinct."
       else -> "Lee solo los mensajes de «${contact.displayName}»."
     }, enabled = InstinctProposalSettings.supported && (contact != null || enabled))
+    InstinctReactivationCard(revision) { revision++ }
     if (enabled) {
       if (!listenerEnabled) {
         SettingsDescription("Falta habilitar «Insto · notificaciones» en Android para recibir las órdenes.")
@@ -173,6 +174,41 @@ private fun InstinctReadinessSection(revision: Int, onChange: () -> Unit) {
     }, modifier = Modifier.testTag("instinct_ready_${c.name.lowercase()}")) { Text("Conceder: ${c.label}") }
   }
   TextButton(onClick = onChange) { Text("Ya lo concedí, revisar de nuevo") }
+}
+
+/**
+ * «Reactivar Instinct en este teléfono» (1.20.0): after a restore, what the copy had on stays off until the person
+ * authorizes it here, once. Nothing turns on remote control by itself on another phone.
+ */
+@Composable
+private fun InstinctReactivationCard(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val request = remember(revision) { com.example.phone.InstinctReactivation.pending(context) }
+  var steps by remember { mutableStateOf<List<com.example.phone.InstinctReactivation.Step>?>(null) }
+  var busy by remember { mutableStateOf(false) }
+  steps?.let { done ->
+    Text("Reactivación", style = MaterialTheme.typography.bodyLarge)
+    done.forEach { SettingsDescription((if (it.ok) "✓ " else "✗ ") + "${it.name}: ${it.detail}") }
+  }
+  if (request == null) return
+  Text("Reactivar Instinct en este teléfono", style = MaterialTheme.typography.bodyLarge)
+  val parts = listOfNotNull("recibir órdenes".takeIf { request.proposals }, "buzón".takeIf { request.mailbox },
+    "timbre".takeIf { request.doorbell }, "${request.recurrences.size} órdenes recurrentes".takeIf { request.recurrences.isNotEmpty() })
+  SettingsDescription("La copia restaurada tenía encendido: ${parts.joinToString(", ")}. En este teléfono quedó apagado hasta que " +
+    "lo autorices. Al reactivar, Insto revisa los permisos, enciende lo que estaba encendido, registra el timbre de nuevo " +
+    "(claves y dirección propias de este teléfono, que se le avisan al Apps Script), prueba la bitácora y el buzón, vuelve " +
+    "a programar las recurrentes y publica el catálogo. No ejecuta ninguna orden.")
+  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    OutlinedButton(enabled = !busy, onClick = {
+      busy = true
+      scope.launch {
+        steps = withContext(Dispatchers.IO) { runCatching { com.example.phone.InstinctReactivation.run(context) }.getOrDefault(emptyList()) }
+        busy = false; onChange()
+      }
+    }, modifier = Modifier.testTag("instinct_reactivate")) { Text(if (busy) "Reactivando…" else "Reactivar") }
+    TextButton(enabled = !busy, onClick = { com.example.phone.InstinctReactivation.dismiss(context); onChange() }) { Text("Dejar apagado") }
+  }
 }
 
 /** «Ejecuciones recientes» (1.20.0): the journal's last rows, as «ver ejecuciones» answers them. */

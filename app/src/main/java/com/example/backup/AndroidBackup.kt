@@ -125,6 +125,7 @@ object AndroidBackup {
         PhrasesSection(phrases),
         RoutinesSection(ConfiguredRoutineStore(File(app.noBackupFilesDir, "configured-routines.json"))),
         PlacesSection(RepositoryPlacesAccess(SavedPlacesRepository(app))),
+        InstinctSection(com.example.phone.InstinctBackupStore(app)),
       ),
       appVersionName = info?.versionName ?: "",
       appVersionCode = code,
@@ -167,6 +168,8 @@ object AndroidBackup {
     val missingApps = phrases.backupData().entries.mapNotNull { (it.command as? PhoneCommand.OpenApp)?.packageName }
       .distinct().count { runCatching { app.packageManager.getPackageInfo(it, 0) }.isFailure }
     if (missingApps > 0) items += "$missingApps frases abren apps que no están instaladas; se usan cuando las instales."
+    if (com.example.phone.InstinctReactivation.pending(app) != null)
+      items += "Instinct quedó configurado pero apagado en este teléfono: tocá «Reactivar Instinct en este teléfono» en Ajustes → Propuestas de Instinct."
     return items
   }
 }
