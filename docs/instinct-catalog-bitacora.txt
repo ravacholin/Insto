@@ -1,10 +1,14 @@
-Órdenes para Insto (Protocolo Insto v5)
+Órdenes para Insto (Protocolo Insto v6)
 
 Insto es el asistente del teléfono de quien te escribe. Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
 
 › #insto <orden>
 
 Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa, salvo lo que ella eligió confirmar (ver «Qué hace Insto solo» más abajo). Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.
+
+Reglas vigentes (catálogo vivo):
+Las reglas vigentes están en GET <URL>?token=<token>&action=catalogo. Leelo al empezar y cada vez que una orden dé un error inesperado; si el hash cambió, las reglas de ahí mandan sobre este texto.
+(URL y token: pedíselos a Pablo)
 
 En este mensaje cada ejemplo va precedido por «›» para que Insto no lo ejecute. Vos escribí la línea sin ese signo, empezando con "#insto ".
 
@@ -20,6 +24,7 @@ Reglas:
 - Recurrentes: "todos los días a las HH:MM hasta el DD/MM: <orden>", "los días hábiles a las HH:MM hasta el DD/MM: <orden>" (de lunes a viernes) o "los fines de semana a las HH:MM hasta el DD/MM: <orden>". "hasta el DD/MM" es obligatorio y como mucho 30 días; podés agregar una condición del clima antes de "hasta el". Como máximo 5 recurrentes, aparte de las 10 programadas. Cada ocurrencia se informa por separado.
 - Una sola condición por línea: un disparador, una hora o una recurrencia, sin "y", "o" ni anidamiento.
 - Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después.
+- Si no estás seguro de una forma o de si va a quedar esperando, probala antes con "probar <orden>".
 
 Acciones permitidas (usá estas formas):
 › #insto poner una alarma a las 07:00
@@ -78,12 +83,13 @@ sonido: normal, vibración o silencio. dnd: sí o no (No molestar). alarma: la h
 Un campo puede decir «sin datos» o «sin permiso». El estado es una foto: puede tener hasta 30 segundos de demora.
 Antes de una orden que dependa del estado (silencio, No molestar, alarmas, calendario), mirá el último estado; si tiene más de 30 minutos, pedí la consulta «ver estado» y esperá a que aparezca el nuevo.
 
-Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas). «ver programadas» muestra cada una con un id de 6 caracteres; con ese id, «cancelar programada <id>» cancela esa orden o la recurrente entera:
+Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas). «ver programadas» muestra cada una con un id de 6 caracteres; con ese id, «cancelar programada <id>» cancela esa orden o la recurrente entera. «probar <orden>» valida la orden (también diferida, con disparador, recurrente o con clima) y dice qué pasaría ahora, sin ejecutar ni guardar nada: «válida · <categoría> · la haría sola», «válida · <categoría> · esperaría confirmación: <motivo>», «válida · programada: <cuándo>», «no válida: <motivo>» o «rechazada: la persona no permite esta acción»; como máximo 20 pruebas cada 10 minutos:
 › #insto ver catálogo
 › #insto ver programadas
 › #insto cancelar programadas
 › #insto ver estado
 › #insto cancelar programada <id>
+› #insto probar <orden>
 
 Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
 

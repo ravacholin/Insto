@@ -191,6 +191,162 @@ test('tomadas y ordenes siguen igual', () => {
   assert.strictEqual(s.get({ token: T, action: 'ordenes' }).ordenes.length, 0);
 });
 
+// Orden directa en el timbre (1.18.0)
+
+const ID = '3b241101-e2bb-4255-8caf-4136c566a962';
+
+test('timbre con conOrden lo guarda y lo repite; sin conOrden conserva el valor (Insto 1.17.0)', () => {
+  const s = load();
+  assert.deepStrictEqual(s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: true }), { ok: true, timbre: 'guardado', conOrden: true });
+  assert.strictEqual(s.props.insto_timbre_con_orden, '1');
+  assert.deepStrictEqual(s.post({ token: T, action: 'timbre', endpoint: ENDPOINT }), { ok: true, timbre: 'guardado' });
+  assert.strictEqual(s.props.insto_timbre_con_orden, '1', 'un Insto 1.17.0 no lo cambia');
+  assert.deepStrictEqual(s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: false }), { ok: true, timbre: 'guardado', conOrden: false });
+  assert.strictEqual(s.props.insto_timbre_con_orden, '0');
+  assert.deepStrictEqual(s.post({ token: T, action: 'timbre', endpoint: '', conOrden: false }), { ok: true, timbre: 'borrado', conOrden: false });
+  assert.deepStrictEqual(s.post({ token: T, action: 'timbre', endpoint: 'http://x', conOrden: true }), { ok: false, error: 'endpoint' });
+  assert.strictEqual(s.props.insto_timbre_con_orden, '0', 'un endpoint rechazado no cambia nada');
+});
+
+test('con conOrden, una orden nueva viaja firmada en el timbre, en JSON compacto', () => {
+  const s = load();
+  s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: true });
+  const body = { token: T, action: 'orden', id: ID, at: '2026-11-21T09:30:00-03:00', lines: ['#insto poner el volumen al 30 por ciento', '#insto avisarme Te bajé el volumen.'], sig: 'a'.repeat(64) };
+  assert.deepStrictEqual(s.post(body), { ok: true, id: ID });
+  assert.strictEqual(s.fetches.length, 1);
+  const options = s.fetches[0].options;
+  assert.strictEqual(options.method, 'post');
+  assert.strictEqual(options.muteHttpExceptions, true);
+  assert.strictEqual(options.contentType, 'application/json; charset=utf-8');
+  assert.strictEqual(options.payload, JSON.stringify({ v: 1, id: ID, at: body.at, lines: body.lines, sig: body.sig }));
+  assert.deepStrictEqual(Object.keys(JSON.parse(options.payload)), ['v', 'id', 'at', 'lines', 'sig']);
+  assert.ok(!options.payload.includes('token-de-prueba'), 'el timbre nunca lleva el token');
+});
+
+test('una orden demasiado grande (o con más de 3 líneas) toca el timbre sin la orden', () => {
+  const s = load();
+  s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: true });
+  // Tres líneas de 300 caracteres no llegan a 3500 bytes ni con caracteres de 3 bytes; con caracteres que el JSON escapa
+  // (\u0007 ocupa 6 bytes) sí pasan.
+  const long = '#insto avisarme ' + '\u0007'.repeat(284);
+  assert.strictEqual(long.length, 300);
+  s.post({ token: T, action: 'orden', id: '00000000-0000-4000-8000-000000000101', at: '2026-11-21T09:30:00-03:00', lines: [long, long, long], sig: 'b'.repeat(64) });
+  assert.strictEqual(s.fetches[0].options.payload, 'insto-timbre');
+  assert.strictEqual(s.fetches[0].options.contentType, undefined);
+  s.env.now += 5_000;
+  s.post({ token: T, action: 'orden', id: '00000000-0000-4000-8000-000000000102', at: '2026-11-21T09:30:00-03:00', lines: ['#insto a', '#insto b', '#insto c', '#insto d'], sig: 'c'.repeat(64) });
+  assert.strictEqual(s.fetches[1].options.payload, 'insto-timbre');
+  s.env.now += 5_000;
+  // Justo en el límite: 3500 bytes entra (dos líneas con escapes y una tercera que completa).
+  const id3 = '00000000-0000-4000-8000-000000000103';
+  const escaped = '#insto avisarme ' + '\u0007'.repeat(265);
+  const payloadOf = (third) => JSON.stringify({ v: 1, id: id3, at: '2026-11-21T09:30:00-03:00', lines: [escaped, escaped, third], sig: 'd'.repeat(64) });
+  const third = '#insto ' + 'x'.repeat(3500 - Buffer.byteLength(payloadOf('#insto '), 'utf8'));
+  const lines = [escaped, escaped, third];
+  const exact = payloadOf(third);
+  assert.strictEqual(Buffer.byteLength(exact, 'utf8'), 3500);
+  assert.ok(third.length <= 300, String(third.length));
+  s.post({ token: T, action: 'orden', id: id3, at: '2026-11-21T09:30:00-03:00', lines, sig: 'd'.repeat(64) });
+  assert.strictEqual(s.fetches[2].options.payload, exact);
+  s.env.now += 5_000;
+  // Un byte más: sin la orden.
+  s.post({ token: T, action: 'orden', id: '00000000-0000-4000-8000-000000000104', at: '2026-11-21T09:30:00-03:00', lines: [escaped, escaped, third + 'x'], sig: 'd'.repeat(64) });
+  assert.strictEqual(s.fetches[3].options.payload, 'insto-timbre');
+});
+
+test('con conOrden, una orden repetida no toca el timbre', () => {
+  const s = load();
+  s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: true });
+  s.post(order(ID));
+  s.env.now += 60_000;
+  s.post(order(ID));
+  assert.strictEqual(s.fetches.length, 1);
+});
+
+test('con conOrden apagado o nunca enviado (script viejo de Insto), el timbre sigue siendo «insto-timbre»', () => {
+  const s = load();
+  s.post({ token: T, action: 'timbre', endpoint: ENDPOINT });
+  s.post(order('00000000-0000-4000-8000-000000000201'));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(s.fetches[0].options)), { method: 'post', payload: 'insto-timbre', muteHttpExceptions: true });
+  s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: false });
+  s.env.now += 5_000;
+  s.post(order('00000000-0000-4000-8000-000000000202'));
+  assert.strictEqual(s.fetches[1].options.payload, 'insto-timbre');
+});
+
+test('con conOrden, el espaciado de 5 segundos sigue igual: la segunda orden queda para el sondeo', () => {
+  const s = load();
+  s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: true });
+  s.post(order('00000000-0000-4000-8000-000000000301'));
+  s.env.now += 1_000;
+  s.post(order('00000000-0000-4000-8000-000000000302'));
+  assert.strictEqual(s.fetches.length, 1);
+  assert.strictEqual(s.get({ token: T, action: 'ordenes' }).ordenes.length, 2);
+});
+
+// Catálogo vivo (1.18.0)
+
+const HASH_A = 'a'.repeat(64);
+const HASH_B = 'b'.repeat(64);
+const catalog = (hash, json) => ({ token: T, action: 'catalogo', hash, json });
+
+test('sin catálogo publicado, GET action=catalogo devuelve null', () => {
+  const s = load();
+  assert.deepStrictEqual(s.get({ token: T, action: 'catalogo' }), { ok: true, catalogo: null });
+  assert.deepStrictEqual(s.get({ token: 'malo', action: 'catalogo' }), { ok: false, error: 'token' });
+});
+
+test('POST catalogo guarda una sola fila y GET la devuelve tal cual', () => {
+  const s = load();
+  const json = JSON.stringify({ protocolo: 'Protocolo Insto v6', hash: HASH_A });
+  assert.deepStrictEqual(s.post(catalog(HASH_A, json)), { ok: true, catalogo: 'guardado' });
+  const got = s.get({ token: T, action: 'catalogo' }).catalogo;
+  assert.strictEqual(got.hash, HASH_A);
+  assert.strictEqual(got.json, json);
+  assert.strictEqual(got.publicado, new Date(s.env.now).toISOString());
+  s.env.now += 60_000;
+  const other = JSON.stringify({ protocolo: 'Protocolo Insto v6', hash: HASH_B });
+  assert.deepStrictEqual(s.post(catalog(HASH_B, other)), { ok: true, catalogo: 'guardado' });
+  assert.strictEqual(s.sheets['Catálogo'].rows.length, 2, 'encabezado y una sola fila');
+  assert.strictEqual(s.get({ token: T, action: 'catalogo' }).catalogo.json, other);
+});
+
+test('el mismo hash no vuelve a escribir', () => {
+  const s = load();
+  s.post(catalog(HASH_A, '{"x":1}'));
+  const before = s.sheets['Catálogo'].rows[1].slice();
+  s.env.now += 60_000;
+  assert.deepStrictEqual(s.post(catalog(HASH_A, '{"x":2}')), { ok: true, catalogo: 'igual' });
+  assert.deepStrictEqual(s.sheets['Catálogo'].rows[1], before);
+});
+
+test('un catálogo inválido o de más de 45 000 caracteres se rechaza sin tocar nada', () => {
+  const s = load();
+  s.post(catalog(HASH_A, '{"x":1}'));
+  assert.deepStrictEqual(s.post(catalog(HASH_B, '{"x":"' + 'y'.repeat(45_000) + '"}')), { ok: false, error: 'catalogo' });
+  assert.deepStrictEqual(s.post(catalog('no-es-hash', '{}')), { ok: false, error: 'catalogo' });
+  assert.deepStrictEqual(s.post(catalog(HASH_B, '')), { ok: false, error: 'catalogo' });
+  assert.deepStrictEqual(s.post({ token: T, action: 'catalogo', hash: HASH_B }), { ok: false, error: 'catalogo' });
+  assert.strictEqual(s.get({ token: T, action: 'catalogo' }).catalogo.hash, HASH_A);
+  assert.deepStrictEqual(s.post({ token: 'malo', action: 'catalogo', hash: HASH_B, json: '{}' }), { ok: false, error: 'token' });
+});
+
+test('un catálogo de 45 000 caracteres justos entra entero, como texto plano', () => {
+  const s = load();
+  const json = '{"x":"' + 'y'.repeat(45_000 - 8) + '"}';
+  assert.strictEqual(json.length, 45_000);
+  assert.deepStrictEqual(s.post(catalog(HASH_A, json)), { ok: true, catalogo: 'guardado' });
+  assert.strictEqual(s.get({ token: T, action: 'catalogo' }).catalogo.json, json);
+});
+
+test('el catálogo no cambia los eventos, el buzón ni el estado', () => {
+  const s = load();
+  s.post(catalog(HASH_A, '{"x":1}'));
+  assert.deepStrictEqual(s.get({ token: T, since: '2020-01-01T00:00:00Z' }), { ok: true, events: [] });
+  assert.deepStrictEqual(s.get({ token: T, action: 'ordenes' }), { ok: true, ordenes: [] });
+  assert.deepStrictEqual(s.get({ token: T, action: 'estado' }), { ok: true, estado: null });
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try { fn(); console.log('ok   ' + name); } catch (error) { failed++; console.log('FAIL ' + name + '\n     ' + (error && error.message)); }

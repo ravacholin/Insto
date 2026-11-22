@@ -1,0 +1,245 @@
+{
+  "acciones": [
+    {
+      "categoria": "alarmas y temporizadores",
+      "orden": "poner una alarma a las 07:00"
+    },
+    {
+      "categoria": "alarmas y temporizadores",
+      "orden": "poner una alarma a las 07:00 todos los días"
+    },
+    {
+      "categoria": "alarmas y temporizadores",
+      "orden": "poner un temporizador de 25 minutos"
+    },
+    {
+      "categoria": "volumen",
+      "orden": "poner el volumen al 30 por ciento"
+    },
+    {
+      "categoria": "volumen",
+      "orden": "subir el volumen"
+    },
+    {
+      "categoria": "volumen",
+      "orden": "bajar el volumen"
+    },
+    {
+      "categoria": "linterna",
+      "orden": "prender la linterna"
+    },
+    {
+      "categoria": "linterna",
+      "orden": "apagar la linterna"
+    },
+    {
+      "categoria": "silencio y No molestar",
+      "orden": "silenciar el teléfono"
+    },
+    {
+      "categoria": "silencio y No molestar",
+      "orden": "silenciar el teléfono durante una hora"
+    },
+    {
+      "categoria": "silencio y No molestar",
+      "orden": "activar no molestar"
+    },
+    {
+      "categoria": "silencio y No molestar",
+      "orden": "desactivar no molestar"
+    },
+    {
+      "categoria": "silencio y No molestar",
+      "orden": "poner en vibración"
+    },
+    {
+      "categoria": "música",
+      "orden": "pausar la música"
+    },
+    {
+      "categoria": "música",
+      "orden": "siguiente canción"
+    },
+    {
+      "categoria": "abrir apps y búsquedas",
+      "orden": "abrir spotify"
+    },
+    {
+      "categoria": "alarmas y temporizadores",
+      "orden": "mostrar las alarmas"
+    },
+    {
+      "categoria": "alarmas y temporizadores",
+      "orden": "mostrar los temporizadores"
+    },
+    {
+      "categoria": "abrir apps y búsquedas",
+      "orden": "poner música de Soda Stereo"
+    },
+    {
+      "categoria": "abrir apps y búsquedas",
+      "orden": "buscar jazz en YouTube"
+    },
+    {
+      "categoria": "abrir apps y búsquedas",
+      "orden": "buscar Cerati en Spotify"
+    },
+    {
+      "categoria": "calendario",
+      "orden": "agendar reunión mañana a las 17:00 durante una hora"
+    }
+  ],
+  "autonomia": {
+    "abrir apps y búsquedas": "solo",
+    "alarmas y temporizadores": "solo",
+    "avisos para vos": "solo",
+    "calendario": "solo",
+    "linterna": "solo",
+    "música": "solo",
+    "rutinas": "solo",
+    "silencio y No molestar": "solo",
+    "volumen": "solo"
+  },
+  "bloqueos_fijos": [
+    "el teléfono está bloqueado",
+    "la orden abre otra app y el servicio de Accesibilidad de Insto no está activo",
+    "más de 6 órdenes en 10 minutos",
+    "una orden programada que se dispara con más de 15 minutos de atraso",
+    "la acción necesita algo de la persona: un permiso, confirmar una hora que ya pasó, un modo temporal o elegir entre varias apps"
+  ],
+  "canales": {
+    "acuses": "nunca",
+    "acuses_por": "whatsapp",
+    "bitacora": false,
+    "buzon": false,
+    "orden_en_timbre": false,
+    "timbre": false,
+    "whatsapp": true
+  },
+  "consultas": [
+    {
+      "orden": "ver catálogo",
+      "solo_lectura": true
+    },
+    {
+      "orden": "ver programadas",
+      "solo_lectura": true
+    },
+    {
+      "orden": "cancelar programadas",
+      "solo_lectura": false
+    },
+    {
+      "orden": "ver estado",
+      "solo_lectura": true
+    },
+    {
+      "orden": "cancelar programada <id>",
+      "solo_lectura": true
+    },
+    {
+      "orden": "probar <orden>",
+      "solo_lectura": true
+    }
+  ],
+  "firma_buzon": "insto-v4",
+  "formas": {
+    "clima": [
+      {
+        "orden": "a las 06:30 si llueve: poner una alarma a las 06:45"
+      },
+      {
+        "orden": "a las 06:30 si no llueve: poner música de Soda Stereo"
+      },
+      {
+        "orden": "a las 07:00 si hace menos de 10 grados: poner un temporizador de 10 minutos"
+      },
+      {
+        "orden": "a las 14:00 si hace más de 30 grados: activar no molestar"
+      }
+    ],
+    "diferidas": [
+      {
+        "orden": "a las 22:00: poner el volumen al 10 por ciento"
+      },
+      {
+        "orden": "en 30 minutos: apagar la linterna"
+      },
+      {
+        "orden": "en 2 horas: desactivar no molestar"
+      }
+    ],
+    "disparadores": [
+      {
+        "orden": "al terminar el evento: desactivar no molestar"
+      },
+      {
+        "orden": "al empezar el próximo evento: activar no molestar"
+      },
+      {
+        "orden": "al conectar auriculares hasta las 20:00: abrir spotify"
+      },
+      {
+        "orden": "al desconectar auriculares: pausar la música"
+      },
+      {
+        "orden": "al desbloquear: mostrar las alarmas"
+      }
+    ],
+    "recurrentes": [
+      {
+        "orden": "todos los días a las 07:30 hasta el 15/12: poner el volumen al 20 por ciento"
+      },
+      {
+        "orden": "los días hábiles a las 08:00 hasta el 15/12: activar no molestar"
+      },
+      {
+        "orden": "los fines de semana a las 10:00 hasta el 13/12: poner música de Soda Stereo"
+      },
+      {
+        "orden": "todos los días a las 06:30 si llueve hasta el 15/12: poner una alarma a las 06:45"
+      }
+    ]
+  },
+  "hash": "229063c62268229436764fb157d0db23288a1361c01adcbc5aab6be728f9157b",
+  "horas_de_silencio": null,
+  "limites": {
+    "atraso_minutos_max": 15,
+    "aviso_caracteres_max": 200,
+    "avisos_por_hora": 3,
+    "buzon_antiguedad_minutos_max": 15,
+    "buzon_futuro_minutos_max": 2,
+    "buzon_ordenes_por_sondeo": 10,
+    "diferida_horas_max": 24,
+    "diferida_minutos_min": 1,
+    "disparador_horas": 12,
+    "disparador_horas_max": 24,
+    "lineas_por_mensaje": 3,
+    "lluvia_por_ciento": 50,
+    "orden_caracteres_en_acuse": 80,
+    "ordenes_automaticas_cada_10_minutos": 6,
+    "programadas": 10,
+    "pruebas_cada_10_minutos": 20,
+    "recurrente_dias_max": 30,
+    "recurrentes": 5,
+    "rutina_pasos_max": 6
+  },
+  "prefijo": "#insto ",
+  "prohibido": [
+    "llamadas",
+    "mensajes de cualquier tipo",
+    "enviar o compartir archivos",
+    "guardar lugares",
+    "navegación",
+    "rutinas que no están habilitadas",
+    "varias acciones juntas"
+  ],
+  "protocolo": "Protocolo Insto v6",
+  "reglas": [
+    "Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después.",
+    "Si no estás seguro de una forma o de si va a quedar esperando, probala antes con \"probar <orden>\"."
+  ],
+  "rutinas": [],
+  "version_insto": "1.18.0",
+  "version_protocolo": 6
+}

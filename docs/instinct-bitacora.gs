@@ -1,7 +1,8 @@
 /**
- * Bitácora de Insto (Protocolo Insto v4). Apps Script ligado a una planilla de Google.
- * Ver docs/INSTINCT-PROPUESTAS.md, «Bitácora (1.15.0)», «Estado del teléfono», «Buzón firmado» (1.16.0) y «Timbre» (1.17.0).
- * Es compatible con Insto 1.15.0 y 1.16.0: un POST o un GET sin las acciones nuevas se comportan exactamente igual que antes.
+ * Bitácora de Insto (Protocolo Insto v6). Apps Script ligado a una planilla de Google.
+ * Ver docs/INSTINCT-PROPUESTAS.md, «Bitácora (1.15.0)», «Estado del teléfono», «Buzón firmado» (1.16.0), «Timbre» (1.17.0),
+ * «Orden directa en el timbre» y «Catálogo vivo» (1.18.0).
+ * Es compatible con Insto 1.15.0 a 1.17.0: un POST o un GET sin las acciones nuevas se comportan exactamente igual que antes.
  *
  * 1. En la planilla: Extensiones → Apps Script. Pegá este archivo y cambiá TOKEN por un texto largo y aleatorio.
  * 2. Implementar → Nueva implementación → Aplicación web. Ejecutar como: yo. Quién tiene acceso: cualquier usuario.
@@ -20,11 +21,20 @@
  * POST {token, action:"tomadas", ids:[…]}  → {ok, tomadas:N}
  *
  * Timbre (1.17.0): el endpoint de UnifiedPush (ntfy) del teléfono, guardado en las propiedades del script, nunca en la planilla.
- * POST {token, action:"timbre", endpoint}  → {ok, timbre:"guardado"|"borrado"}   (endpoint vacío lo borra; https:// y 500 caracteres como máximo)
+ * POST {token, action:"timbre", endpoint[, conOrden]}  → {ok, timbre:"guardado"|"borrado"[, conOrden]}
+ *   (endpoint vacío lo borra; https:// y 500 caracteres como máximo). conOrden (1.18.0), true o false, decide si el timbre
+ *   lleva la orden firmada; si falta, se conserva el valor guardado (así un Insto 1.17.0 no lo cambia).
  * POST {token, action:"probar-timbre"}  → {ok, timbre:true|false, codigo}   ({ok:false, error:"sin-endpoint"} si no hay endpoint)
- * Después de anotar una orden NUEVA en el Buzón, el script toca el timbre: un POST «insto-timbre» al endpoint, como mucho
- * uno cada 5 segundos. El timbre no lleva la orden: Insto la lee de la planilla y verifica la firma como siempre. Si falla,
- * la orden queda anotada igual y la respuesta sigue siendo {ok, id}.
+ * Después de anotar una orden NUEVA en el Buzón, el script toca el timbre: un POST al endpoint, como mucho uno cada 5
+ * segundos. Con conOrden apagado (o si la orden ocupa más de 3500 bytes) el cuerpo es «insto-timbre» y no lleva la orden:
+ * Insto la lee de la planilla. Con conOrden encendido (1.18.0) el cuerpo es la orden firmada, en JSON compacto
+ * {"v":1,"id":…,"at":…,"lines":[…],"sig":…}: Insto verifica la firma igual que en el sondeo, así que ntfy puede leer las
+ * líneas pero no cambiarlas. Si el timbre falla o se saltea, la orden queda anotada igual y la respuesta sigue siendo {ok, id}.
+ *
+ * Catálogo vivo (1.18.0), en la hoja «Catálogo» (una sola fila): las reglas vigentes que publica Insto, para Instinct.
+ * POST {token, action:"catalogo", hash, json}  → {ok, catalogo:"guardado"|"igual"}   ({ok:false, error:"catalogo"} si falta
+ *   algo o el json pasa de 45 000 caracteres)
+ * GET ?token=…&action=catalogo  → {ok, catalogo:{publicado, hash, json} | null}
  * Un token incorrecto responde {ok:false, error:"token"}.
  */
 const TOKEN = 'CAMBIÁ-ESTE-TOKEN';
@@ -39,6 +49,13 @@ const DOORBELL_ENDPOINT = 'insto_timbre_endpoint';
 const DOORBELL_LAST = 'insto_timbre_ultimo';
 const DOORBELL_SPACING_MS = 5000;
 const DOORBELL_MAX_CHARS = 500;
+const DOORBELL_WITH_ORDER = 'insto_timbre_con_orden';
+const DOORBELL_PAYLOAD = 'insto-timbre';
+const DOORBELL_MAX_PAYLOAD_BYTES = 3500;
+const MAX_LINE_CHARS = 300;
+const CATALOG = 'Catálogo';
+const CATALOG_HEADERS = ['publicado', 'hash', 'json'];
+const CATALOG_MAX_CHARS = 45000;
 
 function sheet_() {
   const book = SpreadsheetApp.getActiveSpreadsheet();
@@ -84,7 +101,7 @@ function postOrder_(body) {
   if (typeof body.id !== 'string' || !body.id || typeof body.at !== 'string' || typeof body.sig !== 'string' ||
     !Array.isArray(body.lines) || !body.lines.length) return json_({ ok: false, error: 'orden' });
   // Unas pocas más de las que Insto lee: la firma cubre todas, Insto ejecuta como máximo 3.
-  const lines = body.lines.slice(0, MAX_LINES * 3).map(function (l) { return String(l).slice(0, 300); });
+  const lines = body.lines.slice(0, MAX_LINES * 3).map(function (l) { return String(l).slice(0, MAX_LINE_CHARS); });
   let isNew = false;
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
@@ -100,7 +117,7 @@ function postOrder_(body) {
     lock.releaseLock();
   }
   // Solo una orden nueva toca el timbre; una repetida no. Un fallo nunca cambia la respuesta.
-  if (isNew) { try { ring_(false); } catch (_) { } }
+  if (isNew) { try { ring_(false, withOrder_() ? orderPayload_(body) : null); } catch (_) { } }
   return json_({ ok: true, id: body.id });
 }
 
@@ -109,16 +126,48 @@ function props_() {
   return PropertiesService.getScriptProperties();
 }
 
+/** «Incluir la orden en el timbre» (1.18.0): apagado salvo que Insto lo haya encendido. */
+function withOrder_() {
+  return props_().getProperty(DOORBELL_WITH_ORDER) === '1';
+}
+
+/** Los bytes de un texto en UTF-8, sin depender de Utilities (así también corre en la prueba sin Google). */
+function utf8Bytes_(text) {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c < 0xdc00 && i + 1 < text.length) { n += 4; i++; }
+    else n += 3;
+  }
+  return n;
+}
+
 /**
- * Toca el timbre: un POST «insto-timbre» al endpoint guardado. Sin «force», como mucho uno cada 5 segundos.
- * Devuelve el código HTTP, 0 si no se tocó (sin endpoint o dentro de los 5 segundos) o -1 si el pedido falló.
+ * La orden firmada como cuerpo del timbre, tal cual llegó: {"v":1,"id":…,"at":…,"lines":[…],"sig":…}. Null si Insto no la
+ * podría aceptar así (más de 3 líneas o una línea de más de 300 caracteres) o si ocupa más de 3500 bytes: entonces el
+ * timbre es «insto-timbre» y la orden se lee de la planilla, como siempre.
  */
-function ring_(force) {
-  return ringDetail_(force).code;
+function orderPayload_(body) {
+  if (body.lines.length > MAX_LINES) return null;
+  const lines = body.lines.map(String);
+  if (lines.some(function (l) { return l.length > MAX_LINE_CHARS; })) return null;
+  const payload = JSON.stringify({ v: 1, id: body.id, at: body.at, lines: lines, sig: body.sig });
+  return utf8Bytes_(payload) <= DOORBELL_MAX_PAYLOAD_BYTES ? payload : null;
+}
+
+/**
+ * Toca el timbre: un POST al endpoint guardado, con «insto-timbre» o, si se pasa, la orden firmada ([payload]). Sin
+ * «force», como mucho uno cada 5 segundos. Devuelve el código HTTP, 0 si no se tocó (sin endpoint o dentro de los 5
+ * segundos) o -1 si el pedido falló.
+ */
+function ring_(force, payload) {
+  return ringDetail_(force, payload).code;
 }
 
 /** Como ring_, con el error de Google cuando el pedido falla (por ejemplo, sin autorización para UrlFetchApp). */
-function ringDetail_(force) {
+function ringDetail_(force, payload) {
   const props = props_();
   const endpoint = props.getProperty(DOORBELL_ENDPOINT);
   if (!endpoint) return { code: 0 };
@@ -127,7 +176,10 @@ function ringDetail_(force) {
   if (!force && now - last >= 0 && now - last < DOORBELL_SPACING_MS) return { code: 0 };
   props.setProperty(DOORBELL_LAST, String(now));
   try {
-    const response = UrlFetchApp.fetch(endpoint, { method: 'post', payload: 'insto-timbre', muteHttpExceptions: true });
+    const options = payload
+      ? { method: 'post', contentType: 'application/json; charset=utf-8', payload: payload, muteHttpExceptions: true }
+      : { method: 'post', payload: DOORBELL_PAYLOAD, muteHttpExceptions: true };
+    const response = UrlFetchApp.fetch(endpoint, options);
     return { code: response.getResponseCode() };
   } catch (e) {
     return { code: -1, error: String((e && e.message) || e).slice(0, 200) };
@@ -143,16 +195,21 @@ function autorizarTimbre() {
   UrlFetchApp.fetch('https://ntfy.sh/v1/health', { muteHttpExceptions: true });
 }
 
-/** Guarda (o, vacío, borra) el endpoint del timbre. */
+/**
+ * Guarda (o, vacío, borra) el endpoint del timbre. conOrden (1.18.0), si viene, se guarda y se repite en la respuesta,
+ * para que Insto sepa que este script lo entendió; si no viene, queda el valor que había.
+ */
 function postDoorbell_(body) {
   const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : '';
-  if (!endpoint) {
-    props_().deleteProperty(DOORBELL_ENDPOINT);
-    return json_({ ok: true, timbre: 'borrado' });
+  if (endpoint && (endpoint.length > DOORBELL_MAX_CHARS || !/^https:\/\/[^\s]+$/.test(endpoint))) return json_({ ok: false, error: 'endpoint' });
+  const out = { ok: true, timbre: endpoint ? 'guardado' : 'borrado' };
+  if (typeof body.conOrden === 'boolean') {
+    props_().setProperty(DOORBELL_WITH_ORDER, body.conOrden ? '1' : '0');
+    out.conOrden = body.conOrden;
   }
-  if (endpoint.length > DOORBELL_MAX_CHARS || !/^https:\/\/[^\s]+$/.test(endpoint)) return json_({ ok: false, error: 'endpoint' });
-  props_().setProperty(DOORBELL_ENDPOINT, endpoint);
-  return json_({ ok: true, timbre: 'guardado' });
+  if (endpoint) props_().setProperty(DOORBELL_ENDPOINT, endpoint);
+  else props_().deleteProperty(DOORBELL_ENDPOINT);
+  return json_(out);
 }
 
 /** «Probar timbre» desde Insto: toca el timbre ahora, sin esperar los 5 segundos. */
@@ -162,6 +219,54 @@ function postDoorbellTest_() {
   const out = { ok: true, timbre: rang.code >= 200 && rang.code < 300, codigo: rang.code };
   if (rang.error) out.detalle = rang.error;
   return json_(out);
+}
+
+function catalogSheet_() {
+  const book = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = book.getSheetByName(CATALOG);
+  if (!sheet) {
+    sheet = book.insertSheet(CATALOG);
+    sheet.getRange('A:C').setNumberFormat('@');
+    sheet.appendRow(CATALOG_HEADERS);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+/**
+ * Catálogo vivo (1.18.0): reemplaza la única fila con el que publica Insto. Con el mismo hash no escribe nada. El json se
+ * guarda como texto plano (cell_ con un límite propio: un catálogo pasa de los 1000 caracteres de las otras celdas).
+ */
+function postCatalog_(body) {
+  const hash = typeof body.hash === 'string' ? body.hash : '';
+  const text = typeof body.json === 'string' ? body.json : '';
+  if (!/^[0-9a-f]{64}$/.test(hash) || !text || text.length > CATALOG_MAX_CHARS) return json_({ ok: false, error: 'catalogo' });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = catalogSheet_();
+    if (sheet.getLastRow() >= 2 && String(sheet.getRange(2, 2, 1, 1).getValues()[0][0]) === hash) return json_({ ok: true, catalogo: 'igual' });
+    const row = [new Date().toISOString(), hash, text].map(function (v) { return plain_(v, CATALOG_MAX_CHARS); });
+    sheet.getRange(2, 1, 1, CATALOG_HEADERS.length).setValues([row]);
+    return json_({ ok: true, catalogo: 'guardado' });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Como cell_, con otro límite de largo. */
+function plain_(value, max) {
+  const text = String(value == null ? '' : value).slice(0, max);
+  return /^[=+\-@]/.test(text) ? "'" + text : text;
+}
+
+/** El catálogo publicado, o null si Insto todavía no publicó ninguno. */
+function getCatalog_() {
+  const sheet = catalogSheet_();
+  if (sheet.getLastRow() < 2) return json_({ ok: true, catalogo: null });
+  const r = sheet.getRange(2, 1, 1, CATALOG_HEADERS.length).getValues()[0];
+  if (!r[1]) return json_({ ok: true, catalogo: null });
+  return json_({ ok: true, catalogo: { publicado: iso_(r[0]), hash: String(r[1]), json: String(r[2]).replace(/^'/, '') } });
 }
 
 /** Marca como tomadas las órdenes que Insto ya leyó (válidas o no), para que no vuelvan. */
@@ -213,6 +318,7 @@ function doPost(e) {
   if (body.action === 'tomadas') return postTaken_(body);
   if (body.action === 'timbre') return postDoorbell_(body);
   if (body.action === 'probar-timbre') return postDoorbellTest_();
+  if (body.action === 'catalogo') return postCatalog_(body);
   // Sin «action»: los eventos de Insto, exactamente como en 1.15.0.
   const events = Array.isArray(body.events) ? body.events.slice(0, MAX_EVENTS) : [];
   const lock = LockService.getScriptLock();
@@ -258,6 +364,7 @@ function doGet(e) {
   if (p.token !== TOKEN) return json_({ ok: false, error: 'token' });
   if (p.action === 'estado') return json_({ ok: true, estado: lastState_() });
   if (p.action === 'ordenes') return getOrders_(p);
+  if (p.action === 'catalogo') return getCatalog_();
   // Sin «action»: los eventos desde «since», exactamente como en 1.15.0.
   const since = p.since ? new Date(p.since).getTime() : 0;
   if (isNaN(since)) return json_({ ok: false, error: 'since' });

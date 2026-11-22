@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -107,6 +108,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         itemModifier = { Modifier.testTag("instinct_channel_${it.name.lowercase()}") })
       if (channel.usesLog) InstinctLogConfiguration(revision) { revision++ }
       InstinctStateSection(revision) { revision++ }
+      InstinctCatalogSection(revision) { revision++ }
       InstinctMailboxSection(replyMode, revision) { revision++ }
       InstinctScheduledList(revision) { revision++ }
       InstinctRoutineSwitches(revision) { revision++ }
@@ -355,6 +357,42 @@ private fun InstinctStateSection(revision: Int, onChange: () -> Unit) {
   }
 }
 
+/**
+ * «Catálogo para Instinct» (1.18.0): the rules in force, published in the sheet when they change. One line and
+ * «Publicar catálogo ahora»; never the address, the token or the key.
+ */
+@Composable
+private fun InstinctCatalogSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val publisher = com.example.phone.InstinctCatalogPublisher
+  var line by remember { mutableStateOf<String?>(null) }
+  var notice by remember { mutableStateOf<String?>(null) }
+  var busy by remember { mutableStateOf(false) }
+  // The line computes the catalog (it parses the examples): off the main thread.
+  LaunchedEffect(revision) { line = withContext(Dispatchers.IO) { publisher.line(context) } }
+  val shown = line ?: return
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_catalog")) {
+    Text("Catálogo para Instinct", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("Insto publica en la planilla las reglas vigentes (qué puede pedir Instinct, la autonomía, los límites) cada " +
+      "vez que cambian, para que Instinct no dependa de una copia pegada.")
+    SettingsDescription(shown, modifier = Modifier.testTag("instinct_catalog_line"))
+    OutlinedButton(onClick = {
+      busy = true; notice = "Publicando…"
+      scope.launch {
+        notice = when (val outcome = withContext(Dispatchers.IO) { publisher.publish(context, force = true) }) {
+          is com.example.phone.InstinctCatalogPublisher.Outcome.Published -> "Catálogo publicado."
+          com.example.phone.InstinctCatalogPublisher.Outcome.Unchanged -> "Catálogo publicado."
+          com.example.phone.InstinctCatalogPublisher.Outcome.Inactive -> "Falta configurar la bitácora o encender «Recibir órdenes de Instinct»."
+          is com.example.phone.InstinctCatalogPublisher.Outcome.Failed -> "No se pudo publicar (motivo: ${outcome.reason})."
+        }
+        busy = false; onChange()
+      }
+    }, enabled = !busy, modifier = Modifier.testTag("instinct_catalog_publish")) { Text("Publicar catálogo ahora") }
+    notice?.let { SettingsDescription(it) }
+  }
+}
+
 internal fun acceptLabel(value: com.example.phone.InstinctMailboxAccept): String = when (value) {
   com.example.phone.InstinctMailboxAccept.WHATSAPP_Y_BUZON -> "WhatsApp y buzón"
   com.example.phone.InstinctMailboxAccept.SOLO_BUZON -> "Solo buzón"
@@ -462,6 +500,8 @@ private fun InstinctDoorbellSection(revision: Int, onChange: () -> Unit) {
   val current = remember(revision) { doorbell.distributor(context) }
   val blocker = remember(revision) { doorbell.blocker(context) }
   val status = remember(revision) { doorbell.status(context) }
+  val withOrder = remember(revision) { settings.withOrder() }
+  val withOrderStatus = remember(revision) { doorbell.withOrderStatus(context) }
   var notice by remember { mutableStateOf<String?>(null) }
   var busy by remember { mutableStateOf(false) }
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_doorbell")) {
@@ -481,6 +521,12 @@ private fun InstinctDoorbellSection(revision: Int, onChange: () -> Unit) {
     }
     if (enabled) {
       SettingsDescription(status, modifier = Modifier.testTag("instinct_doorbell_status"))
+      // 1.18.0: the signed order inside the doorbell. Off by default; the script hears it like the endpoint.
+      Column(Modifier.testTag("instinct_doorbell_with_order")) {
+        SettingsSwitch(com.example.phone.InstinctDoorbellText.WITH_ORDER_LABEL, withOrder,
+          { doorbell.setWithOrder(context, it); onChange() }, com.example.phone.InstinctDoorbellText.WITH_ORDER_DESCRIPTION)
+      }
+      if (withOrder) SettingsDescription(withOrderStatus, modifier = Modifier.testTag("instinct_doorbell_with_order_status"))
       OutlinedButton(onClick = {
         busy = true; notice = "Pidiéndole al script que toque el timbre…"
         scope.launch {

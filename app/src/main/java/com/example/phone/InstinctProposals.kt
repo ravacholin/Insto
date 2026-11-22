@@ -47,6 +47,11 @@ sealed interface ProposalCheck {
     STATE("ver estado"),
     /** One scheduled order, or a whole recurrence, by the short id of «ver programadas» (1.17.0). */
     CANCEL_ONE("cancelar programada", form = "cancelar programada <id>"),
+    /**
+     * «probar <orden>» (1.18.0): validates the order with the same validator and says what would happen now, without
+     * running, saving, scheduling, telling the person or consuming the brake. [ProposalCheck.Query.argument] is the order.
+     */
+    PROBE("probar", form = "probar <orden>"),
   }
 }
 
@@ -72,8 +77,12 @@ object InstinctProposalValidator {
     if (order.isBlank()) return ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY)
     // Read-only questions about the protocol: exact phrases, before the grammar.
     val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
-    ProposalCheck.QueryKind.entries.firstOrNull { it != ProposalCheck.QueryKind.CANCEL_ONE && PhoneCommandParser.normalize(it.phrase) == folded }
-      ?.let { return ProposalCheck.Query(order, it) }
+    ProposalCheck.QueryKind.entries.firstOrNull { it != ProposalCheck.QueryKind.CANCEL_ONE && it != ProposalCheck.QueryKind.PROBE &&
+      PhoneCommandParser.normalize(it.phrase) == folded }?.let { return ProposalCheck.Query(order, it) }
+    // «probar <orden>»: the order is kept as written and checked by whoever answers, with this same validator.
+    probe(order)?.let { inner ->
+      return if (inner.isBlank()) ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY) else ProposalCheck.Query(order, ProposalCheck.QueryKind.PROBE, inner)
+    }
     cancelOne.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.CANCEL_ONE, it.groupValues[1]) }
     // A notice for the person: fixed form, plain text. Where it may come from is decided by the caller.
     InstinctNotice.text(order)?.let { text ->
@@ -104,6 +113,14 @@ object InstinctProposalValidator {
     return ProposalCheck.Valid(order, command)
   }
 
+  /** The order after «probar», as written (maybe empty); null when the line is not a probe. */
+  fun probe(order: String): String? {
+    val trimmed = order.trim()
+    val head = trimmed.substringBefore(' ')
+    if (PhoneCommandParser.normalize(head) != InstinctProbe.PHRASE) return null
+    return trimmed.substring(head.length).trim()
+  }
+
   /**
    * A routine passes only when its name matches exactly (normalized as `routine_run` does) a routine the user
    * enabled for Instinct, whose steps have not changed since. No other routine, and never a plan built from text.
@@ -113,10 +130,11 @@ object InstinctProposalValidator {
       command.argument?.let(routines::resolve) != null
 
   /**
-   * One canonical form per allowed type: the single source of the examples in the generated catalog
-   * ([InstinctProtocolCatalog]). A test checks that each one is [ProposalCheck.Valid].
+   * One canonical form per allowed type: the single source of the examples in the generated catalog, text and JSON
+   * ([InstinctProtocolCatalog]). A test checks that each one is [ProposalCheck.Valid]. Grouped by form (1.18.0) so the
+   * JSON catalog can say which is which; [examples] keeps them all, in the same order.
    */
-  val examples: List<String> = listOf(
+  val immediateExamples: List<String> = listOf(
     "poner una alarma a las 07:00",
     "poner una alarma a las 07:00 todos los días",
     "poner un temporizador de 25 minutos",
@@ -139,26 +157,36 @@ object InstinctProposalValidator {
     "buscar jazz en YouTube",
     "buscar Cerati en Spotify",
     "agendar reunión mañana a las 17:00 durante una hora",
-    // Deferred and conditional forms (1.14.0): the wrapper, then any order above.
+  )
+  /** Deferred forms (1.14.0): the wrapper, then any order above. */
+  val deferredExamples: List<String> = listOf(
     "a las 22:00: poner el volumen al 10 por ciento",
     "en 30 minutos: apagar la linterna",
     "en 2 horas: desactivar no molestar",
+  )
+  /** One weather condition, only with a time (1.14.0). */
+  val weatherExamples: List<String> = listOf(
     "a las 06:30 si llueve: poner una alarma a las 06:45",
     "a las 06:30 si no llueve: poner música de Soda Stereo",
     "a las 07:00 si hace menos de 10 grados: poner un temporizador de 10 minutos",
     "a las 14:00 si hace más de 30 grados: activar no molestar",
-    // Triggers by state (1.17.0): once each, at most 12 hours (24 with «hasta las HH:MM»).
+  )
+  /** Triggers by state (1.17.0): once each, at most 12 hours (24 with «hasta las HH:MM»). */
+  val triggerExamples: List<String> = listOf(
     "al terminar el evento: desactivar no molestar",
     "al empezar el próximo evento: activar no molestar",
     "al conectar auriculares hasta las 20:00: abrir spotify",
     "al desconectar auriculares: pausar la música",
     "al desbloquear: mostrar las alarmas",
-    // Recurring orders (1.17.0): «hasta el DD/MM» is required, at most 30 days. The tests check them on 21/11.
+  )
+  /** Recurring orders (1.17.0): «hasta el DD/MM» is required, at most 30 days. The tests check them on 21/11. */
+  val recurringExamples: List<String> = listOf(
     "todos los días a las 07:30 hasta el 15/12: poner el volumen al 20 por ciento",
     "los días hábiles a las 08:00 hasta el 15/12: activar no molestar",
     "los fines de semana a las 10:00 hasta el 13/12: poner música de Soda Stereo",
     "todos los días a las 06:30 si llueve hasta el 15/12: poner una alarma a las 06:45",
   )
+  val examples: List<String> = immediateExamples + deferredExamples + weatherExamples + triggerExamples + recurringExamples
 
   /**
    * Allowlist v1 for single commands and routine steps. Everything not named is forbidden, in particular calls
@@ -388,9 +416,14 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
  */
 class AutoRunBudget(private val clock: () -> Long, private val max: Int = 6, private val periodMillis: Long = 10 * 60_000L) {
   private val runs = ArrayDeque<Long>()
+  /** Whether [tryAcquire] would succeed now, without taking anything (1.18.0, for «probar»). */
+  @Synchronized fun available(): Boolean { prune(clock()); return runs.size < max }
+  private fun prune(now: Long) {
+    while (runs.isNotEmpty() && (now - runs.first() >= periodMillis || now < runs.first())) runs.removeFirst()
+  }
   @Synchronized fun tryAcquire(): Boolean {
     val now = clock()
-    while (runs.isNotEmpty() && (now - runs.first() >= periodMillis || now < runs.first())) runs.removeFirst()
+    prune(now)
     if (runs.size >= max) return false
     runs.addLast(now)
     return true

@@ -187,8 +187,8 @@ class InstinctRoutinesTest {
   @Test fun `ver catálogo is a read-only query`() {
     assertEquals(ProposalCheck.Query("ver catálogo", ProposalCheck.QueryKind.CATALOG), check("ver catálogo"))
     assertEquals(ProposalCheck.QueryKind.CATALOG, (check("Ver catalogo.") as ProposalCheck.Query).kind)
-    assertEquals("Protocolo Insto v5 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
-    assertEquals("Protocolo Insto v5 · rutinas habilitadas: Estudio, Noche.", InstinctProtocolCatalog.summary(listOf("Estudio", "Noche")))
+    assertEquals("Protocolo Insto v6 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
+    assertEquals("Protocolo Insto v6 · rutinas habilitadas: Estudio, Noche.", InstinctProtocolCatalog.summary(listOf("Estudio", "Noche")))
     assertTrue(check("ver catálogo completo") is ProposalCheck.Invalid)
   }
 

@@ -1,4 +1,4 @@
-Órdenes para Insto (Protocolo Insto v5)
+Órdenes para Insto (Protocolo Insto v6)
 
 Insto es el asistente del teléfono de quien te escribe. Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
 
@@ -18,6 +18,7 @@ Reglas:
 - Recurrentes: "todos los días a las HH:MM hasta el DD/MM: <orden>", "los días hábiles a las HH:MM hasta el DD/MM: <orden>" (de lunes a viernes) o "los fines de semana a las HH:MM hasta el DD/MM: <orden>". "hasta el DD/MM" es obligatorio y como mucho 30 días; podés agregar una condición del clima antes de "hasta el". Como máximo 5 recurrentes, aparte de las 10 programadas. Cada ocurrencia se informa por separado.
 - Una sola condición por línea: un disparador, una hora o una recurrencia, sin "y", "o" ni anidamiento.
 - Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después.
+- Si no estás seguro de una forma o de si va a quedar esperando, probala antes con "probar <orden>".
 
 Acciones permitidas (usá estas formas):
 #insto poner una alarma a las 07:00
@@ -67,12 +68,13 @@ Qué hace Insto solo y qué espera confirmación (lo eligió la persona; puede c
 - Una rutina espera confirmación si las rutinas o alguno de sus pasos la esperan. Una orden programada se evalúa cuando se dispara. Un evento de calendario siempre muestra la vista previa antes de guardarse.
 - Además siempre esperan confirmación: con el teléfono bloqueado, lo que abre otra app sin la Accesibilidad de Insto, más de 6 órdenes en 10 minutos y una orden programada que se dispara con más de 15 minutos de atraso.
 
-Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas). «ver programadas» muestra cada una con un id de 6 caracteres; con ese id, «cancelar programada <id>» cancela esa orden o la recurrente entera:
+Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas). «ver programadas» muestra cada una con un id de 6 caracteres; con ese id, «cancelar programada <id>» cancela esa orden o la recurrente entera. «probar <orden>» valida la orden (también diferida, con disparador, recurrente o con clima) y dice qué pasaría ahora, sin ejecutar ni guardar nada: «válida · <categoría> · la haría sola», «válida · <categoría> · esperaría confirmación: <motivo>», «válida · programada: <cuándo>», «no válida: <motivo>» o «rechazada: la persona no permite esta acción»; como máximo 20 pruebas cada 10 minutos:
 #insto ver catálogo
 #insto ver programadas
 #insto cancelar programadas
 #insto ver estado
 #insto cancelar programada <id>
+#insto probar <orden>
 
 Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
 

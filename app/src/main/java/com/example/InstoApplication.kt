@@ -13,5 +13,7 @@ open class InstoApplication:Application() {
   preferencesCache // Starts loading now, before any screen, tile or widget asks for it.
   // A gap between processes may contain manual changes that no observer could see.
   runCatching {TemporaryModeManager(this).loseOwnership()}
+  // The first start after an update publishes the catalog if its hash changed (1.18.0); the job decides, off this thread.
+  runCatching {com.example.phone.InstinctCatalogPublisher.changed(this)}
  }
 }

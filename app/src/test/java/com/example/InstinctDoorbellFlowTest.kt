@@ -43,6 +43,7 @@ class InstinctDoorbellFlowTest {
   private var scriptKnowsDoorbell = true
   private val toDistributor = mutableListOf<Intent>()
   private val ringJobs = mutableListOf<Long?>()
+  private val followUps = mutableListOf<Long?>()
   private val mailboxJobs = mutableListOf<Long?>()
   private var gets = 0
   private var online = true
@@ -72,7 +73,9 @@ class InstinctDoorbellFlowTest {
     InstinctDoorbell.online = { online }
     InstinctDoorbell.background = { it.run() }
     // The endpoint reaches the script at once; ring jobs are recorded.
-    InstinctDoorbell.schedule = { context, kind, delay -> if (kind == "inform") InstinctDoorbell.informNow(context) else ringJobs += delay }
+    InstinctDoorbell.schedule = { context, kind, delay ->
+      when (kind) { "inform" -> InstinctDoorbell.informNow(context); "follow-up" -> followUps += delay; else -> ringJobs += delay }
+    }
     val fake = FakeHttp { ex ->
       if (ex.request.method == "GET") {
         gets++
@@ -86,7 +89,8 @@ class InstinctDoorbellFlowTest {
           "timbre" -> {
             scriptBodies += body
             if (!scriptKnowsDoorbell) FakeHttp.Reply(200, """{"ok":true,"accepted":[]}""")
-            else FakeHttp.Reply(200, JSONObject().put("ok", true).put("timbre", if (body.optString("endpoint").isEmpty()) "borrado" else "guardado").toString())
+            else FakeHttp.Reply(200, JSONObject().put("ok", true).put("timbre", if (body.optString("endpoint").isEmpty()) "borrado" else "guardado")
+              .apply { if (body.has("conOrden")) put("conOrden", body.getBoolean("conOrden")) }.toString())
           }
           else -> FakeHttp.Reply(200, """{"ok":true,"accepted":[]}""")
         }
@@ -114,6 +118,7 @@ class InstinctDoorbellFlowTest {
   }
 
   @After fun tearDown() {
+    InstinctDoorbell.setWithOrder(app, false)
     InstinctDoorbell.setEnabled(app, false)
     box.setIntervalMinutes(5)
     box.setEnabled(false)
@@ -232,6 +237,131 @@ class InstinctDoorbellFlowTest {
     register()
     assertTrue(InstinctDoorbell.diagnosis(app), InstinctDoorbell.diagnosis(app).contains(InstinctDoorbellScript.NOT_CONFIRMED))
     assertTrue(InstinctDoorbell.status(app).endsWith("todavía no se avisó al script"))
+  }
+
+  // The order inside the doorbell (1.18.0)
+
+  /** The payload the Apps Script sends with «conOrden». */
+  private fun payload(order: MailboxOrder): ByteArray = JSONObject().put("v", 1).put("id", order.id).put("at", order.at)
+    .put("lines", JSONArray(order.lines)).put("sig", order.sig).toString().toByteArray(Charsets.UTF_8)
+
+  private fun ringWith(token: String, bytes: ByteArray) = deliver(UnifiedPush.ACTION_MESSAGE, token) {
+    putExtra(UnifiedPush.EXTRA_BYTES_MESSAGE, bytes); putExtra(UnifiedPush.EXTRA_ID, "m-" + UUID.randomUUID())
+  }
+
+  /** The events about [order] in the log's outbox, by kind. */
+  private fun acks(order: String): List<String> = InstinctLog.outbox(app).batch(500).filter { it.order == order }.map { it.kind }
+
+  @Test fun `the option goes to the script with conOrden and is off by default`() {
+    register()
+    assertFalse(bell.withOrder())
+    assertEquals(false, scriptBodies.last().getBoolean("conOrden"))
+    InstinctDoorbell.setWithOrder(app, true)
+    assertEquals(true, scriptBodies.last().getBoolean("conOrden"))
+    assertEquals(endpoint, scriptBodies.last().getString("endpoint"))
+    assertTrue(bell.state().withOrderConfirmed)
+    assertEquals(InstinctDoorbellText.withOrderStatus(bell.state()), InstinctDoorbell.withOrderStatus(app))
+    assertTrue("the catalog says nothing changes for Instinct", InstinctProposalCenter.catalog(app).contains(InstinctDoorbellText.CATALOG_DIRECT_LINE))
+    InstinctDoorbell.setWithOrder(app, false)
+    assertEquals(false, scriptBodies.last().getBoolean("conOrden"))
+    assertFalse(InstinctProposalCenter.catalog(app).contains(InstinctDoorbellText.CATALOG_DIRECT_LINE))
+  }
+
+  @Test fun `a script older than 1_18_0 keeps the endpoint but does not confirm the option`() {
+    register()
+    // An old script: it saves the endpoint and does not repeat conOrden.
+    val old = FakeHttp { ex ->
+      val body = JSONObject(ex.bodyText()); scriptBodies += body
+      FakeHttp.Reply(200, JSONObject().put("ok", true).put("timbre", "guardado").toString())
+    }
+    InstinctDoorbell.client = { InstinctLogClient(OkHttpClient.Builder().addInterceptor(old).build()) }
+    InstinctDoorbell.setWithOrder(app, true)
+    assertFalse(bell.state().withOrderConfirmed)
+    assertFalse(bell.state().informPending)
+    assertTrue(InstinctDoorbell.withOrderStatus(app), InstinctDoorbell.withOrderStatus(app).contains("1.18.0"))
+  }
+
+  @Test fun `a signed order inside the doorbell runs at once without reading the sheet, once`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    val order = order("#insto poner el volumen al 40 por ciento")
+    inbox += order
+    ringWith(token, payload(order))
+    assertTrue("it ran", audio.getStreamVolume(AudioManager.STREAM_MUSIC) > 0)
+    assertEquals("without reading the sheet", 0, gets)
+    assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
+    assertEquals(1, bell.state().directOrders)
+    assertEquals("a poll about 60 seconds later", listOf<Long?>(60_000L), followUps)
+    assertTrue(InstinctDoorbell.diagnosis(app), InstinctDoorbell.diagnosis(app).contains("órdenes directas 1 · payload inválido 0"))
+    // The follow-up poll marks it taken and never runs it again.
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    InstinctDoorbell.followUp(app)
+    assertEquals(1, gets)
+    assertTrue(order.id in taken)
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    // Nor the same doorbell delivered twice.
+    ringWith(token, payload(order))
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
+  }
+
+  @Test fun `an order the poll took first is not run again by its doorbell`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    val order = order("#insto poner el volumen al 40 por ciento")
+    inbox += order
+    InstinctMailbox.poll(app)
+    assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringWith(token, payload(order))
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
+    assertEquals(0, bell.state().directOrders)
+  }
+
+  @Test fun `a bad signature in the doorbell runs nothing, answers nobody and polls at once`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    val good = order("#insto poner el volumen al 40 por ciento")
+    val forged = good.copy(lines = listOf("#insto poner el volumen al 100 por ciento"))
+    ringWith(token, payload(forged))
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertTrue("no answer to anyone", acks("poner el volumen al 100 por ciento").isEmpty())
+    assertEquals("it polled instead", 1, gets)
+    assertEquals(1, bell.state().badPayloads)
+    assertEquals(0, bell.state().directOrders)
+    assertTrue(followUps.isEmpty())
+    // An old order (more than 15 minutes) is refused the same way.
+    val stale = order("#insto poner el volumen al 40 por ciento")
+    wall += 16 * 60_000L
+    InstinctMailbox.gate.reset()
+    ringWith(token, payload(stale))
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(2, bell.state().badPayloads)
+    assertEquals(2, gets)
+  }
+
+  @Test fun `garbage in the doorbell is counted and polls, like insto-timbre without counting`() {
+    val token = register()
+    ringWith(token, "insto-timbre".toByteArray())
+    assertEquals(1, gets)
+    assertEquals(0, bell.state().badPayloads)
+    InstinctMailbox.gate.reset()
+    ringWith(token, "{\"v\":2}".toByteArray())
+    assertEquals(2, gets)
+    assertEquals(1, bell.state().badPayloads)
+  }
+
+  @Test fun `with the mailbox off, an order in the doorbell does nothing`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    box.setEnabled(false)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringWith(token, payload(order("#insto poner el volumen al 40 por ciento")))
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(0, gets)
   }
 
   @Test fun `a failed registration needs a new token`() {

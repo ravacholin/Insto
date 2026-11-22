@@ -32,6 +32,7 @@ class InstinctMailboxSettings(context: Context) {
   fun setEnabled(value: Boolean) {
     if (value) enabledFile.writeText("true") else enabledFile.delete()
     InstinctMailbox.rearm(app)
+    InstinctCatalogPublisher.changed(app)
   }
 
   internal fun key(): String? = runCatching { keyFile.readText() }.getOrNull()?.takeIf(InstinctMailboxKey::valid)
@@ -54,6 +55,7 @@ class InstinctMailboxSettings(context: Context) {
     runCatching { InstinctMailboxAccept.valueOf(acceptFile.readText()) }.getOrDefault(InstinctMailboxAccept.WHATSAPP_Y_BUZON)
   fun setAccept(value: InstinctMailboxAccept) {
     if (value == InstinctMailboxAccept.WHATSAPP_Y_BUZON) acceptFile.delete() else acceptFile.writeText(value.name)
+    InstinctCatalogPublisher.changed(app)
   }
 
   /** «Las órdenes por WhatsApp (sin firma) como máximo en»: Solo (default) or Confirmar. */
@@ -111,7 +113,18 @@ object InstinctMailbox {
    */
   val gate = InstinctMailboxGate { SystemClock.elapsedRealtime() }
 
-  fun seen(context: Context) = InstinctMailboxSeen(File(context.applicationContext.noBackupFilesDir, InstinctMailboxSeen.FILE)) { clock() }
+  /**
+   * The one record of seen ids, shared by the poll and the orders that come inside the doorbell (1.18.0): its
+   * [InstinctMailboxSeen.claim] is what keeps an order from running twice.
+   */
+  fun seen(context: Context): InstinctMailboxSeen {
+    val file = File(context.applicationContext.noBackupFilesDir, InstinctMailboxSeen.FILE)
+    return synchronized(sharedLock) { shared?.takeIf { it.first == file.absolutePath }?.second
+      ?: InstinctMailboxSeen(file) { clock() }.also { shared = file.absolutePath to it } }
+  }
+  private var shared: Pair<String, InstinctMailboxSeen>? = null
+  /** Not the poll's lock: an order inside the doorbell must never wait for a poll's network. */
+  private val sharedLock = Any()
 
   /** The job, armed while the mailbox can poll; cancelled otherwise. */
   fun rearm(context: Context) {

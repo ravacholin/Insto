@@ -37,7 +37,7 @@ class InstinctProposalSettings(context: Context) {
   fun isEnabled(): Boolean = Build.VERSION.SDK_INT >= MIN_SDK && runCatching { enabled.readText() == "true" }.getOrDefault(false)
 
   fun setEnabled(value: Boolean) {
-    if (value) { enabled.writeText("true"); InstinctStatePublisher.rearm(app); InstinctMailbox.rearm(app) }
+    if (value) { enabled.writeText("true"); InstinctStatePublisher.rearm(app); InstinctMailbox.rearm(app); InstinctCatalogPublisher.changed(app) }
     else {
       if (enabled.exists()) enabled.delete()
       // The state's heartbeat and the mailbox's polling stop with the switch.
@@ -59,12 +59,14 @@ class InstinctProposalSettings(context: Context) {
       if (replyMode.exists()) replyMode.delete()
       InstinctProposalCenter.acks.clear()
     } else replyMode.writeText(value.name)
+    InstinctCatalogPublisher.changed(app)
   }
 
   /** «Canal de estados» (1.15.0): WhatsApp by default; a restore never brings it, like the other switches. */
   fun channel(): InstinctAckChannel = runCatching { InstinctAckChannel.valueOf(ackChannel.readText()) }.getOrDefault(InstinctAckChannel.WHATSAPP)
   fun setChannel(value: InstinctAckChannel) {
     if (value == InstinctAckChannel.WHATSAPP) { if (ackChannel.exists()) ackChannel.delete() } else ackChannel.writeText(value.name)
+    InstinctCatalogPublisher.changed(app)
   }
 
   companion object {
@@ -314,9 +316,11 @@ object InstinctProposalCenter {
       when (check) {
         is ProposalCheck.Invalid -> reply(app, acks.resolve(ticket, index, InstinctAck.invalid(check)))
         // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
-        is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index,
-          if (check.kind == ProposalCheck.QueryKind.STATE) stateAnswer(app, check.order)
-          else AckEntry(AckKind.OK, check.order, answer(app, check.kind, check.argument), informative = true)))
+        is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index, when (check.kind) {
+          ProposalCheck.QueryKind.STATE -> stateAnswer(app, check.order)
+          ProposalCheck.QueryKind.PROBE -> probe(app, check.order, check.argument.orEmpty(), source)
+          else -> AckEntry(AckKind.OK, check.order, answer(app, check.kind, check.argument), informative = true)
+        }))
         is ProposalCheck.Notice -> reply(app, acks.resolve(ticket, index, notice(app, check, source)))
         // «Nunca» refuses at once, whatever the hour; Confirmar and the quiet hours are decided when it runs.
         is ProposalCheck.Valid -> if (refusedByPolicy(app, check.command)) {
@@ -466,7 +470,8 @@ object InstinctProposalCenter {
 
   /** The answer to a query. Names of enabled routines only, never their steps. */
   internal fun answer(context: Context, kind: ProposalCheck.QueryKind, argument: String? = null): String = when (kind) {
-    ProposalCheck.QueryKind.CATALOG -> InstinctProtocolCatalog.summary(InstinctRoutineGrants(context).access().enabledNames())
+    ProposalCheck.QueryKind.CATALOG -> InstinctProtocolCatalog.summary(InstinctRoutineGrants(context).access().enabledNames(),
+      InstinctCatalogPublisher.last(context).hash)
     ProposalCheck.QueryKind.SCHEDULED -> InstinctScheduler.describe(context)
     ProposalCheck.QueryKind.CANCEL_SCHEDULED -> when (val n = InstinctScheduler.cancelAll(context)) {
       0 -> "No había órdenes programadas."
@@ -475,6 +480,44 @@ object InstinctProposalCenter {
     }
     ProposalCheck.QueryKind.STATE -> stateAnswer(context, kind.phrase).message
     ProposalCheck.QueryKind.CANCEL_ONE -> InstinctScheduler.cancelShortAnswer(context, argument.orEmpty())
+    ProposalCheck.QueryKind.PROBE -> probe(context, "${ProposalCheck.QueryKind.PROBE.phrase} ${argument.orEmpty()}", argument.orEmpty(),
+      ProposalSource.BUZON).message
+  }
+
+  /** «probar»'s own brake (1.18.0): 20 every 10 minutes. Never the anti-loop one, never the trust ledger. */
+  val probes = AutoRunBudget({ clock() }, max = InstinctProbe.PER_PERIOD, periodMillis = InstinctProbe.PERIOD_MILLIS)
+
+  /**
+   * «#insto probar <orden>» (1.18.0): read-only. The same validator, then the same decision as the real path
+   * ([InstinctGatePreview], on a photo of the context), and what would happen NOW. Nothing runs, is saved, scheduled,
+   * notified or counted: neither the anti-loop brake nor the autonomy's ledger. [line] is the whole «probar …» order.
+   */
+  internal fun probe(context: Context, line: String, inner: String, source: ProposalSource): AckEntry {
+    val app = context.applicationContext
+    if (!probes.tryAcquire()) return AckEntry(AckKind.ERROR, line, InstinctProbe.TOO_MANY, informative = true)
+    val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
+    val check = InstinctProposalValidator.check(inner, PhoneCommandParser(), now, InstinctRoutineGrants(app).access())
+    val minute = InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock())
+    val verdict = when (check) {
+      is ProposalCheck.Invalid -> InstinctProbe.Verdict.Invalid(InstinctAck.reason(check.reason))
+      is ProposalCheck.Query -> if (check.kind == ProposalCheck.QueryKind.PROBE) InstinctProbe.Verdict.Invalid("no se puede probar una prueba")
+        else InstinctProbe.Verdict.Alone("consulta")
+      is ProposalCheck.Notice -> when {
+        source != ProposalSource.BUZON -> InstinctProbe.Verdict.Invalid(InstinctNotice.ONLY_MAILBOX)
+        InstinctAutonomySettings(app).policy().level(InstinctCategory.AVISOS) == InstinctAutonomy.NUNCA -> InstinctProbe.Verdict.Refused
+        !InstinctNotices.budget.available() -> InstinctProbe.Verdict.Invalid("ya hubo ${InstinctNotice.PER_HOUR} avisos en la última hora; no se mostraría")
+        else -> InstinctProbe.Verdict.Alone(InstinctCategory.AVISOS.label)
+      }
+      is ProposalCheck.Valid -> when {
+        refusedByPolicy(app, check.command) -> InstinctProbe.Verdict.Refused
+        check.deferred != null -> InstinctProbe.Verdict.Scheduled(check.deferred.label)
+        else -> {
+          val gate = InstinctGatePreview.preview(steps(app, check.command), isRoutine(check.command), snapshot(app, foreground = listener != null, source))
+          InstinctProbe.verdict(check.command, gate, InstinctGatePreview.needs(check.command, minute))
+        }
+      }
+    }
+    return AckEntry(AckKind.OK, line, verdict.detail, informative = true)
   }
 
   /** A deferred order: stored for later, never run now. Instinct hears «#insto-programada» or why not. */
@@ -533,8 +576,10 @@ object InstinctProposalCenter {
     val mailbox = if (!InstinctMailboxSettings(context).enabled()) null
       else if (forChat) InstinctCatalogLog.HIDDEN
       else InstinctLogSettings(context).let { InstinctCatalogLog(it.url(), it.token()) }
+    val doorbell = mailbox != null && InstinctDoorbell.active(context)
     return InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat, log,
-      InstinctAutonomySettings(context).policy(), mailbox, doorbell = mailbox != null && InstinctDoorbell.active(context))
+      InstinctAutonomySettings(context).policy(), mailbox, doorbell = doorbell,
+      doorbellDirect = doorbell && InstinctDoorbell.settings(context).withOrder())
   }
 
   /**
@@ -567,28 +612,25 @@ object InstinctProposalCenter {
   }
 
   /** Commands that open another app's screen. From the background Android only allows that while Insto is exempt. */
-  internal fun opensActivity(command: PhoneCommand): Boolean = when (command) {
-    is PhoneCommand.Volume, is PhoneCommand.Torch, is PhoneCommand.Media, is PhoneCommand.TemporaryMode,
-    is PhoneCommand.Platform -> false
-    else -> true
-  }
+  internal fun opensActivity(command: PhoneCommand): Boolean = InstinctGatePreview.opensActivity(command)
 
   /**
    * Whether [command] runs now, waits for Confirmar or is refused. The blockers that already existed are decided
    * first and the autonomy policy after ([InstinctAutonomyGate.combine]): the policy can only make an order stricter.
    * [foreground] is true inside the open panel, where opening another app is allowed. The anti-loop budget is
-   * acquired only for an order that runs; a routine counts as one execution.
+   * acquired only for an order that runs; a routine counts as one execution. The decision itself is
+   * [InstinctGatePreview.decide] on a photo of the context (1.18.0), the same one «probar» uses.
    */
   fun gate(context: Context, command: PhoneCommand, foreground: Boolean,
-    source: ProposalSource = ProposalSource.WHATSAPP): InstinctAutonomyGate.Gate {
-    // A routine is checked as a whole before its first step: one step that cannot run leaves all of it for Confirmar.
-    val steps = steps(context, command)
-    val structural = if (steps == null) "La rutina ya no está habilitada para Instinct o cambió."
-      else steps.firstNotNullOfOrNull { blocker(context, it, foreground) }
-    // Unsigned orders from WhatsApp may be capped at Confirmar; that cap only ever hardens the policy.
-    val policy = InstinctSourceCap.apply(policy(context, command, steps), source, InstinctMailboxSettings(context).whatsappCap())
-    return InstinctAutonomyGate.combine(structural, policy) { budget.tryAcquire() }
-  }
+    source: ProposalSource = ProposalSource.WHATSAPP): InstinctAutonomyGate.Gate =
+    InstinctGatePreview.decide(steps(context, command), isRoutine(command), snapshot(context, foreground, source)) { budget.tryAcquire() }
+
+  /** The photo the gate decides on: read once, no effects. */
+  internal fun snapshot(context: Context, foreground: Boolean, source: ProposalSource = ProposalSource.WHATSAPP): GateSnapshot =
+    GateSnapshot(locked = !foreground && keyguardLocked(context), accessibility = accessibilityConnected(), foreground = foreground,
+      budgetAvailable = budget.available(), policy = InstinctAutonomySettings(context).policy(),
+      minuteOfDay = InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock()), source = source,
+      whatsappCap = InstinctMailboxSettings(context).whatsappCap())
 
   /** The autonomy decision for [command] now, at the hour it runs (a deferred order: when it fires). */
   internal fun policy(context: Context, command: PhoneCommand, steps: List<PhoneCommand>? = steps(context, command)): AutonomyDecision =
@@ -600,12 +642,8 @@ object InstinctProposalCenter {
     InstinctAutonomySettings(context).policy().refuses(steps(context, command) ?: emptyList(), isRoutine(command))
 
   /** The checks that existed before the autonomy policy, for one command, without the budget. */
-  internal fun blocker(context: Context, command: PhoneCommand, foreground: Boolean): String? = when {
-    !foreground && keyguardLocked(context) -> "El teléfono estaba bloqueado."
-    !foreground && opensActivity(command) && !accessibilityConnected() ->
-      "Para abrir otra app sin tocar nada, Android necesita el servicio de Accesibilidad de Insto activo."
-    else -> null
-  }
+  internal fun blocker(context: Context, command: PhoneCommand, foreground: Boolean): String? =
+    InstinctGatePreview.blocker(command, snapshot(context, foreground))
 
   /** The panel is closed: runs the proposal now, or leaves it for Confirmar when it cannot or should not. */
   internal fun runInBackground(context: Context, proposal: ProposalBook.Proposal) {

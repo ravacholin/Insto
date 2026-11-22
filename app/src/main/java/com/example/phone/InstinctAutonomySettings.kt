@@ -39,16 +39,18 @@ class InstinctAutonomySettings(context: Context) {
     if (level == InstinctAutonomy.SOLO && before.level(category) != InstinctAutonomy.SOLO) InstinctTrust.reset(app, category)
     // «Nunca» cancels whole every recurrence it now refuses (1.17.0).
     if (level == InstinctAutonomy.NUNCA) runCatching { InstinctScheduler.cancelRefused(app) }
+    InstinctCatalogPublisher.changed(app)
   }
 
   fun setAll(level: InstinctAutonomy) = InstinctCategory.entries.forEach { set(it, level) }
 
-  fun setQuiet(value: QuietHours?) = synchronized(LOCK) { write(policy().copy(quiet = value)) }
-  fun setSilenceInQuiet(value: Boolean) = synchronized(LOCK) { write(policy().copy(silenceInQuiet = value)) }
+  fun setQuiet(value: QuietHours?) { synchronized(LOCK) { write(policy().copy(quiet = value)) }; InstinctCatalogPublisher.changed(app) }
+  fun setSilenceInQuiet(value: Boolean) { synchronized(LOCK) { write(policy().copy(silenceInQuiet = value)) }; InstinctCatalogPublisher.changed(app) }
 
   /** The ledger lowered [category]: Confirmar, marked «Ajustada automáticamente». */
-  internal fun lower(category: InstinctCategory, at: Long) = synchronized(LOCK) {
-    write(policy().with(category, InstinctAutonomy.CONFIRMAR, adjustedAt = at))
+  internal fun lower(category: InstinctCategory, at: Long) {
+    synchronized(LOCK) { write(policy().with(category, InstinctAutonomy.CONFIRMAR, adjustedAt = at)) }
+    InstinctCatalogPublisher.changed(app)
   }
 
   companion object {

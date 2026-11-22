@@ -1,4 +1,4 @@
-# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.17.0)
+# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.18.0)
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
@@ -8,7 +8,9 @@ Desde 1.15.0, los acuses pueden ir a una **bitácora** en Google Sheets en lugar
 
 Desde 1.16.0, qué hace Instinct solo se elige **por tipo de acción** ([Autonomía por acción](#autonomía-por-acción-1160)), con horas de silencio y un ajuste automático cuando deshacés mucho. Con la bitácora configurada, Insto además publica el **estado del teléfono** para que Instinct decida con contexto ([Estado del teléfono](#estado-del-teléfono-1160)), y las órdenes pueden llegar también por un **buzón firmado** en la misma planilla, sin escribir en el chat ([Buzón firmado](#buzón-firmado-1160)).
 
-Desde 1.17.0, un **timbre** push con ntfy hace que una orden del buzón se tome en segundos ([Timbre](#timbre-1170)), y las órdenes pueden quedar **armadas** para que el teléfono las dispare solo: al terminar o empezar un evento, al conectar o desconectar auriculares, al desbloquear ([Disparadores por estado](#disparadores-por-estado-1170)) o todos los días, los días hábiles o los fines de semana hasta una fecha ([Órdenes recurrentes](#órdenes-recurrentes-1170)). Protocolo Insto v5.
+Desde 1.17.0, un **timbre** push con ntfy hace que una orden del buzón se tome en segundos ([Timbre](#timbre-1170)), y las órdenes pueden quedar **armadas** para que el teléfono las dispare solo: al terminar o empezar un evento, al conectar o desconectar auriculares, al desbloquear ([Disparadores por estado](#disparadores-por-estado-1170)) o todos los días, los días hábiles o los fines de semana hasta una fecha ([Órdenes recurrentes](#órdenes-recurrentes-1170)).
+
+Desde 1.18.0, la orden firmada puede viajar **dentro del timbre** y ejecutarse apenas llega, sin leer la planilla ([Orden directa en el timbre](#orden-directa-en-el-timbre-1180)); Insto publica en la planilla un **catálogo vivo** con las reglas vigentes, para que Instinct no dependa de una copia pegada ([Catálogo vivo](#catálogo-vivo-1180)), e Instinct puede **probar** una orden antes de mandarla ([Probar una orden](#probar-una-orden-1180)). Protocolo Insto v6.
 
 La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. En **Autonomía** elegís, por categoría, si Instinct lo hace solo, espera tu confirmación o nunca. Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
 
@@ -170,11 +172,11 @@ Instinct puede pedir `#insto ejecutar la rutina <nombre>` para correr una rutina
 
 ## Catálogo para Instinct (1.14.0)
 
-El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses (o, con la bitácora, cómo leerla) y la versión del protocolo («Protocolo Insto v5» desde 1.17.0; v4 en 1.16.0).
+El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses (o, con la bitácora, cómo leerla) y la versión del protocolo («Protocolo Insto v6» desde 1.18.0; v5 en 1.17.0, v4 en 1.16.0).
 
 - **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** lo copia al portapapeles. Si las respuestas están activas y hay una acción «Responder» vigente (de un mensaje de Instinct de los últimos 10 minutos), aparece **«Enviarlas a Instinct»**: lo manda por ese chat.
 - La copia que viaja por WhatsApp marca cada ejemplo con «› » delante y lo explica, porque Insto lee ese chat y nunca debe tomar su propio mensaje por órdenes. Igual que un acuse, se comprueba que no tenga ninguna línea que empiece con «#insto ».
-- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v5 · rutinas habilitadas: Estudio.` (no el catálogo entero).
+- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v6 · rutinas habilitadas: Estudio.` (no el catálogo entero). Desde 1.18.0, si hay un [catálogo vivo](#catálogo-vivo-1180) publicado, agrega `Catálogo publicado: hash <hash>.`
 - Copias de referencia, generadas sin rutinas: [`instinct-catalog.txt`](instinct-catalog.txt) (canal WhatsApp) y [`instinct-catalog-bitacora.txt`](instinct-catalog-bitacora.txt) (con bitácora, la copia que viaja por WhatsApp, sin URL ni token). Un test compara las dos con lo que genera el código; para regenerarla, corré `INSTO_WRITE_CATALOG=1 python3 scripts/test-phone-core.py com.example.phone.InstinctRoutinesTest`.
 
 ## Órdenes diferidas (1.14.0)
@@ -257,7 +259,7 @@ Cada acuse es un evento JSON:
 
 ```json
 {"id": "6f1c…", "at": "2026-11-21T09:30:12-03:00", "kind": "ok", "order": "poner el volumen al 30 por ciento",
- "detail": "Volumen multimedia ajustado.", "message": "3fa94c0b12de", "protocol": "Protocolo Insto v5"}
+ "detail": "Volumen multimedia ajustado.", "message": "3fa94c0b12de", "protocol": "Protocolo Insto v6"}
 ```
 
 - `id`: UUID aleatorio generado al crear el evento. El script descarta los ids repetidos y los confirma igual: un reintento nunca duplica una fila.
@@ -266,7 +268,7 @@ Cada acuse es un evento JSON:
 - `order`: la orden original recortada a 80 caracteres, como en el chat.
 - `detail`: el mismo texto de resultado del acuse en el chat (`InstinctAck`), con los mismos recortes y el mismo aplanado de saltos de línea y caracteres de control.
 - `message`: los primeros 12 dígitos hexadecimales del SHA-256 que ya usa el dedupe (clave de la notificación más texto). Identifica el mensaje de Instinct que originó la orden; **nunca es el texto**.
-- `protocol`: «Protocolo Insto v5» (v4 en 1.16.0, v3 hasta 1.15.0).
+- `protocol`: «Protocolo Insto v6» (v5 en 1.17.0, v4 en 1.16.0, v3 hasta 1.15.0).
 
 **Guardia anti-bucle:** ningún campo puede empezar con «#insto » ni tener una línea que el lector de órdenes tome por una orden. Un evento que no pase la guardia no se crea y la bandeja tampoco lo acepta. Las respuestas a consultas (`ver catálogo`, `ver programadas`, `cancelar programadas`) también son eventos (`kind=ok`).
 
@@ -284,7 +286,7 @@ Con la acción «Responder», los seguimientos solo salen durante 10 minutos. Co
 
 ### Para Instinct
 
-Con Bitácora o Ambos, el catálogo («Protocolo Insto v5») reemplaza la explicación de los prefijos por cómo leer la bitácora:
+Con Bitácora o Ambos, el catálogo («Protocolo Insto v6») reemplaza la explicación de los prefijos por cómo leer la bitácora:
 
 ```text
 GET <URL>?token=<token>&since=<ISO>&limit=50
@@ -346,7 +348,7 @@ El último estado publicado se guarda, con su hora, en `instinct-state-last.json
 
 ### Para Instinct
 
-Con la bitácora, el catálogo («Protocolo Insto v5») suma la sección «Estado del teléfono»: qué campos hay, cómo leerlos (`action=estado`) y la regla **«antes de una orden que dependa del estado (silencio, No molestar, alarmas, calendario), mirá el último estado; si tiene más de 30 minutos, pedí la consulta «ver estado» y esperá»**. Con el canal en WhatsApp esa sección no aparece, porque Instinct no tiene cómo leer la bitácora.
+Con la bitácora, el catálogo («Protocolo Insto v6») suma la sección «Estado del teléfono»: qué campos hay, cómo leerlos (`action=estado`) y la regla **«antes de una orden que dependa del estado (silencio, No molestar, alarmas, calendario), mirá el último estado; si tiene más de 30 minutos, pedí la consulta «ver estado» y esperá»**. Con el canal en WhatsApp esa sección no aparece, porque Instinct no tiene cómo leer la bitácora.
 
 ## Buzón firmado (1.16.0)
 
@@ -446,7 +448,7 @@ Si Insto sondea mientras tanto, va a tomar esa orden de prueba y contarla como �
 
 ## Timbre (1.17.0)
 
-Con el buzón, una orden tarda lo que tarde el próximo sondeo: de 5 a 15 minutos, o más con Doze. El **timbre** es un push que solo dice «hay algo en el buzón». **No lleva órdenes:** cuando suena, Insto lee la planilla y verifica la firma exactamente como en cualquier sondeo, así que el modelo de seguridad del buzón no cambia. Quien toca el timbre es tu Apps Script, al anotar una orden nueva; Instinct no tiene que hacer nada distinto.
+Con el buzón, una orden tarda lo que tarde el próximo sondeo: de 5 a 15 minutos, o más con Doze. El **timbre** es un push que solo dice «hay algo en el buzón». **No lleva órdenes** (salvo que actives la [orden directa](#orden-directa-en-el-timbre-1180), 1.18.0): cuando suena, Insto lee la planilla y verifica la firma exactamente como en cualquier sondeo, así que el modelo de seguridad del buzón no cambia. Quien toca el timbre es tu Apps Script, al anotar una orden nueva; Instinct no tiene que hacer nada distinto.
 
 ### Transporte: UnifiedPush con ntfy
 
@@ -509,7 +511,7 @@ Al tocar el timbre a mano, el diagnóstico suma un timbre y un sondeo; la orden 
 - **Depende de que ntfy esté vivo.** Si el sistema mata a ntfy o le restringe la batería, el timbre no llega y queda el sondeo de respaldo. Si ntfy deja de suscribirse, el intervalo vuelve solo al que elegiste a las 24 horas sin timbres.
 - El timbre solo acelera: nunca saltea la firma, la lista blanca, la autonomía ni el freno. Una orden que llega por el timbre es idéntica a una del sondeo.
 - El script toca el timbre como mucho una vez cada 5 segundos; varias órdenes seguidas igual se leen todas en el mismo sondeo.
-- ntfy reenvía el texto `insto-timbre` sin cifrar; como Insto no lo lee, no importa qué diga.
+- ntfy reenvía el texto `insto-timbre` sin cifrar; como no lleva nada, no importa qué diga. Con la [orden directa](#orden-directa-en-el-timbre-1180) encendida, ntfy ve las líneas de la orden (no puede cambiarlas: la firma lo impide).
 
 ## Disparadores por estado (1.17.0)
 
@@ -560,15 +562,96 @@ Hasta 1.16.0, para «cuando termine la clase, sacá el No molestar», Instinct t
 
 ### Para Instinct
 
-El catálogo («Protocolo Insto v5») suma las formas nuevas, con un ejemplo de cada una (validados por un test), los límites y la regla **«Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después»**. La firma del buzón no cambia: la cadena canónica sigue empezando con `insto-v4`.
+El catálogo (desde «Protocolo Insto v5») suma las formas nuevas, con un ejemplo de cada una (validados por un test), los límites y la regla **«Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después»**. La firma del buzón no cambia: la cadena canónica sigue empezando con `insto-v4`.
+
+## Orden directa en el timbre (1.18.0)
+
+Con el timbre, una orden del buzón se toma en segundos, pero Insto igual tiene que leer la planilla (un pedido a Apps Script, que a veces tarda varios segundos). Con **«Incluir la orden en el timbre»**, el push lleva la orden firmada y Insto la ejecuta apenas llega. **El modelo de seguridad no cambia:** la firma HMAC sigue siendo lo único que autoriza una orden, y la orden del timbre pasa exactamente por los mismos controles que una sondeada.
+
+### Apps Script
+
+- Propiedad del script `insto_timbre_con_orden` (`"1"`/`"0"`), que Insto cambia con `POST {token, action:"timbre", endpoint, conOrden:true|false}`. Si `conOrden` falta (Insto 1.17.0), se conserva el valor guardado. Cuando viene, el script la repite en la respuesta (`{ok, timbre:"guardado", conOrden:true}`): así Insto sabe que el script la entendió.
+- Al anotar una orden **nueva** con la opción encendida, el cuerpo del timbre es la orden en JSON compacto, tal cual llegó:
+
+  ```json
+  {"v":1,"id":"3b241101-e2bb-4255-8caf-4136c566a962","at":"2026-11-21T09:30:00-03:00","lines":["#insto poner el volumen al 30 por ciento"],"sig":"0118c3…"}
+  ```
+
+  Si ocupa más de **3500 bytes** en UTF-8 (ntfy convierte los mensajes grandes en adjuntos), tiene más de 3 líneas o una línea de más de 300 caracteres, o con la opción apagada, el cuerpo sigue siendo `insto-timbre`. Se mantienen el espaciado de 5 segundos y `muteHttpExceptions`. Una orden repetida no toca el timbre. Si el timbre se saltea por el espaciado, no pasa nada: queda el sondeo.
+- El timbre nunca lleva el token ni la clave.
+
+### En Insto
+
+- `InstinctDoorbellPayload.parse` (lógica pura) lee el `bytesMessage` de UnifiedPush con un parser **estricto**: JSON con exactamente las claves `v`, `id`, `at`, `lines` y `sig`; `v == 1`; `id` UUID; `at` ISO-8601 con zona; de 1 a 3 líneas de como mucho 300 caracteres; `sig` de 64 dígitos hexadecimales en minúsculas; nada después del objeto. Cualquier otra cosa (incluido `insto-timbre`) no es una orden y el timbre sondea como en 1.17.0. **El payload nunca se loguea** ni se guarda.
+- La orden se verifica con **la misma ruta que el sondeo**: `InstinctMailboxSignature.verify` (firma, 15 minutos hacia atrás y 2 hacia adelante, id visto). Para que una orden que el sondeo lee al mismo tiempo no se ejecute dos veces, `InstinctMailboxSeen.claim(id)` comprueba y marca en disco en la misma sección sincronizada; hay una sola instancia compartida (y un lock por archivo) y el sondeo también toma sus órdenes con `claimAll`. Gana uno solo.
+- Si es válida y el `claim` gana, entra por `InstinctProposalIntake.onMailbox`, exactamente como una orden sondeada: fuente BUZON, freno, autonomía, acuses a la bitácora.
+- Después, un sondeo a los **~60 segundos** (un job propio, que respeta `InstinctMailboxGate`) la marca como `tomada` en la planilla y levanta otras pendientes.
+- Una firma inválida o una orden fuera de tiempo **no se ejecuta ni se responde**: suma al diagnóstico y se sondea enseguida, como un timbre común.
+
+### Ajustes, diagnóstico y catálogo
+
+- **Ajustes → Propuestas de Instinct → Buzón → Timbre → «Incluir la orden en el timbre»**, apagado por defecto: «Más rápido. ntfy puede ver las líneas de la orden, pero no cambiarlas: la firma lo impide. Con tu propio servidor ntfy no las ve nadie más». Al cambiarlo se le avisa al script con `conOrden`, por el mismo camino y con los mismos reintentos que el endpoint. Si el script es anterior a 1.18.0, Ajustes lo dice y el timbre sigue sin la orden.
+- **Diagnóstico:** «Timbre: … · órdenes directas N · payload inválido N». `insto-timbre` no cuenta como inválido.
+- **Catálogo:** con la opción encendida, aclara que para Instinct no cambia nada: publica la orden en el buzón igual que siempre.
+
+## Catálogo vivo (1.18.0)
+
+Hasta 1.17.0, Instinct conocía las reglas por el texto que Pablo copiaba y pegaba en su prompt; si cambiaba la autonomía o una rutina, había que volver a copiarlo. Ahora Insto **publica las reglas vigentes en la planilla** y Instinct las lee de ahí.
+
+### El catálogo en JSON
+
+`InstinctProtocolCatalog.json(...)` (lógica pura) arma el catálogo a partir de **las mismas fuentes** que el texto: la lista blanca y sus ejemplos (`InstinctProposalValidator`, agrupados en acciones, diferidas, clima, disparadores y recurrentes), las consultas, los límites, las rutinas habilitadas (solo los nombres), la política de autonomía por categoría, las horas de silencio, los bloqueos fijos, lo prohibido, los canales activos (WhatsApp, bitácora, buzón, timbre, orden en el timbre, acuses) y las versiones de Insto y del protocolo. Los ejemplos van **sin** el prefijo `#insto ` (campo `orden`).
+
+- Lleva su `hash`: el SHA-256 de la **forma canónica** (claves ordenadas, sin espacios, sin `hash` ni `publicado`).
+- **Nunca** incluye la URL, el token, la clave ni el endpoint: la función ni los recibe, y un test lo comprueba. Otro test valida cada ejemplo con el parser.
+- Copia de referencia, con la política por defecto, sin rutinas y con los canales apagados: [`instinct-catalog.json`](instinct-catalog.json).
+
+### Apps Script
+
+| Pedido | Qué hace |
+| --- | --- |
+| `POST {token, action:"catalogo", hash, json}` | Reemplaza la única fila de la hoja **`Catálogo`** (`publicado, hash, json`, en texto plano), con `LockService`. Si el hash es el mismo, responde `{ok, catalogo:"igual"}` sin escribir; si no, `{ok, catalogo:"guardado"}`. Un `json` de más de 45 000 caracteres (o un hash que no es SHA-256) → `{ok:false, error:"catalogo"}`. |
+| `GET ?token=…&action=catalogo` | `{ok, catalogo:{publicado, hash, json}}`, o `{ok, catalogo:null}` si todavía no hay. |
+
+### Publicación
+
+- Con la bitácora configurada y «Recibir órdenes de Instinct» encendido, se publica **cuando cambia el hash** respecto del último publicado (`instinct-catalog-last.json` en `noBackupFilesDir`): al cambiar la autonomía, las horas de silencio, un permiso de rutina, el buzón, el timbre, la orden en el timbre, los acuses o la bitácora; en el primer arranque después de una actualización (`MY_PACKAGE_REPLACED` y al iniciar el proceso: el hash lleva la versión de Insto) y en `BOOT_COMPLETED`.
+- Va por el transporte de `InstinctLogClient`, con un job propio de `JobScheduler` (restricción de red y *backoff* exponencial, como la bandeja). Sin red o con un error HTTP, reintenta; un token rechazado o un script viejo esperan a que lo corrijas. **Un fallo nunca bloquea nada.**
+- **Ajustes:** «Catálogo para Instinct: publicado HH:MM · ••••<6 del hash>» y el botón **«Publicar catálogo ahora»**.
+
+### Para Instinct
+
+El catálogo de texto (v6), con la bitácora, suma: **«Las reglas vigentes están en GET <URL>?token=<token>&action=catalogo. Leelo al empezar y cada vez que una orden dé un error inesperado; si el hash cambió, las reglas de ahí mandan sobre este texto»**. La copia que viaja por WhatsApp no lleva la URL ni el token. `#insto ver catálogo` responde además con el hash publicado.
+
+## Probar una orden (1.18.0)
+
+`#insto probar <orden>` es una consulta de **solo lectura**, por WhatsApp y por el buzón: valida `<orden>` (también con envoltorio diferido, disparador, recurrente o clima) con **el mismo validador** y dice qué pasaría **ahora**, sin ejecutar, sin guardar, sin programar, sin avisarle a Pablo y sin consumir el freno.
+
+- La decisión de `InstinctProposalCenter.gate` salió a una función pura sin efectos, `InstinctGatePreview`, que recibe una foto del contexto (`GateSnapshot`: bloqueado, Accesibilidad, panel abierto, lugar en el freno, política, horas de silencio, hora actual, fuente y tope de WhatsApp). **El camino real la usa** con `tryAcquire` del freno y la prueba con un vistazo que no consume nada, así que la prueba y la ejecución nunca difieren. La política sigue pudiendo solo endurecer.
+- Si la acción necesitaría algo de Pablo y eso se sabe sin ejecutarla, lo dice: un modo temporal siempre espera confirmación; una alarma para una hora que ya pasó hoy pide confirmar que es para mañana. Elegir entre varias apps o un permiso solo aparecen al ejecutar.
+- **Acuse** `kind=ok`, `orden = "probar <orden>"`, con `detail` de forma fija:
+
+  ```text
+  válida · <categoría> · la haría sola
+  válida · <categoría> · esperaría confirmación: <motivo>
+  válida · programada: <cuándo, en palabras>
+  no válida: <el mismo motivo que daría #insto-error>
+  rechazada: la persona no permite esta acción
+  ```
+
+  Pasa por la guardia anti-bucle de siempre.
+- **Freno propio:** 20 pruebas cada 10 minutos; la que sobra responde `#insto-error probar … → demasiadas pruebas seguidas`. No cuenta en el ajuste adaptativo de la autonomía.
+- **Catálogo** (texto y JSON): la consulta y la regla **«Si no estás seguro de una forma o de si va a quedar esperando, probala antes con "probar <orden>"»**.
 
 ## Qué tiene que hacer Instinct
 
-1. **Antes de una orden que dependa del estado** (silencio, No molestar, alarmas, calendario): leer `GET <URL>?token=<token>&action=estado`. Si el estado tiene más de 30 minutos, pedir `#insto ver estado` y esperar el evento nuevo.
-2. **Mandar la orden** por WhatsApp (`#insto …`) o, mejor, por el buzón firmado, que no ensucia el chat y prueba quién la manda.
-3. **Mirar el resultado** en la bitácora (`GET <URL>?token=<token>&since=<ISO>&limit=50`): `ok`, `espera`, `error`, `incierto`, `programada`… Nunca repetir después de `incierto` ni de `espera`; una sola orden corregida después de un `error`.
-4. **Respetar la autonomía**: lo que el catálogo dice que espera confirmación va a esperar. No insistir.
-5. Para hablarle a la persona sin escribir en WhatsApp: `#insto avisarme <texto>`, solo por el buzón, como máximo 3 por hora.
+1. **Al empezar** (y cada vez que una orden dé un error inesperado), leer las reglas vigentes: `GET <URL>?token=<token>&action=catalogo` (1.18.0). Si el `hash` cambió, mandan sobre el texto pegado en el prompt.
+2. **Antes de una orden que dependa del estado** (silencio, No molestar, alarmas, calendario): leer `GET <URL>?token=<token>&action=estado`. Si el estado tiene más de 30 minutos, pedir `#insto ver estado` y esperar el evento nuevo.
+3. **Si no está seguro de una forma** o de si va a quedar esperando, probarla antes: `#insto probar <orden>` (1.18.0).
+4. **Mandar la orden** por WhatsApp (`#insto …`) o, mejor, por el buzón firmado, que no ensucia el chat y prueba quién la manda.
+5. **Mirar el resultado** en la bitácora (`GET <URL>?token=<token>&since=<ISO>&limit=50`): `ok`, `espera`, `error`, `incierto`, `programada`… Nunca repetir después de `incierto` ni de `espera`; una sola orden corregida después de un `error`.
+6. **Respetar la autonomía**: lo que el catálogo dice que espera confirmación va a esperar. No insistir.
+7. Para hablarle a la persona sin escribir en WhatsApp: `#insto avisarme <texto>`, solo por el buzón, como máximo 3 por hora.
 
 Ejemplo de orden firmada, en Python (solo biblioteca estándar; `urllib` sigue la redirección 302 de Google con `GET`):
 
@@ -613,6 +696,9 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 - **Bitácora (1.15.0, apagada por defecto):** con «Bitácora» o «Ambos», ahora sí sale algo del teléfono, solo hacia el Apps Script que vos configuraste: la orden recortada a 80 caracteres, el texto de resultado que Insto ya te muestra, el tipo de acuse, la hora y un hash corto del mensaje (12 dígitos hexadecimales). **Nunca** el texto del mensaje de Instinct ni datos del teléfono (contactos, número, ubicación, notificaciones). La URL, el token y la bandeja de salida viven en `noBackupFilesDir`: nunca entran en copias de seguridad. La bitácora queda en tu planilla de Google, con los permisos que le des.
 - **Estado del teléfono (1.16.0):** con la bitácora configurada, sale hacia tu Apps Script un resumen con campos fijos (modo de sonido, No molestar, hora de la próxima alarma, título y horario del evento en curso y del próximo, si hay auriculares o Bluetooth, si está bloqueado, el modo temporal y las programadas). Nunca volumen, batería, red, ubicación, contactos, notificaciones, uso de apps ni identificadores.
 - **Buzón (1.16.0, apagado por defecto):** Insto lee de tu Apps Script las órdenes firmadas y las marca como tomadas. La clave vive solo en `noBackupFilesDir` y en Instinct; nunca en la planilla, en el diagnóstico ni en WhatsApp. Los contadores de autonomía (`instinct-trust.json`) y los ids vistos del buzón son solo contadores e identificadores, sin texto.
+- **Orden directa en el timbre (1.18.0, apagada por defecto):** con la opción encendida, el push que reenvía ntfy lleva el id, la hora, las líneas `#insto` y la firma de cada orden nueva. ntfy (el servidor público `ntfy.sh` o el tuyo) **puede ver esas líneas, pero no cambiarlas ni inventar otras**: sin la clave no hay firma válida. Nunca viajan el token, la clave ni otra cosa del teléfono. Con tu propio servidor ntfy no las ve nadie más. El payload nunca se loguea ni se guarda.
+- **Catálogo vivo (1.18.0):** sale hacia tu Apps Script lo mismo que ya decía el catálogo de texto: las formas, los límites, los nombres de las rutinas habilitadas, la autonomía, las horas de silencio y qué canales están encendidos (sí/no). Nunca URL, token, clave ni endpoint.
+- `#insto probar` (1.18.0) no hace nada en el teléfono ni guarda nada: solo responde por el acuse.
 - Fuera de la bitácora, la única red en uso es la del clima que ya existía (SMN y Open-Meteo), y solo cuando se dispara una orden con condición.
 
 ## Lo que no hacen las órdenes
@@ -658,9 +744,12 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 11. Timbre (1.17.0): instalá ntfy, actualizá el Apps Script, encendé **«Timbre instantáneo (ntfy)»** y tocá **«Probar timbre»**: dice «El timbre llegó en N s». Publicá una orden firmada con el ejemplo de Python: se ejecuta en segundos, sin abrir Insto. El diagnóstico suma «Timbre: último HH:MM · timbres 1 · sondeos por timbre 1».
 12. Disparadores (1.17.0): que Instinct mande `#insto al conectar auriculares: poner el volumen al 30 por ciento` y conectá unos auriculares: el volumen cambia una sola vez (desconectá y volvé a conectar: no pasa nada). Con un evento en curso en el calendario, `#insto al terminar el evento: desactivar no molestar`; cambiale la hora de fin en el calendario y mirá que, al llegar la hora vieja, se reprograma. Probá `#insto al desbloquear hasta las HH:MM: mostrar las alarmas` con una hora cercana y no desbloquees: llega «Venció sin dispararse».
 13. Recurrentes (1.17.0): `#insto todos los días a las HH:MM hasta el DD/MM: poner el volumen al 30 por ciento` con la hora de dentro de unos minutos; `#insto ver programadas` muestra su id y «próxima hoy». Se ejecuta y queda programada la del día siguiente. `#insto cancelar programada <id>` la cancela entera. Sin «hasta el», se rechaza.
+14. Orden directa (1.18.0): actualizá el Apps Script, encendé **«Incluir la orden en el timbre»** (la línea dice «El script lo confirmó») y publicá una orden firmada: se ejecuta sin que el diagnóstico sume un sondeo inmediato; suma «órdenes directas 1» y, unos 60 segundos después, la fila del buzón queda `tomada`. Cambiá una letra de la firma: no pasa nada, no hay acuse y suma «payload inválido 1».
+15. Catálogo vivo (1.18.0): con la bitácora, tocá **«Publicar catálogo ahora»**: la hoja `Catálogo` tiene una fila y `curl -sL "$URL?token=$TOKEN&action=catalogo"` la devuelve. Cambiá la autonomía de una categoría: al rato la línea muestra otro hash. `#insto ver catálogo` responde con ese hash.
+16. Probar (1.18.0): `#insto probar poner el volumen al 30 por ciento` responde `válida · volumen · la haría sola` sin cambiar el volumen. Con «Volumen» en Confirmar, `… esperaría confirmación: la persona pide confirmación para volumen`; en Nunca, `rechazada: …`. `#insto probar a las 22:00: apagar la linterna` responde `válida · programada: a las 22:00` y `ver programadas` sigue vacío.
 
 ## Instrucciones para pegar en el prompt de Instinct
 
 El bloque se genera desde el código y se obtiene en **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** (o «Enviarlas a Instinct»). Así nunca se desincroniza de la gramática ni de tus rutinas habilitadas. Copialo de nuevo cada vez que habilites o deshabilites una rutina, o cuando Insto se actualice.
 
-La copia de referencia, sin rutinas, está en [`instinct-catalog.txt`](instinct-catalog.txt). Con la bitácora, la copia de referencia es [`instinct-catalog-bitacora.txt`](instinct-catalog-bitacora.txt), y con la bitácora y el buzón, [`instinct-catalog-buzon.txt`](instinct-catalog-buzon.txt) (las tres sin URL, token ni clave, y con la autonomía por defecto). Incluye las formas diferidas y condicionales, los prefijos de los acuses (`#insto-ok`, `#insto-espera`, `#insto-error`, `#insto-incierto`, `#insto-programada`, y `#insto-descartada`, `#insto-vencida` y `#insto-deshecho` como seguimiento) y la regla para Instinct: **esas líneas son informativas; no se responden con nuevas órdenes, salvo una sola orden corregida después de un `#insto-error`, y nunca se repite una orden después de `#insto-incierto` o `#insto-espera`.**
+La copia de referencia, sin rutinas, está en [`instinct-catalog.txt`](instinct-catalog.txt). Con la bitácora, la copia de referencia es [`instinct-catalog-bitacora.txt`](instinct-catalog-bitacora.txt), y con la bitácora y el buzón, [`instinct-catalog-buzon.txt`](instinct-catalog-buzon.txt) (las tres sin URL, token ni clave, y con la autonomía por defecto). Desde 1.18.0, con la bitácora, Instinct además lee el [catálogo vivo](#catálogo-vivo-1180), que se actualiza solo; su copia de referencia en JSON es [`instinct-catalog.json`](instinct-catalog.json). Incluye las formas diferidas y condicionales, los prefijos de los acuses (`#insto-ok`, `#insto-espera`, `#insto-error`, `#insto-incierto`, `#insto-programada`, y `#insto-descartada`, `#insto-vencida` y `#insto-deshecho` como seguimiento) y la regla para Instinct: **esas líneas son informativas; no se responden con nuevas órdenes, salvo una sola orden corregida después de un `#insto-error`, y nunca se repite una orden después de `#insto-incierto` o `#insto-espera`.**

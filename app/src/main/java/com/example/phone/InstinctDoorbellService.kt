@@ -32,11 +32,16 @@ class InstinctDoorbellSettings(context: Context) {
   private val app = context.applicationContext
   private val enabledFile = File(app.noBackupFilesDir, "instinct-doorbell-enabled")
   private val chosenFile = File(app.noBackupFilesDir, "instinct-doorbell-distributor")
+  private val withOrderFile = File(app.noBackupFilesDir, "instinct-doorbell-with-order")
   private val endpointFile = File(app.noBackupFilesDir, ENDPOINT_FILE)
   private val stateFile = File(app.noBackupFilesDir, STATE_FILE)
 
   fun enabled(): Boolean = runCatching { enabledFile.readText() == "true" }.getOrDefault(false)
   internal fun writeEnabled(value: Boolean) { if (value) enabledFile.writeText("true") else enabledFile.delete() }
+
+  /** «Incluir la orden en el timbre» (1.18.0): off by default. */
+  fun withOrder(): Boolean = runCatching { withOrderFile.readText() == "true" }.getOrDefault(false)
+  internal fun writeWithOrder(value: Boolean) { if (value) withOrderFile.writeText("true") else withOrderFile.delete() }
 
   /** The distributor chosen in Settings when there are several; null lets a single one be used. */
   fun chosen(): String? = runCatching { chosenFile.readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
@@ -67,10 +72,13 @@ class InstinctDoorbellSettings(context: Context) {
 object InstinctDoorbell {
   private const val INFORM_JOB_ID = 7_319
   private const val RING_JOB_ID = 7_318
+  private const val FOLLOW_UP_JOB_ID = 7_320
   private const val BACKOFF_MILLIS = 30_000L
   internal const val EXTRA_KIND = "kind"
   internal const val KIND_INFORM = "inform"
   internal const val KIND_RING = "ring"
+  /** The poll ~60 seconds after an order that came inside the doorbell (1.18.0). */
+  internal const val KIND_FOLLOW_UP = "follow-up"
 
   internal var clock: () -> Long = { InstinctScheduler.wallClock() }
   /** The installed distributors; tests replace it. */
@@ -111,6 +119,21 @@ object InstinctDoorbell {
     val s = settings(app)
     if (value) { s.writeEnabled(true); register(app) }
     else { unregister(app); s.writeEnabled(false); InstinctMailbox.rearm(app) }
+    InstinctCatalogPublisher.changed(app)
+  }
+
+  /**
+   * «Incluir la orden en el timbre» (1.18.0). The script hears it the same way as the endpoint, with the same retries;
+   * until it confirms, the doorbell keeps ringing without the order. Off is the default.
+   */
+  fun setWithOrder(context: Context, value: Boolean) {
+    val app = context.applicationContext
+    val s = settings(app)
+    if (s.withOrder() == value) return
+    s.writeWithOrder(value)
+    s.update { it.copy(withOrderConfirmed = false) }
+    if (s.enabled() && s.endpoint() != null) inform(app)
+    InstinctCatalogPublisher.changed(app)
   }
 
   /** Several distributors installed: the one chosen in Settings. A change re-registers with it. */
@@ -171,22 +194,28 @@ object InstinctDoorbell {
     s.writeEndpoint(null)
     s.update { it.copy(token = null, confirmed = false, informedAt = null, informPending = hadEndpoint, failure = failure) }
     if (hadEndpoint) inform(context)
+    InstinctCatalogPublisher.changed(context)
   }
 
   /** An IMMUTABLE broadcast to a package that does not exist: only its creator, Insto, matters to the distributor. */
   private fun identity(context: Context): PendingIntent = PendingIntent.getBroadcast(context, 0,
     Intent(UnifiedPush.DUMMY_APP).setPackage(UnifiedPush.DUMMY_APP), PendingIntent.FLAG_IMMUTABLE)
 
-  /** A broadcast from the distributor. Content never matters: a MESSAGE only ever polls the mailbox. */
+  /**
+   * A broadcast from the distributor. A MESSAGE either polls the mailbox or, when it carries a signed order (1.18.0),
+   * hands that order to the same verification as the poll. The payload is never logged nor kept.
+   */
   fun onReceive(context: Context, intent: Intent, async: () -> BroadcastReceiver.PendingResult?) {
     val app = context.applicationContext
     val s = settings(app)
     val state = s.state()
+    val payload = if (intent.action == UnifiedPush.ACTION_MESSAGE) payload(intent) else null
     val action = InstinctDoorbellProtocol.handle(intent.action, intent.getStringExtra(UnifiedPush.EXTRA_TOKEN), state,
-      intent.getStringExtra(UnifiedPush.EXTRA_ENDPOINT), intent.getStringExtra(UnifiedPush.EXTRA_ID), intent.getStringExtra(UnifiedPush.EXTRA_REASON))
+      intent.getStringExtra(UnifiedPush.EXTRA_ENDPOINT), intent.getStringExtra(UnifiedPush.EXTRA_ID), intent.getStringExtra(UnifiedPush.EXTRA_REASON),
+      payload)
     when (action) {
       InstinctDoorbellProtocol.Action.Ignore -> Unit
-      is InstinctDoorbellProtocol.Action.Ring -> { ack(app, state, action.ackId); ring(app, async) }
+      is InstinctDoorbellProtocol.Action.Ring -> { ack(app, state, action.ackId); ring(app, async, action.inline, action.malformed) }
       is InstinctDoorbellProtocol.Action.Endpoint -> {
         ack(app, state, action.ackId)
         val changed = s.endpoint() != action.endpoint
@@ -194,6 +223,8 @@ object InstinctDoorbell {
         s.update { it.copy(confirmed = true, failure = null, informPending = true, informedAt = it.informedAt.takeUnless { changed }) }
         inform(app)
         InstinctMailbox.rearm(app)
+        // The doorbell became active: the catalog says so.
+        InstinctCatalogPublisher.changed(app)
       }
       is InstinctDoorbellProtocol.Action.BadEndpoint -> {
         ack(app, state, action.ackId)
@@ -207,6 +238,12 @@ object InstinctDoorbell {
     }
   }
 
+  /** AND_3's `bytesMessage`, or the older `message` text. Too big is no payload at all. */
+  private fun payload(intent: Intent): ByteArray? = runCatching {
+    (intent.getByteArrayExtra(UnifiedPush.EXTRA_BYTES_MESSAGE) ?: intent.getStringExtra(UnifiedPush.EXTRA_MESSAGE)?.toByteArray(Charsets.UTF_8))
+      ?.takeIf { it.size <= InstinctDoorbellPayload.MAX_BYTES }
+  }.getOrNull()
+
   private fun ack(context: Context, state: DoorbellState, id: String?) {
     val distributor = state.distributor ?: return
     if (id == null || state.token == null) return
@@ -218,25 +255,70 @@ object InstinctDoorbell {
 
   /**
    * A ring: poll now (off the main thread, at most [pollTimeoutMillis] inside the broadcast), once more after the
-   * running poll, when the 5-second window ends or when there is network. Never dropped.
+   * running poll, when the 5-second window ends or when there is network. Never dropped. With [inline], the signed
+   * order the doorbell carried (1.18.0), that order is verified and run at once instead ([direct]).
    */
-  internal fun ring(context: Context, async: () -> BroadcastReceiver.PendingResult?) {
+  internal fun ring(context: Context, async: () -> BroadcastReceiver.PendingResult?, inline: MailboxOrder? = null, malformed: Boolean = false) {
     val app = context.applicationContext
-    settings(app).update { it.copy(rings = it.rings + 1, lastRingAt = clock()) }
+    settings(app).update { it.copy(rings = it.rings + 1, lastRingAt = clock(), badPayloads = it.badPayloads + if (malformed) 1 else 0) }
     if (InstinctMailboxSettings(app).blocker() != null) return
     // The backup poll slows down to 15 minutes while rings arrive.
     InstinctMailbox.rearm(app)
+    if (inline != null) { insideBroadcast(async) { direct(app, inline) }; return }
+    pollAsTheGateSays(app) { insideBroadcast(async) { pollForRing(app) } }
+  }
+
+  /** What the gate says for a ring: [now] polls at once; otherwise once more after the running poll, later or online. */
+  private fun pollAsTheGateSays(app: Context, now: () -> Unit) {
     when (val decision = InstinctMailbox.gate.ring(online(app))) {
       InstinctMailboxGate.Ring.AfterCurrent -> countPoll(app)
       is InstinctMailboxGate.Ring.Later -> schedule(app, KIND_RING, decision.delayMillis)
       InstinctMailboxGate.Ring.WhenOnline -> schedule(app, KIND_RING, null)
-      InstinctMailboxGate.Ring.PollNow -> {
-        val pending = runCatching(async).getOrNull()
-        val task = java.util.concurrent.FutureTask { pollForRing(app) }
-        background(task)
-        try { runCatching { task.get(pollTimeoutMillis, TimeUnit.MILLISECONDS) } } finally { pending?.finish() }
+      InstinctMailboxGate.Ring.PollNow -> now()
+    }
+  }
+
+  /** [work] off the main thread, holding the broadcast at most [pollTimeoutMillis] (it keeps running after that). */
+  private fun insideBroadcast(async: () -> BroadcastReceiver.PendingResult?, work: () -> Unit) {
+    val pending = runCatching(async).getOrNull()
+    val task = java.util.concurrent.FutureTask { work() }
+    background(task)
+    try { runCatching { task.get(pollTimeoutMillis, TimeUnit.MILLISECONDS) } } finally { pending?.finish() }
+  }
+
+  /**
+   * An order that came inside the doorbell (1.18.0), through exactly the poll's checks: [InstinctMailboxSignature.verify]
+   * (signature, 15 minutes back and 2 ahead, id seen), then [InstinctMailboxSeen.claim] on the instance the poll shares,
+   * so the order runs once even if a poll reads it at the same time. Only the winner hands it to
+   * [InstinctProposalIntake.onMailbox], like a polled one. Then a poll ~60 seconds later marks it taken in the sheet. A
+   * bad signature or an order out of time runs nothing, answers nobody and polls now, as a plain ring does.
+   */
+  internal fun direct(context: Context, order: MailboxOrder) {
+    val app = context.applicationContext
+    val key = InstinctMailboxSettings(app).key() ?: return
+    val seen = InstinctMailbox.seen(app)
+    when (InstinctMailboxSignature.verify(key, order, InstinctMailbox.clock(), seen::contains)) {
+      InstinctMailboxSignature.Verdict.VALID -> {
+        if (seen.claim(order.id)) {
+          settings(app).update { it.copy(directOrders = it.directOrders + 1) }
+          runCatching { InstinctProposalIntake.onMailbox(app, order) }
+        }
+        schedule(app, KIND_FOLLOW_UP, InstinctDoorbellPolicy.FOLLOW_UP_MILLIS)
+      }
+      // A poll took it first: it already ran (or will) there.
+      InstinctMailboxSignature.Verdict.REPEATED -> schedule(app, KIND_FOLLOW_UP, InstinctDoorbellPolicy.FOLLOW_UP_MILLIS)
+      InstinctMailboxSignature.Verdict.BAD_SIGNATURE, InstinctMailboxSignature.Verdict.EXPIRED -> {
+        settings(app).update { it.copy(badPayloads = it.badPayloads + 1) }
+        pollAsTheGateSays(app) { pollForRing(app) }
       }
     }
+  }
+
+  /** The follow-up poll's job: it respects the gate like a ring (a running poll, the 5-second window, no network). */
+  internal fun followUp(context: Context) {
+    val app = context.applicationContext
+    if (InstinctMailboxSettings(app).blocker() != null) return
+    pollAsTheGateSays(app) { pollForRing(app) }
   }
 
   /** One ring-triggered poll; without network it leaves a job that polls when there is. */
@@ -275,14 +357,17 @@ object InstinctDoorbell {
     val url = log.url(); val token = log.token()
     if (url == null || token == null) { s.update { it.copy(failure = "falta configurar la bitácora") }; return false }
     val endpoint = s.endpoint()?.takeIf { s.enabled() }.orEmpty()
-    val raw = runCatching { client().post(url, InstinctDoorbellScript.informBody(token, endpoint)) }
+    val withOrder = s.withOrder() && endpoint.isNotEmpty()
+    val raw = runCatching { client().post(url, InstinctDoorbellScript.informBody(token, endpoint, withOrder)) }
       .getOrElse { InstinctLogClient.Raw.Failed(InstinctLogClient.Failure.NETWORK) }
     return when (val answer = InstinctDoorbellScript.parseInform(raw)) {
       is InstinctDoorbellScript.Answer.Confirmed -> {
-        // Only if nothing changed meanwhile: a newer endpoint stays pending for the next run.
-        if (s.endpoint()?.takeIf { s.enabled() }.orEmpty() == endpoint)
-          // A deletion keeps the reason it happened (turned off, unregistered by the distributor).
-          s.update { it.copy(informPending = false, informedAt = if (answer.saved) clock() else null, failure = if (answer.saved) null else it.failure) }
+        // Only if nothing changed meanwhile: a newer endpoint (or option) stays pending for the next run.
+        if (s.endpoint()?.takeIf { s.enabled() }.orEmpty() == endpoint && (s.withOrder() && endpoint.isNotEmpty()) == withOrder)
+          // A deletion keeps the reason it happened (turned off, unregistered by the distributor). The option counts as
+          // confirmed only when the script repeated it: a script older than 1.18.0 does not.
+          s.update { it.copy(informPending = false, informedAt = if (answer.saved) clock() else null, failure = if (answer.saved) null else it.failure,
+            withOrderConfirmed = withOrder && answer.withOrder == true) }
         false
       }
       is InstinctDoorbellScript.Answer.Failed -> { s.update { it.copy(failure = answer.reason) }; answer.retry }
@@ -337,6 +422,9 @@ object InstinctDoorbell {
     return InstinctDoorbellText.status(s.endpoint(), s.state()) { InstinctDeferral.clock(it, Calendar.getInstance()) }
   }
 
+  /** Under «Incluir la orden en el timbre»: whether the script already confirmed it. */
+  fun withOrderStatus(context: Context): String = InstinctDoorbellText.withOrderStatus(settings(context).state())
+
   fun diagnosis(context: Context): String =
     InstinctDoorbellText.diagnosis(settings(context).state(), distributors(context).size) { InstinctDeferral.clock(it, Calendar.getInstance()) }
 
@@ -365,7 +453,7 @@ object InstinctDoorbell {
   /** [delayMillis] null: expedited from Android 12 (common before), with the network. A ring job never replaces the backup one. */
   private fun scheduleJob(context: Context, kind: String, delayMillis: Long?) {
     val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
-    val id = if (kind == KIND_RING) RING_JOB_ID else INFORM_JOB_ID
+    val id = when (kind) { KIND_RING -> RING_JOB_ID; KIND_FOLLOW_UP -> FOLLOW_UP_JOB_ID; else -> INFORM_JOB_ID }
     fun builder() = JobInfo.Builder(id, ComponentName(context, InstinctDoorbellJobService::class.java))
       .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
       .setExtras(PersistableBundle().apply { putString(EXTRA_KIND, kind) })
@@ -398,13 +486,14 @@ class InstinctDoorbellRaiseService : Service() {
   override fun onBind(intent: Intent?): IBinder = binder
 }
 
-/** The endpoint to the script, with retries, and the polls a ring left for later. Not exported. */
+/** The endpoint to the script, with retries, the polls a ring left for later and the follow-up poll. Not exported. */
 class InstinctDoorbellJobService : JobService() {
   override fun onStartJob(params: JobParameters): Boolean {
     val kind = params.extras.getString(InstinctDoorbell.EXTRA_KIND)
     Thread({
       val retry = when (kind) {
         InstinctDoorbell.KIND_RING -> { runCatching { InstinctDoorbell.pollForRing(applicationContext) }; false }
+        InstinctDoorbell.KIND_FOLLOW_UP -> { runCatching { InstinctDoorbell.followUp(applicationContext) }; false }
         else -> runCatching { InstinctDoorbell.informNow(applicationContext) }.getOrDefault(true)
       }
       jobFinished(params, retry)
@@ -412,5 +501,6 @@ class InstinctDoorbellJobService : JobService() {
     return true
   }
 
-  override fun onStopJob(params: JobParameters): Boolean = params.extras.getString(InstinctDoorbell.EXTRA_KIND) != InstinctDoorbell.KIND_RING
+  override fun onStopJob(params: JobParameters): Boolean =
+    params.extras.getString(InstinctDoorbell.EXTRA_KIND).let { it != InstinctDoorbell.KIND_RING && it != InstinctDoorbell.KIND_FOLLOW_UP }
 }

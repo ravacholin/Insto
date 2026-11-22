@@ -40,6 +40,8 @@ class InstinctLogSettings(context: Context) {
     InstinctMailbox.rearm(app)
     // The doorbell's endpoint goes to the (maybe new) script again (1.17.0).
     InstinctDoorbell.onLogSaved(app)
+    // The (maybe new) script hears the catalog too (1.18.0).
+    InstinctCatalogPublisher.changed(app)
     return true
   }
 
@@ -193,13 +195,18 @@ class InstinctLogJobService : JobService() {
   override fun onStopJob(params: JobParameters): Boolean = true
 }
 
-/** After a boot: the log's job if events are pending, the state's heartbeat, the mailbox's polling and the doorbell. Not exported. */
+/**
+ * After a boot (and after an update): the log's job if events are pending, the state's heartbeat, the mailbox's polling,
+ * the doorbell and the live catalog. Not exported.
+ */
 class InstinctLogBootReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
-    if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+    // After a boot, and after an update of Insto (1.18.0): the catalog's hash carries Insto's version.
+    if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
     runCatching { InstinctLog.rearm(context) }
     runCatching { InstinctStatePublisher.rearm(context) }
     runCatching { InstinctMailbox.rearm(context) }
     runCatching { InstinctDoorbell.rearm(context) }
+    runCatching { InstinctCatalogPublisher.changed(context) }
   }
 }
