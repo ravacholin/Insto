@@ -10,6 +10,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.AssistantPreferencesRepository
 import com.example.phone.*
 import com.example.testsupport.awaitCachedPreferences
+import com.example.testsupport.installNativeHandler
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
@@ -807,6 +808,49 @@ class InstinctDoorbellFlowTest {
     listOf("Distribuidor:", "Registro: registrado", "Cifrado RFC 8291", "Endpoint ••••", "Última recepción push:", "Última orden directa validada:",
       "Último sondeo del buzón:", "Duplicados descartados", "Cola de recepción:", "Último error:").forEach { assertTrue("$it in\n$text", text.contains(it)) }
     listOf(endpoint, publicKeys().p256dh, publicKeys().auth, token, key).forEach { assertFalse(text.contains(it)) }
+  }
+
+
+  // 1.19.0: the same policies whatever the transport
+
+  @Test fun `with the screen locked a direct order is received and verified, and the existing lock rule makes it wait`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    InstinctProposalCenter.keyguardLocked = { true }
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringWith(token, payload(order("#insto poner el volumen al 40 por ciento")))
+    assertEquals("received and handed over", 1, bell.state().directOrders)
+    assertEquals(0, gets)
+    assertEquals("same rule as a polled order", listOf("espera"), acks("poner el volumen al 40 por ciento"))
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+  }
+
+  @Test fun `a direct order that would open another app from the background waits instead of opening it`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    installNativeHandler(app, android.provider.AlarmClock.ACTION_SET_TIMER)
+    ringWith(token, payload(order("#insto poner un temporizador de 3 minutos")))
+    assertNull(shadowOf(app).nextStartedActivity)
+    assertEquals(listOf("espera"), acks("poner un temporizador de 3 minutos"))
+  }
+
+  @Test fun `autonomy Nunca refuses a direct order and Confirmar makes it wait`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    val autonomy = InstinctAutonomySettings(app)
+    try {
+      autonomy.set(InstinctCategory.VOLUMEN, InstinctAutonomy.NUNCA)
+      audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+      ringWith(token, payload(order("#insto poner el volumen al 40 por ciento")))
+      assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+      assertEquals(listOf("error"), acks("poner el volumen al 40 por ciento"))
+      autonomy.set(InstinctCategory.VOLUMEN, InstinctAutonomy.CONFIRMAR)
+      ringWith(token, payload(order("#insto poner el volumen al 30 por ciento")))
+      assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+      assertEquals(listOf("espera"), acks("poner el volumen al 30 por ciento"))
+    } finally {
+      autonomy.set(InstinctCategory.VOLUMEN, InstinctAutonomy.SOLO)
+    }
   }
 
 }
