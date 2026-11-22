@@ -131,12 +131,16 @@ class InstinctAutonomyFlowTest {
     assertTrue(InstinctProposalCenter.book.pending().isEmpty())
   }
 
-  @Test fun `Solo never loosens an existing blocker - a locked phone still waits`() {
+  @Test fun `Solo never loosens an existing blocker - a locked phone runs a setting and still waits for a screen`() {
     InstinctProposalCenter.keyguardLocked = { true }
     audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
     post("#insto poner el volumen al 40 por ciento")
-    assertEquals(0, volume())
-    assertEquals(listOf("#insto-espera poner el volumen al 40 por ciento → El teléfono estaba bloqueado."), sent)
+    // 1.20.0: the volume changes with the phone locked, as Android allows.
+    assertEquals(audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * 40 / 100, volume())
+    assertTrue(sent.single(), sent.single().startsWith("#insto-ok poner el volumen al 40 por ciento"))
+    sent.clear()
+    post("#insto poner un temporizador de 5 minutos")
+    assertEquals(listOf("#insto-espera poner un temporizador de 5 minutos → ${InstinctGatePreview.LOCKED}"), sent)
     // And without Accessibility an app-opening order waits too, whatever the policy says.
     InstinctProposalCenter.keyguardLocked = { false }
     InstinctProposalCenter.accessibilityConnected = { false }

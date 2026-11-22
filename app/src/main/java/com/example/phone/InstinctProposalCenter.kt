@@ -781,7 +781,8 @@ object InstinctProposalCenter {
     // Read before running, so the check after it can tell «changed by this order» from «it already was so» (1.20.0).
     val verifier = outcomeVerifier(context)
     val before = runCatching { verifier.read(proposal.command) }.getOrNull()
-    val result = PhoneActionExecutor(context).execute(proposal.command)
+    // 1.20.0: an order the gate let run is authorized; the action does not ask its own «¿Confirmás?» again.
+    val result = PhoneActionExecutor(context).execute(proposal.command, confirmed = InstinctConfirmations.preAuthorized(proposal.command))
     when {
       // Maybe it happened: never offered again, so it is never repeated.
       result.outcome == PhoneActionOutcome.UNCERTAIN -> {
@@ -790,12 +791,15 @@ object InstinctProposalCenter {
         report(context, proposal, result)
       }
       result.outcome == PhoneActionOutcome.REJECTED -> {
+        InstinctReadiness.noteMissing(context, result)
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.FAILED, result.message)
         notifyResult(context, proposal, "Instinct pidió: ${proposal.summary}", "No se pudo: ${result.message}")
         report(context, proposal, result)
       }
       InstinctAck.needsUser(result) -> {
-        // It did not happen: it goes back for a touch, which can open the panel, ask a permission or choose.
+        // It did not happen: it goes back for a touch, which can open the panel, ask a permission or choose. A missing
+        // permission is noted for Settings (1.20.0); nothing is asked in the background.
+        InstinctReadiness.noteMissing(context, result)
         val again = book.offer(proposal.order, proposal.command, proposal.fingerprint, proposal.source, execution)
         if (again != null) {
           acks.relink(proposal.id, again.id)
@@ -883,7 +887,7 @@ object InstinctProposalCenter {
     val run = InstinctRoutineRun(runner, { blocker(context, it, foreground = false) }) { step ->
       val capture = InstinctUndoActions.capture(context, step)
       val before = runCatching { verifier.read(step) }.getOrNull()
-      executor.execute(step).let { result ->
+      executor.execute(step, confirmed = InstinctConfirmations.preAuthorized(step)).let { result ->
         if (InstinctAck.kindOf(result) != AckKind.OK) return@let result
         // Each step is checked like a single order: not reached stops the routine, unconfirmed stops it as uncertain.
         val observation = runCatching { verifier.verify(step, before, result) }.getOrNull()

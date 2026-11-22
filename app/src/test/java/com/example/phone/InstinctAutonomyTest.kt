@@ -284,3 +284,51 @@ class InstinctAutonomyTest {
     assertFalse(default.contains("Horas de silencio"))
   }
 }
+
+/** 1.20.0: a locked phone stops only what needs a screen. */
+class InstinctLockScreenTest {
+  private fun snapshot(locked: Boolean, foreground: Boolean = false, accessibility: Boolean = true) =
+    GateSnapshot(locked, accessibility, foreground, true, InstinctAutonomyPolicy(), 600)
+
+  private val settings = listOf(PhoneCommand.Volume(VolumeOp.SET, 30), PhoneCommand.Volume(VolumeOp.UP), PhoneCommand.Torch(true),
+    PhoneCommand.Torch(false), PhoneCommand.Media(MediaOp.PAUSE), PhoneCommand.TemporaryMode(ModeKind.SILENT, 3600), PhoneCommand.EndMode,
+    PhoneCommand.Platform(PlatformAction.SILENT_ON), PhoneCommand.Platform(PlatformAction.VIBRATE_ON), PhoneCommand.Platform(PlatformAction.DND_ON),
+    PhoneCommand.Platform(PlatformAction.DND_OFF), PhoneCommand.Platform(PlatformAction.BATTERY))
+  private val screens = listOf(PhoneCommand.Alarm(7, 0), PhoneCommand.Timer(60), PhoneCommand.OpenApp("Spotify"),
+    PhoneCommand.YouTubeSearch("lluvia"), PhoneCommand.Platform(PlatformAction.CALENDAR_AGENDA))
+
+  @Test fun `a locked phone never blocks every action at once - settings run locked`() {
+    // The regression this guards: «!foreground && locked → LOCKED» for any command.
+    for (command in settings) {
+      assertTrue("$command", LockScreenPolicy.runsLocked(command))
+      assertNull("$command", InstinctGatePreview.blocker(command, snapshot(locked = true)))
+      assertEquals("$command", InstinctAutonomyGate.Gate.Run, InstinctGatePreview.preview(listOf(command), false, snapshot(locked = true)))
+    }
+  }
+
+  @Test fun `what opens a screen still waits with the phone locked, even with Accessibility`() {
+    for (command in screens) {
+      assertFalse("$command", LockScreenPolicy.runsLocked(command))
+      assertEquals("$command", InstinctGatePreview.LOCKED, InstinctGatePreview.blocker(command, snapshot(locked = true)))
+    }
+    assertNull("unlocked and with Accessibility it runs", InstinctGatePreview.blocker(PhoneCommand.Alarm(7, 0), snapshot(locked = false)))
+  }
+
+  @Test fun `a routine waits as a whole when one of its steps needs a screen`() {
+    val gate = InstinctGatePreview.preview(listOf(PhoneCommand.Volume(VolumeOp.SET, 10), PhoneCommand.OpenApp("Spotify")), true, snapshot(locked = true))
+    assertEquals(InstinctAutonomyGate.Gate.Wait(InstinctGatePreview.LOCKED), gate)
+    assertEquals(InstinctAutonomyGate.Gate.Run, InstinctGatePreview.preview(settings.take(3), true, snapshot(locked = true)))
+  }
+
+  @Test fun `locking never turns Nunca or Confirmar into Solo`() {
+    val never = GateSnapshot(true, true, false, true, InstinctAutonomyPolicy().with(InstinctCategory.VOLUMEN, InstinctAutonomy.NUNCA), 600)
+    assertTrue(InstinctGatePreview.preview(listOf(PhoneCommand.Volume(VolumeOp.SET, 30)), false, never) is InstinctAutonomyGate.Gate.Refuse)
+    val confirm = never.copy(policy = InstinctAutonomyPolicy().with(InstinctCategory.VOLUMEN, InstinctAutonomy.CONFIRMAR))
+    assertTrue(InstinctGatePreview.preview(listOf(PhoneCommand.Volume(VolumeOp.SET, 30)), false, confirm) is InstinctAutonomyGate.Gate.Wait)
+  }
+
+  @Test fun `only a temporary mode's own question is pre-authorized`() {
+    assertTrue(InstinctConfirmations.preAuthorized(PhoneCommand.TemporaryMode(ModeKind.DND, 3600)))
+    for (command in settings.filterNot { it is PhoneCommand.TemporaryMode } + screens) assertFalse("$command", InstinctConfirmations.preAuthorized(command))
+  }
+}

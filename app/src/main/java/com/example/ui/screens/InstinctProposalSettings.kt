@@ -94,7 +94,9 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
           modifier = Modifier.testTag("instinct_proposals_listener")) { Text("Habilitar acceso en Ajustes") }
       }
+      InstinctReadinessSection(revision) { revision++ }
       InstinctAutonomySection(revision) { revision++ }
+      InstinctExecutionsSection(revision) { revision++ }
       Text("Responderle a Instinct", style = MaterialTheme.typography.bodyLarge)
       SettingsDescription("Insto contesta en el mismo chat, con la acción «Responder» de la notificación de WhatsApp, " +
         "una línea por orden (#insto-ok, #insto-espera, #insto-error, #insto-incierto). No abre WhatsApp. " +
@@ -137,6 +139,53 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       },
     )
   }
+}
+
+/**
+ * «Preparar Insto para funcionar bloqueado» (1.20.0): what Android requires granting by hand, once. Only what is missing
+ * is listed, the ones an order already needed first; each button opens its own page in Settings, only when tapped.
+ */
+@Composable
+private fun InstinctReadinessSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val missing = remember(revision) { com.example.phone.InstinctReadiness.forgetGranted(context); com.example.phone.InstinctReadiness.missing(context) }
+  val camera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onChange() }
+  val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onChange() }
+  Text("Funcionar con el teléfono bloqueado", style = MaterialTheme.typography.bodyLarge)
+  if (missing.isEmpty()) {
+    SettingsDescription("Listo: Insto tiene todo lo que Android pide para cambiar volumen, linterna, silencio, No molestar y " +
+      "música con el teléfono bloqueado o la pantalla apagada.")
+    return
+  }
+  SettingsDescription("Con el teléfono bloqueado Insto hace solo lo que no abre una pantalla. Para eso Android pide " +
+    "concederle a mano lo siguiente, una sola vez. Insto nunca lo pide en segundo plano.")
+  missing.forEach { item ->
+    val c = item.capability
+    SettingsDescription("• ${c.label}: ${c.why}" + if (item.neededAt != null) " Una orden de Instinct lo necesitó." else "")
+    OutlinedButton(onClick = {
+      when {
+        c == com.example.phone.InstinctReadiness.Capability.CAMERA -> camera.launch(Manifest.permission.CAMERA)
+        c == com.example.phone.InstinctReadiness.Capability.NOTIFICATIONS && Build.VERSION.SDK_INT >= 33 ->
+          notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        else -> com.example.phone.InstinctReadiness.settingsIntent(context, c)?.let { runCatching { context.startActivity(it) } }
+      }
+      onChange()
+    }, modifier = Modifier.testTag("instinct_ready_${c.name.lowercase()}")) { Text("Conceder: ${c.label}") }
+  }
+  TextButton(onClick = onChange) { Text("Ya lo concedí, revisar de nuevo") }
+}
+
+/** «Ejecuciones recientes» (1.20.0): the journal's last rows, as «ver ejecuciones» answers them. */
+@Composable
+private fun InstinctExecutionsSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  var lines by remember(revision) { mutableStateOf<String?>(null) }
+  LaunchedEffect(revision) {
+    lines = withContext(Dispatchers.IO) { runCatching { com.example.phone.InstinctExecutionQueries.list(context) }.getOrNull() }
+  }
+  Text("Ejecuciones recientes", style = MaterialTheme.typography.bodyLarge)
+  SettingsDescription((lines ?: "Leyendo el diario…").split(" | ").joinToString("\n"))
+  TextButton(onClick = onChange) { Text("Actualizar") }
 }
 
 internal fun autonomyLabel(level: InstinctAutonomy): String = when (level) {

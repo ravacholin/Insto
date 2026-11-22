@@ -244,3 +244,70 @@ heredada de 1.19.0 sin filas se informa `incierta` (y queda en el diario como `U
 `InstoApplication` ya no quita la propiedad del modo temporal en cada proceso nuevo: solo la quita si el valor actual
 difiere del aplicado (un cambio manual evidente). Al vencer, restaurar sigue exigiendo que el valor sea exactamente el
 aplicado. El reinicio del teléfono sigue siendo conservador (pierde la propiedad), como en 1.19.0.
+
+## 9. Autonomía con el teléfono bloqueado (fase 4)
+
+El bloqueo global `!snapshot.foreground && snapshot.locked -> LOCKED` de `InstinctGatePreview.blocker()` y el rechazo
+de todo con «Desbloqueá el teléfono» de `PhoneActionExecutor.execute()` se reemplazaron por `LockScreenPolicy`: una
+acción espera el desbloqueo solo si abre una pantalla. Una prueba (`InstinctLockScreenTest`) impide volver al bloqueo
+global.
+
+### Matriz de acciones con el teléfono bloqueado o la pantalla apagada
+
+| Acción | Bloqueado, Insto en segundo plano | Qué hace falta |
+| --- | --- | --- |
+| Volumen (porcentaje, subir, bajar) | se ejecuta solo | nada |
+| Linterna | se ejecuta solo | permiso de cámara |
+| Silencio, vibración, sonido normal | se ejecuta solo | acceso a No molestar (vibración no lo necesita) |
+| No molestar | se ejecuta solo | acceso a No molestar |
+| Reproducir, pausar, siguiente, anterior | se ejecuta solo | acceso a notificaciones (sesiones multimedia) |
+| Modo temporal (volumen, silencio, No molestar por un tiempo) | se ejecuta solo y se restaura a su hora | notificaciones; acceso a No molestar; alarmas exactas para la restauración exacta |
+| Restauración de un modo temporal | se ejecuta sola (alarma exacta permitida en Doze) | lo mismo |
+| Consultas (batería, «ver …», «probar …») | se responden | nada |
+| Rutina con pasos de la lista anterior | se ejecuta sola | lo de cada paso |
+| Órdenes programadas, disparadores, recurrencias | se disparan y siguen la misma regla | alarmas exactas |
+| Alarma, temporizador, calendario, búsquedas, abrir apps | espera confirmación | abren una pantalla: desbloqueo |
+
+Insto no enciende la pantalla ni abre actividades para nada de la lista. Si el servicio visible del modo temporal no
+puede arrancar desde segundo plano (Android 12+ sin exención de batería), el modo se aplica igual y se restaura por su
+alarma; solo falta el aviso con «Terminar» hasta abrir Insto.
+
+### Confirmaciones internas eliminadas
+
+| Antes (1.19.0) | Ahora (1.20.0) |
+| --- | --- |
+| Cualquier orden con el teléfono bloqueado esperaba «Confirmar» | solo las que abren una pantalla |
+| `PhoneActionExecutor` rechazaba todo con el teléfono bloqueado (también desde el panel) | solo lo que abre una pantalla |
+| Un modo temporal en Solo («silenciá durante una hora») siempre pedía «¿Confirmás?» | en Solo se ejecuta: esa autorización es la de la categoría (`InstinctConfirmations`) |
+| El paso «modo temporal» de una rutina autorizada pedía confirmación y detenía la rutina | se ejecuta |
+| `probar` decía «un modo temporal siempre espera la confirmación» | ya no |
+
+Se conservan: la categoría en **Confirmar**; **Nunca** (rechaza siempre, también bloqueado); las horas de silencio;
+el freno de 6 órdenes en 10 minutos; WhatsApp sin firma con tope en Confirmar; una alarma para una hora ya pasada hoy;
+elegir app o contacto; un permiso que falta; y la pregunta de restauración aproximada cuando Android no permite
+alarmas exactas (es una degradación real, no una formalidad).
+
+### Permisos: preparar una sola vez
+
+Ajustes → Propuestas de Instinct → «Funcionar con el teléfono bloqueado» lista solo lo que falta, primero lo que una
+orden ya necesitó, con un botón por permiso que abre su página de Ajustes **cuando la persona lo toca**. En segundo
+plano Insto no muestra diálogos, no reabre Ajustes y no usa Accesibilidad para conceder nada: anota la capacidad
+(`instinct-readiness-needed.json`) y la orden queda esperando o falla con el motivo. Lo concedido no se vuelve a pedir.
+
+| Capacidad | Para qué | Cómo se concede |
+| --- | --- | --- |
+| Notificaciones (`POST_NOTIFICATIONS`, Android 13+) | avisos, confirmaciones, modo temporal | diálogo del sistema desde Ajustes de Insto |
+| Acceso a No molestar | silencio, No molestar | Ajustes → Acceso a No molestar |
+| Alarmas y recordatorios (`SCHEDULE_EXACT_ALARM`, Android 12+) | restauración y programadas a la hora exacta | Ajustes → Alarmas y recordatorios |
+| Sin optimización de batería | menos demoras en Doze; servicio visible del modo temporal | Ajustes → Optimización de batería |
+| Acceso a notificaciones | WhatsApp y sesiones multimedia | Ajustes → Acceso a notificaciones |
+| Cámara | linterna | diálogo del sistema |
+| Accesibilidad de Insto (opcional) | abrir otras apps sin tocar | Ajustes → Accesibilidad |
+
+### Doze y pantalla apagada
+
+No hay servicio permanente ni wake locks nuevos. Lo que llega por push (prioridad alta del distribuidor) se procesa en
+la ventana que Android le da a Insto; lo que llega por el sondeo de respaldo, cuando JobScheduler lo deja correr. Las
+restauraciones y las programadas usan `setExactAndAllowWhileIdle`. Lo que Android pospone queda en el diario
+(`RECEIVED`) y se continúa si sigue vigente; si venció, se informa `vencida`.
+

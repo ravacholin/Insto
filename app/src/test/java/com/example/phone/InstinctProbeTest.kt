@@ -41,7 +41,9 @@ class InstinctProbeTest {
   }
 
   @Test fun `the policy only hardens, and the old blockers still win over Solo`() {
-    assertEquals(InstinctAutonomyGate.Gate.Wait(InstinctGatePreview.LOCKED), InstinctGatePreview.preview(listOf(PhoneCommand.Volume(VolumeOp.SET, 30)), false, snapshot(locked = true)))
+    // 1.20.0: a locked phone stops only what opens a screen; a setting runs.
+    assertEquals(InstinctAutonomyGate.Gate.Run, InstinctGatePreview.preview(listOf(PhoneCommand.Volume(VolumeOp.SET, 30)), false, snapshot(locked = true)))
+    assertEquals(InstinctAutonomyGate.Gate.Wait(InstinctGatePreview.LOCKED), InstinctGatePreview.preview(listOf(PhoneCommand.Alarm(7, 0)), false, snapshot(locked = true)))
     assertEquals(InstinctAutonomyGate.Gate.Wait(InstinctGatePreview.NO_ACCESSIBILITY),
       InstinctGatePreview.preview(listOf(PhoneCommand.OpenApp("spotify")), false, snapshot(accessibility = false)))
     assertEquals("the open panel may open apps", InstinctAutonomyGate.Gate.Run,
@@ -55,7 +57,7 @@ class InstinctProbeTest {
   }
 
   @Test fun `what the action would ask of the person is said when it can be known`() {
-    assertNotNull(InstinctGatePreview.needs(PhoneCommand.TemporaryMode(ModeKind.SILENT, 3600), 600))
+    assertNull("an authorized temporary mode does not ask again (1.20.0)", InstinctGatePreview.needs(PhoneCommand.TemporaryMode(ModeKind.SILENT, 3600), 600))
     assertEquals("esa hora ya pasó hoy; la persona tiene que confirmar que es para mañana", InstinctGatePreview.needs(PhoneCommand.Alarm(7, 0), 8 * 60))
     assertNull(InstinctGatePreview.needs(PhoneCommand.Alarm(9, 0), 8 * 60))
     assertNull("a repeating alarm has no past", InstinctGatePreview.needs(PhoneCommand.Alarm(7, 0, days = listOf(2)), 8 * 60))
@@ -67,7 +69,7 @@ class InstinctProbeTest {
     assertEquals("válida · volumen · la haría sola", InstinctProbe.verdict(volume, InstinctAutonomyGate.Gate.Run, null).detail)
     assertEquals("válida · volumen · esperaría confirmación: horas de silencio",
       InstinctProbe.verdict(volume, InstinctAutonomyGate.Gate.Wait(InstinctAutonomyPolicy.QUIET), null).detail)
-    assertEquals("válida · volumen · esperaría confirmación: el teléfono estaba bloqueado",
+    assertEquals("válida · volumen · esperaría confirmación: el teléfono estaba bloqueado y esta acción abre una pantalla",
       InstinctProbe.verdict(volume, InstinctAutonomyGate.Gate.Wait(InstinctGatePreview.LOCKED), null).detail)
     assertEquals("válida · alarmas y temporizadores · esperaría confirmación: esa hora ya pasó hoy; la persona tiene que confirmar que es para mañana",
       InstinctProbe.verdict(PhoneCommand.Alarm(7, 0), InstinctAutonomyGate.Gate.Run, InstinctGatePreview.needs(PhoneCommand.Alarm(7, 0), 9 * 60)).detail)

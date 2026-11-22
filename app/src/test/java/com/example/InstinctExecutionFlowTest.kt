@@ -551,4 +551,92 @@ class InstinctExecutionFlowTest {
     assertFalse(manager.read()!!.owned)
     manager.end(force = true)
   }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Locked phone and authorized orders (fase 4)
+  // ---------------------------------------------------------------------------------------------------------------
+
+  private fun lockScreen(locked: Boolean) {
+    shadowOf(app.getSystemService(android.app.KeyguardManager::class.java)).setKeyguardLocked(locked)
+    InstinctProposalCenter.keyguardLocked = { locked }
+  }
+
+  @Test fun `with the phone locked and Insto in the background a volume order runs alone and is verified`() {
+    lockScreen(true)
+    try {
+      val o = order("#insto poner el volumen al 40 por ciento")
+      push(o)
+      assertEquals(max() * 40 / 100, volume())
+      assertEquals(ExecutionState.VERIFIED, journal.forMessage(o.id).single().state)
+      assertNull("no screen is opened", shadowOf(app).nextStartedActivity)
+    } finally { lockScreen(false) }
+  }
+
+  @Test fun `with the phone locked Do not disturb is switched alone and verified`() {
+    shadowOf(app.getSystemService(android.app.NotificationManager::class.java)).setNotificationPolicyAccessGranted(true)
+    lockScreen(true)
+    try {
+      val o = order("#insto activar no molestar")
+      push(o)
+      assertEquals(ExecutionState.VERIFIED, journal.forMessage(o.id).single().state)
+    } finally { lockScreen(false) }
+  }
+
+  @Test fun `with the phone locked what opens a screen waits, and the executor refuses it too`() {
+    lockScreen(true)
+    try {
+      InstinctProposalCenter.accessibilityConnected = { true }
+      val o = order("#insto poner un temporizador de 5 minutos")
+      push(o)
+      assertEquals(ExecutionState.WAITING, journal.forMessage(o.id).single().state)
+      assertEquals(PhoneActionExecutor.LOCKED, PhoneActionExecutor(app).execute(PhoneCommand.Timer(300)).message)
+      assertEquals(PhoneActionOutcome.COMPLETED, PhoneActionExecutor(app).execute(PhoneCommand.Volume(VolumeOp.SET, 20)).outcome)
+    } finally { lockScreen(false); InstinctProposalCenter.accessibilityConnected = { false } }
+  }
+
+  @Test fun `silencing for an hour under Solo runs without a second confirmation, and restores later`() {
+    shadowOf(app.getSystemService(android.app.NotificationManager::class.java)).setNotificationPolicyAccessGranted(true)
+    org.robolectric.shadows.ShadowAlarmManager.setCanScheduleExactAlarms(true)
+    lockScreen(true)
+    try {
+      audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+      val o = order("#insto silenciá el teléfono durante una hora")
+      push(o)
+      val row = journal.forMessage(o.id).single()
+      assertEquals("${row.reason} ${row.result}", ExecutionState.VERIFIED, row.state)
+      assertEquals(AudioManager.RINGER_MODE_SILENT, audio.ringerMode)
+      assertTrue(InstinctProposalCenter.book.pending().isEmpty())
+      val manager = TemporaryModeManager(app)
+      TemporaryModeRestorations.restore(app, manager, manager.read()!!)
+      assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+    } finally { lockScreen(false); org.robolectric.shadows.ShadowAlarmManager.setCanScheduleExactAlarms(false) }
+  }
+
+  @Test fun `a temporary mode under Confirmar still waits, and Nunca still refuses`() {
+    shadowOf(app.getSystemService(android.app.NotificationManager::class.java)).setNotificationPolicyAccessGranted(true)
+    InstinctAutonomySettings(app).set(InstinctCategory.SILENCIO, InstinctAutonomy.CONFIRMAR)
+    try {
+      val waits = order("#insto silenciá el teléfono durante una hora")
+      push(waits)
+      assertEquals(ExecutionState.WAITING, journal.forMessage(waits.id).single().state)
+      InstinctProposalCenter.book.discardAll()
+      InstinctAutonomySettings(app).set(InstinctCategory.SILENCIO, InstinctAutonomy.NUNCA)
+      val refused = order("#insto silenciá el teléfono durante una hora")
+      push(refused)
+      assertEquals(ExecutionState.CANCELLED, journal.forMessage(refused.id).single().state)
+      assertNull(TemporaryModeManager(app).read())
+    } finally { InstinctAutonomySettings(app).set(InstinctCategory.SILENCIO, InstinctAutonomy.SOLO) }
+  }
+
+  @Test fun `a missing permission is noted for Settings, never asked in the background`() {
+    // No Do not disturb access: the order cannot run and nothing is opened.
+    shadowOf(app.getSystemService(android.app.NotificationManager::class.java)).setNotificationPolicyAccessGranted(false)
+    val o = order("#insto activar no molestar")
+    push(o)
+    assertNull(shadowOf(app).nextStartedActivity)
+    assertTrue(InstinctReadiness.missing(app).any { it.capability == InstinctReadiness.Capability.DND_ACCESS && it.neededAt != null })
+    shadowOf(app.getSystemService(android.app.NotificationManager::class.java)).setNotificationPolicyAccessGranted(true)
+    InstinctReadiness.forgetGranted(app)
+    assertTrue("granted is never asked again", InstinctReadiness.missing(app).none { it.capability == InstinctReadiness.Capability.DND_ACCESS })
+  }
 }
