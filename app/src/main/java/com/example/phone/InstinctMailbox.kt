@@ -194,6 +194,20 @@ object InstinctMailboxPoll {
     }
   }
 
+  const val OLD_SCRIPT = "el Apps Script implementado es de antes de 1.16.0: no conoce action=ordenes. Pegá el instinct-bitacora.gs nuevo e implementá una versión nueva (Implementar → Gestionar implementaciones → Editar → Nueva versión)"
+  const val HTML = "el Apps Script devolvió una página en lugar de JSON (un error del script o una implementación vieja). Abrí la URL con ?token=…&action=ordenes en el navegador para ver el mensaje"
+
+  /** Why a body that is not `{ok:true, ordenes:[…]}` is invalid, in Spanish, without any content of it. */
+  fun invalidReason(text: String?): String {
+    val trimmed = text?.trimStart().orEmpty()
+    if (trimmed.isEmpty()) return "el Apps Script respondió vacío"
+    if (trimmed.startsWith("<")) return HTML
+    val o = runCatching { JSONObject(trimmed) }.getOrNull() ?: return InstinctLogClient.Failure.INVALID.label
+    // An old script answers the events branch of 1.15.0 to any GET: {ok:true, events:[…]}.
+    if (o.optBoolean("ok", false) && !o.has("ordenes") && (o.has("events") || o.has("accepted"))) return OLD_SCRIPT
+    return InstinctLogClient.Failure.INVALID.label
+  }
+
   fun tokenRejected(text: String?): Boolean =
     text?.let { runCatching { JSONObject(it) }.getOrNull() }?.let { !it.optBoolean("ok", true) && it.optString("error") == "token" } == true
 
@@ -269,7 +283,7 @@ class InstinctMailboxClient(private val http: InstinctLogClient = InstinctLogCli
       is InstinctLogClient.Raw.Failed -> Fetch.Failed(raw.reason)
       is InstinctLogClient.Raw.Body -> when {
         InstinctMailboxPoll.tokenRejected(raw.text) -> Fetch.Failed(InstinctLogClient.Failure.TOKEN.label)
-        else -> InstinctMailboxPoll.parse(raw.text)?.let { Fetch.Orders(it) } ?: Fetch.Failed(InstinctLogClient.Failure.INVALID.label)
+        else -> InstinctMailboxPoll.parse(raw.text)?.let { Fetch.Orders(it) } ?: Fetch.Failed(InstinctMailboxPoll.invalidReason(raw.text))
       }
     }
 

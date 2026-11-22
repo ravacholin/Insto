@@ -253,4 +253,23 @@ class InstinctMailboxTest {
     if (System.getenv("INSTO_WRITE_CATALOG") == "1") file.writeText(expected)
     assertEquals("Regenerá docs/instinct-catalog-buzon.txt con INSTO_WRITE_CATALOG=1", expected, file.readText())
   }
+
+  /** «respuesta inválida» says which one: an old script, an error page or Google's sign-in. */
+  @Test fun `an invalid answer says why, without its content`() {
+    val url = "https://script.google.com/macros/s/AKfycbx-ejemplo_123456/exec"
+    fun fetch(reply: FakeHttp.Reply): String {
+      val fake = FakeHttp { reply }
+      val client = InstinctMailboxClient(InstinctLogClient(OkHttpClient.Builder().addInterceptor(fake).build()))
+      return (client.fetch(url, "token-largo-de-prueba") as InstinctMailboxClient.Fetch.Failed).reason
+    }
+    assertEquals(InstinctMailboxPoll.OLD_SCRIPT, fetch(FakeHttp.Reply(200, """{"ok":true,"events":[{"evento_id":"x","detalle":"secreto"}]}""")))
+    val html = fetch(FakeHttp.Reply(200, "<!DOCTYPE html><html><body>TypeError: algo secreto</body></html>"))
+    assertEquals(InstinctMailboxPoll.HTML, html)
+    assertFalse(html.contains("secreto"))
+    assertEquals(InstinctLogClient.Failure.LOGIN.label,
+      fetch(FakeHttp.Reply(302, "", mapOf("Location" to "https://accounts.google.com/ServiceLogin?continue=x"))))
+    assertEquals("el Apps Script respondió vacío", fetch(FakeHttp.Reply(200, "")))
+    assertEquals("respuesta inválida", fetch(FakeHttp.Reply(200, """{"ok":true,"otra":1}""")))
+    assertEquals("token rechazado", fetch(FakeHttp.Reply(200, """{"ok":false,"error":"token"}""")))
+  }
 }

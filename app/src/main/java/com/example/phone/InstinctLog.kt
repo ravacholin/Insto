@@ -190,6 +190,8 @@ class InstinctLogOutbox(private val file: File) {
 class InstinctLogClient(base: OkHttpClient = OkHttpClient()) {
   enum class Failure(val label: String) {
     NETWORK("sin red"), TOKEN("token rechazado"), INVALID("respuesta inválida"), HTTP("HTTP"), NOT_CONFIGURED("falta la URL o el token"),
+    /** Google sent the request to its sign-in page: the deployment is not «Quién tiene acceso: cualquier usuario». */
+    LOGIN("Google pidió iniciar sesión: en la implementación, «Quién tiene acceso» tiene que ser «Cualquier usuario»"),
   }
 
   sealed interface Result {
@@ -249,6 +251,7 @@ class InstinctLogClient(base: OkHttpClient = OkHttpClient()) {
           else -> Raw.Body(response.body?.let { readLimited(it.byteStream()) })
         }
         val location = response.header("Location")?.let { response.request.url.resolve(it) }
+        if (location != null && location.host in LOGIN_HOSTS) return Raw.Failed(Failure.LOGIN)
         if (location == null || !location.isHttps || location.host !in REDIRECT_HOSTS) return Raw.Failed(Failure.INVALID)
         request = Request.Builder().url(location).get().build()
       }
@@ -266,6 +269,8 @@ class InstinctLogClient(base: OkHttpClient = OkHttpClient()) {
     private const val MAX_RESPONSE_BYTES = 65_536
     private val REDIRECTS = setOf(301, 302, 303, 307, 308)
     private val REDIRECT_HOSTS = setOf("script.googleusercontent.com", "script.google.com")
+    /** Never followed: a redirect there only says the deployment asks to sign in. */
+    private val LOGIN_HOSTS = setOf("accounts.google.com")
 
     /** {ok:true, accepted:[ids]}; {ok:false, error:"token"} is a rejected token; anything else is invalid. */
     fun parse(text: String?, sent: Set<String>): Result {

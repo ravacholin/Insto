@@ -16,8 +16,10 @@ class InstinctRoutinesTest {
     InstinctRoutineAccess(enabled.associate { InstinctRoutines.key(it.name) to InstinctRoutines.hash(it) }) { routines }
 
   private fun check(order: String, access: InstinctRoutineAccess = InstinctRoutineAccess.NONE) =
-    // A fixed day (21/11/2026): the recurring examples end on 13/12 and 15/12, within 30 days.
-    InstinctProposalValidator.check(order, parser, Calendar.getInstance().apply { set(2026, Calendar.NOVEMBER, 21, 10, 0, 0) }, access)
+    // The recurring examples end on 13/12 and 15/12: they are checked on a fixed day (21/11/2026), within 30 days.
+    // Everything else on today, because the calendar grammar reads «mañana» from the real clock.
+    InstinctProposalValidator.check(order, parser,
+      if (order.contains(" hasta el ")) Calendar.getInstance().apply { set(2026, Calendar.NOVEMBER, 21, 10, 0, 0) } else Calendar.getInstance(), access)
 
   // Enabling and the validator
 
