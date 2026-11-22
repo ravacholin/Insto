@@ -208,6 +208,109 @@ object InstinctAutonomyGate {
   }
 }
 
+/**
+ * A photo of what the gate looks at (1.18.0), taken once: whether the phone is locked, Insto's Accessibility, the open
+ * panel ([foreground]), whether the anti-loop brake has room, the policy, the minute of the day it runs, where the
+ * order came from and the cap for WhatsApp. No effects: reading it changes nothing.
+ */
+data class GateSnapshot(
+  val locked: Boolean,
+  val accessibility: Boolean,
+  val foreground: Boolean,
+  val budgetAvailable: Boolean,
+  val policy: InstinctAutonomyPolicy,
+  val minuteOfDay: Int,
+  val source: ProposalSource = ProposalSource.WHATSAPP,
+  val whatsappCap: InstinctAutonomy = InstinctAutonomy.SOLO,
+)
+
+/**
+ * The gate's decision as a pure function (1.18.0): the existing blockers first, then the policy (with the cap for
+ * WhatsApp), then the brake, exactly as [InstinctAutonomyGate.combine] says. The real path ([InstinctProposalCenter.gate])
+ * calls [decide] with the brake's `tryAcquire`; «probar» calls [preview], which only looks at whether the brake has room.
+ * So a test and an execution can never decide differently.
+ */
+object InstinctGatePreview {
+  const val LOCKED = "El teléfono estaba bloqueado."
+  const val NO_ACCESSIBILITY = "Para abrir otra app sin tocar nada, Android necesita el servicio de Accesibilidad de Insto activo."
+  const val ROUTINE_CHANGED = "La rutina ya no está habilitada para Instinct o cambió."
+
+  /** Commands that open another app's screen. From the background Android only allows that while Insto is exempt. */
+  fun opensActivity(command: PhoneCommand): Boolean = when (command) {
+    is PhoneCommand.Volume, is PhoneCommand.Torch, is PhoneCommand.Media, is PhoneCommand.TemporaryMode,
+    is PhoneCommand.Platform -> false
+    else -> true
+  }
+
+  /** The checks that existed before the autonomy policy, for one command, without the brake. */
+  fun blocker(command: PhoneCommand, snapshot: GateSnapshot): String? = when {
+    !snapshot.foreground && snapshot.locked -> LOCKED
+    !snapshot.foreground && opensActivity(command) && !snapshot.accessibility -> NO_ACCESSIBILITY
+    else -> null
+  }
+
+  /** [steps] are the routine expanded (null: it is no longer enabled or changed) or the command itself. */
+  fun decide(steps: List<PhoneCommand>?, routine: Boolean, snapshot: GateSnapshot, acquire: () -> Boolean): InstinctAutonomyGate.Gate {
+    // A routine is checked as a whole before its first step: one step that cannot run leaves all of it for Confirmar.
+    val structural = if (steps == null) ROUTINE_CHANGED else steps.firstNotNullOfOrNull { blocker(it, snapshot) }
+    // Unsigned orders from WhatsApp may be capped at Confirmar; that cap only ever hardens the policy.
+    val policy = InstinctSourceCap.apply(snapshot.policy.decide(steps ?: emptyList(), routine, snapshot.minuteOfDay),
+      snapshot.source, snapshot.whatsappCap)
+    return InstinctAutonomyGate.combine(structural, policy, acquire)
+  }
+
+  /** The same decision, without consuming anything. */
+  fun preview(steps: List<PhoneCommand>?, routine: Boolean, snapshot: GateSnapshot): InstinctAutonomyGate.Gate =
+    decide(steps, routine, snapshot) { snapshot.budgetAvailable }
+
+  /**
+   * What the action itself would ask of the person even after the gate lets it run, when it can be known without
+   * running it: a temporary mode always waits for its confirmation, and an alarm for a time already past today
+   * asks whether it is for tomorrow. [minuteOfDay] is now. Choosing among several apps or a permission only shows up
+   * when it runs.
+   */
+  fun needs(command: PhoneCommand, minuteOfDay: Int): String? = when {
+    command is PhoneCommand.TemporaryMode -> "un modo temporal siempre espera la confirmación de la persona"
+    command is PhoneCommand.Alarm && command.date == null && command.days.isEmpty() && command.hour * 60 + command.minute <= minuteOfDay ->
+      "esa hora ya pasó hoy; la persona tiene que confirmar que es para mañana"
+    else -> null
+  }
+}
+
+/** «#insto probar <orden>» (1.18.0): read-only, with its own brake, never the anti-loop one. Pure. */
+object InstinctProbe {
+  const val PHRASE = "probar"
+  const val PER_PERIOD = 20
+  const val PERIOD_MILLIS = 10 * 60_000L
+  const val TOO_MANY = "demasiadas pruebas seguidas"
+  const val RULE = "Si no estás seguro de una forma o de si va a quedar esperando, probala antes con \"probar <orden>\"."
+
+  /** What would happen NOW, in the fixed forms Instinct reads. */
+  sealed interface Verdict {
+    val detail: String
+    data class Alone(val category: String) : Verdict { override val detail get() = "válida · $category · la haría sola" }
+    data class Waits(val category: String, val reason: String) : Verdict {
+      override val detail get() = "válida · $category · esperaría confirmación: ${reason.trim().trimEnd('.').replaceFirstChar { it.lowercaseChar() }}"
+    }
+    data class Scheduled(val label: String) : Verdict { override val detail get() = "válida · programada: $label" }
+    data class Invalid(val reason: String) : Verdict { override val detail get() = "no válida: ${reason.trim().trimEnd('.')}" }
+    data object Refused : Verdict { override val detail get() = "rechazada: ${InstinctAutonomyPolicy.REFUSED}" }
+  }
+
+  /** The category in words; a routine is «rutinas», a query «consulta». */
+  fun category(command: PhoneCommand): String = InstinctCategory.of(command)?.label ?: "acción"
+
+  /**
+   * A valid immediate order: [gate] is [InstinctGatePreview.preview]'s decision and [need] what the action would ask
+   * of the person ([InstinctGatePreview.needs]); the gate's reasons come first, as in the real path.
+   */
+  fun verdict(command: PhoneCommand, gate: InstinctAutonomyGate.Gate, need: String?): Verdict = when (gate) {
+    is InstinctAutonomyGate.Gate.Refuse -> Verdict.Refused
+    is InstinctAutonomyGate.Gate.Wait -> Verdict.Waits(category(command), gate.reason)
+    InstinctAutonomyGate.Gate.Run -> if (need != null) Verdict.Waits(category(command), need) else Verdict.Alone(category(command))
+  }
+}
+
 /** What the trust ledger counts. Only counters: never an order or a text. */
 enum class TrustEvent(val code: String) {
   EJECUTADA("ejecutada"), DESHECHA("deshecha"), CONFIRMADA("confirmada"), DESCARTADA("descartada"), VENCIDA("vencida"),

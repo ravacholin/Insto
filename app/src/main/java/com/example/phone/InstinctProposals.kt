@@ -47,6 +47,11 @@ sealed interface ProposalCheck {
     STATE("ver estado"),
     /** One scheduled order, or a whole recurrence, by the short id of «ver programadas» (1.17.0). */
     CANCEL_ONE("cancelar programada", form = "cancelar programada <id>"),
+    /**
+     * «probar <orden>» (1.18.0): validates the order with the same validator and says what would happen now, without
+     * running, saving, scheduling, telling the person or consuming the brake. [ProposalCheck.Query.argument] is the order.
+     */
+    PROBE("probar", form = "probar <orden>"),
   }
 }
 
@@ -72,8 +77,12 @@ object InstinctProposalValidator {
     if (order.isBlank()) return ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY)
     // Read-only questions about the protocol: exact phrases, before the grammar.
     val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
-    ProposalCheck.QueryKind.entries.firstOrNull { it != ProposalCheck.QueryKind.CANCEL_ONE && PhoneCommandParser.normalize(it.phrase) == folded }
-      ?.let { return ProposalCheck.Query(order, it) }
+    ProposalCheck.QueryKind.entries.firstOrNull { it != ProposalCheck.QueryKind.CANCEL_ONE && it != ProposalCheck.QueryKind.PROBE &&
+      PhoneCommandParser.normalize(it.phrase) == folded }?.let { return ProposalCheck.Query(order, it) }
+    // «probar <orden>»: the order is kept as written and checked by whoever answers, with this same validator.
+    probe(order)?.let { inner ->
+      return if (inner.isBlank()) ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY) else ProposalCheck.Query(order, ProposalCheck.QueryKind.PROBE, inner)
+    }
     cancelOne.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.CANCEL_ONE, it.groupValues[1]) }
     // A notice for the person: fixed form, plain text. Where it may come from is decided by the caller.
     InstinctNotice.text(order)?.let { text ->
@@ -102,6 +111,14 @@ object InstinctProposalValidator {
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.SEMANTIC)
     if (!allowed(command) && !allowedRoutine(command, routines)) return ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
     return ProposalCheck.Valid(order, command)
+  }
+
+  /** The order after «probar», as written (maybe empty); null when the line is not a probe. */
+  fun probe(order: String): String? {
+    val trimmed = order.trim()
+    val head = trimmed.substringBefore(' ')
+    if (PhoneCommandParser.normalize(head) != InstinctProbe.PHRASE) return null
+    return trimmed.substring(head.length).trim()
   }
 
   /**
@@ -399,9 +416,14 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
  */
 class AutoRunBudget(private val clock: () -> Long, private val max: Int = 6, private val periodMillis: Long = 10 * 60_000L) {
   private val runs = ArrayDeque<Long>()
+  /** Whether [tryAcquire] would succeed now, without taking anything (1.18.0, for «probar»). */
+  @Synchronized fun available(): Boolean { prune(clock()); return runs.size < max }
+  private fun prune(now: Long) {
+    while (runs.isNotEmpty() && (now - runs.first() >= periodMillis || now < runs.first())) runs.removeFirst()
+  }
   @Synchronized fun tryAcquire(): Boolean {
     val now = clock()
-    while (runs.isNotEmpty() && (now - runs.first() >= periodMillis || now < runs.first())) runs.removeFirst()
+    prune(now)
     if (runs.size >= max) return false
     runs.addLast(now)
     return true

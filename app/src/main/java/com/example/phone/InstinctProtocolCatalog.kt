@@ -149,7 +149,8 @@ object InstinctProtocolCatalog {
       appendLine("- Disparadores, para que el teléfono haga algo solo cuando pase algo: \"al terminar el evento: <orden>\" (el evento del calendario en curso), \"al empezar el próximo evento: <orden>\" (el próximo en las 12 horas siguientes), \"al conectar auriculares: <orden>\", \"al desconectar auriculares: <orden>\" y \"al desbloquear: <orden>\". Cada uno se usa una sola vez. Vencen a las 12 horas; con \"hasta las HH:MM\" antes de los dos puntos, a esa hora (como mucho 24 horas). Un disparador que vence sin dispararse se informa como vencida. Los eventos de todo el día no cuentan.")
       appendLine("- Recurrentes: \"todos los días a las HH:MM hasta el DD/MM: <orden>\", \"los días hábiles a las HH:MM hasta el DD/MM: <orden>\" (de lunes a viernes) o \"los fines de semana a las HH:MM hasta el DD/MM: <orden>\". \"hasta el DD/MM\" es obligatorio y como mucho ${InstinctTriggers.MAX_RECURRING_DAYS} días; podés agregar una condición del clima antes de \"hasta el\". Como máximo ${InstinctTriggers.MAX_RECURRING} recurrentes, aparte de las ${InstinctDeferral.MAX_SCHEDULED} programadas. Cada ocurrencia se informa por separado.")
       appendLine("- Una sola condición por línea: un disparador, una hora o una recurrencia, sin \"y\", \"o\" ni anidamiento.")
-      appendLine("- Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después.")
+      appendLine("- $TRIGGER_RULE")
+      appendLine("- ${InstinctProbe.RULE}")
       appendLine()
       appendLine("Acciones permitidas (usá estas formas):")
       InstinctProposalValidator.examples.forEach { appendLine(example(it)) }
@@ -179,7 +180,7 @@ object InstinctProtocolCatalog {
         appendLine(InstinctMailboxCatalog.text(mailbox, forChat, doorbell, doorbellDirect))
         appendLine()
       }
-      appendLine("Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas). «ver programadas» muestra cada una con un id de ${InstinctTriggers.SHORT_ID_LENGTH} caracteres; con ese id, «cancelar programada <id>» cancela esa orden o la recurrente entera:")
+      appendLine("Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas). «ver programadas» muestra cada una con un id de ${InstinctTriggers.SHORT_ID_LENGTH} caracteres; con ese id, «cancelar programada <id>» cancela esa orden o la recurrente entera. «probar <orden>» valida la orden (también diferida, con disparador, recurrente o con clima) y dice qué pasaría ahora, sin ejecutar ni guardar nada: «válida · <categoría> · la haría sola», «válida · <categoría> · esperaría confirmación: <motivo>», «válida · programada: <cuándo>», «no válida: <motivo>» o «rechazada: la persona no permite esta acción»; como máximo ${InstinctProbe.PER_PERIOD} pruebas cada 10 minutos:")
       ProposalCheck.QueryKind.entries.forEach { appendLine(example(it.form)) }
       appendLine()
       appendLine("Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.")
@@ -224,6 +225,8 @@ object InstinctProtocolCatalog {
   fun summary(routines: List<String>, publishedHash: String? = null): String =
     "$TITLE · rutinas habilitadas: " + (if (routines.isEmpty()) "ninguna." else routines.joinToString(", ") + ".") +
       (publishedHash?.let { " Catálogo publicado: hash $it." } ?: "")
+
+  const val TRIGGER_RULE = "Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después."
 
   const val LIVE_RULE = "Las reglas vigentes están en GET <URL>?token=<token>&action=catalogo. Leelo al empezar y cada vez que una orden dé un error inesperado; si el hash cambió, las reglas de ahí mandan sobre este texto."
 
@@ -286,6 +289,7 @@ object InstinctProtocolCatalog {
         "buzon_futuro_minutos_max" to (InstinctMailboxSignature.MAX_FUTURE_MILLIS / 60_000).toInt(),
         "avisos_por_hora" to InstinctNotice.PER_HOUR,
         "aviso_caracteres_max" to InstinctNotice.MAX_CHARS,
+        "pruebas_cada_10_minutos" to InstinctProbe.PER_PERIOD,
       ),
       "autonomia" to InstinctCategory.entries.associate { it.label to level(autonomy.level(it)) },
       "horas_de_silencio" to quiet?.let { mapOf("desde" to QuietHours.clock(it.start), "hasta" to QuietHours.clock(it.end),
@@ -302,6 +306,7 @@ object InstinctProtocolCatalog {
         "acuses_por" to channels.ackChannel.name.lowercase(),
       ),
       "firma_buzon" to InstinctMailboxSignature.VERSION,
+      "reglas" to listOf(TRIGGER_RULE, InstinctProbe.RULE),
     )
     val canonical = InstinctCatalogCanonical.write(value)
     return InstinctCatalogJson(canonical, sha256(canonical))

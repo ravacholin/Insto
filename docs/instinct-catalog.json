@@ -136,6 +136,10 @@
     {
       "orden": "cancelar programada <id>",
       "solo_lectura": true
+    },
+    {
+      "orden": "probar <orden>",
+      "solo_lectura": true
     }
   ],
   "firma_buzon": "insto-v4",
@@ -197,7 +201,7 @@
       }
     ]
   },
-  "hash": "2e9f9f4a04413bba67ffdd15bc7e664c98a79696defda89fcad82efedb9a53fe",
+  "hash": "229063c62268229436764fb157d0db23288a1361c01adcbc5aab6be728f9157b",
   "horas_de_silencio": null,
   "limites": {
     "atraso_minutos_max": 15,
@@ -215,6 +219,7 @@
     "orden_caracteres_en_acuse": 80,
     "ordenes_automaticas_cada_10_minutos": 6,
     "programadas": 10,
+    "pruebas_cada_10_minutos": 20,
     "recurrente_dias_max": 30,
     "recurrentes": 5,
     "rutina_pasos_max": 6
@@ -230,6 +235,10 @@
     "varias acciones juntas"
   ],
   "protocolo": "Protocolo Insto v6",
+  "reglas": [
+    "Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después.",
+    "Si no estás seguro de una forma o de si va a quedar esperando, probala antes con \"probar <orden>\"."
+  ],
   "rutinas": [],
   "version_insto": "1.18.0",
   "version_protocolo": 6
