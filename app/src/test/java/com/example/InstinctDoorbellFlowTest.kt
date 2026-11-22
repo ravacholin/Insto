@@ -45,6 +45,8 @@ class InstinctDoorbellFlowTest {
   private val ringJobs = mutableListOf<Long?>()
   private val followUps = mutableListOf<Long?>()
   private val mailboxJobs = mutableListOf<Long?>()
+  private val drainJobs = mutableListOf<Long?>()
+  private val cancelled = mutableListOf<String>()
   private var gets = 0
   private var online = true
   private val audio get() = app.getSystemService(AudioManager::class.java)
@@ -71,10 +73,17 @@ class InstinctDoorbellFlowTest {
     InstinctDoorbell.distributors = { listOf(ntfy) }
     InstinctDoorbell.send = { _, intent -> toDistributor += intent }
     InstinctDoorbell.online = { online }
-    InstinctDoorbell.background = { it.run() }
+    // 1.19.0: receiving and dispatching run inline here; the rescue job is recorded.
+    InstinctPushIntake.execute = { it.run() }
+    InstinctPushDispatcher.execute = { it.run() }
+    InstinctPushDispatcher.reset()
+    InstinctDoorbell.cancel = { _, kind -> cancelled += kind }
     // The endpoint reaches the script at once; ring jobs are recorded.
     InstinctDoorbell.schedule = { context, kind, delay ->
-      when (kind) { "inform" -> InstinctDoorbell.informNow(context); "follow-up" -> followUps += delay; else -> ringJobs += delay }
+      when (kind) {
+        "inform" -> InstinctDoorbell.informNow(context); "follow-up" -> followUps += delay; "drain" -> drainJobs += delay
+        else -> ringJobs += delay
+      }
     }
     val fake = FakeHttp { ex ->
       if (ex.request.method == "GET") {
@@ -103,6 +112,7 @@ class InstinctDoorbellFlowTest {
     File(app.noBackupFilesDir, InstinctMailboxSeen.FILE).delete()
     File(app.noBackupFilesDir, InstinctDoorbellSettings.STATE_FILE).delete()
     File(app.noBackupFilesDir, InstinctDoorbellSettings.ENDPOINT_FILE).delete()
+    File(app.noBackupFilesDir, InstinctPushInbox.FILE).delete()
     shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
     shadowOf(app.packageManager).installPackage(PackageInfo().apply {
       packageName = "com.whatsapp"; applicationInfo = ApplicationInfo().apply { packageName = "com.whatsapp" }
@@ -372,4 +382,187 @@ class InstinctDoorbellFlowTest {
     InstinctDoorbell.register(app)
     assertNotEquals(first, toDistributor.last().getStringExtra(UnifiedPush.EXTRA_TOKEN))
   }
+
+  // 1.19.0: receiving is not running
+
+  /** A broadcast as the system delivers it, with a finisher that counts. */
+  private fun deliverAsync(action: String, token: String?, finishes: java.util.concurrent.atomic.AtomicInteger, extras: Intent.() -> Unit = {}) {
+    val intent = Intent(action).apply { token?.let { putExtra(UnifiedPush.EXTRA_TOKEN, it) }; extras() }
+    InstinctDoorbell.onReceive(app, intent) { PushFinisher { finishes.incrementAndGet() } }
+  }
+
+  @Test fun `onReceive only queues, nothing is read, polled or run until the receiving thread runs`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    val queued = mutableListOf<Runnable>()
+    InstinctPushIntake.execute = { queued += it }
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    val finishes = java.util.concurrent.atomic.AtomicInteger()
+    val order = order("#insto poner el volumen al 40 por ciento")
+    deliverAsync(UnifiedPush.ACTION_MESSAGE, token, finishes) { putExtra(UnifiedPush.EXTRA_BYTES_MESSAGE, payload(order)); putExtra(UnifiedPush.EXTRA_ID, "m-q") }
+    assertEquals("not finished yet", 0, finishes.get())
+    assertEquals(0, bell.state().rings)
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertFalse("not acknowledged before it is stored", toDistributor.any { it.action == UnifiedPush.ACTION_MESSAGE_ACK && it.getStringExtra(UnifiedPush.EXTRA_ID) == "m-q" })
+    queued.single().run()
+    assertEquals("finished exactly once", 1, finishes.get())
+    assertTrue(audio.getStreamVolume(AudioManager.STREAM_MUSIC) > 0)
+    assertTrue(toDistributor.any { it.action == UnifiedPush.ACTION_MESSAGE_ACK && it.getStringExtra(UnifiedPush.EXTRA_ID) == "m-q" })
+    assertEquals(0, gets)
+  }
+
+  @Test fun `the main thread is never held while the mailbox is slow`() {
+    val token = register()
+    // Real threads for receiving, dispatching and polling; the sheet answers after 1.5 seconds.
+    InstinctPushIntake.execute = { Thread(it).start() }
+    InstinctPushDispatcher.execute = { Thread(it).start() }
+    InstinctMailbox.background = { Thread(it).start() }
+    val slow = FakeHttp { Thread.sleep(1_500); FakeHttp.Reply(200, """{"ok":true,"ordenes":[]}""") }
+    InstinctMailbox.client = { InstinctMailboxClient(InstinctLogClient(OkHttpClient.Builder().addInterceptor(slow).build())) }
+    val finishes = java.util.concurrent.atomic.AtomicInteger()
+    val started = System.nanoTime()
+    deliverAsync(UnifiedPush.ACTION_MESSAGE, token, finishes)
+    val elapsed = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+    assertTrue("onReceive took $elapsed ms", elapsed < 300)
+    val deadline = System.currentTimeMillis() + 10_000
+    while (finishes.get() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(20)
+    assertEquals("finished once, after the poll", 1, finishes.get())
+    assertTrue("the ring left the inbox once polled", waitFor { InstinctPushDispatcher.inbox(app).size() == 0 })
+  }
+
+  private fun waitFor(condition: () -> Boolean): Boolean {
+    val deadline = System.currentTimeMillis() + 10_000
+    while (!condition() && System.currentTimeMillis() < deadline) Thread.sleep(20)
+    return condition()
+  }
+
+  @Test fun `a saturated receiving queue lets the broadcast go at once and counts it`() {
+    val token = register()
+    InstinctPushIntake.execute = { throw java.util.concurrent.RejectedExecutionException() }
+    val finishes = java.util.concurrent.atomic.AtomicInteger()
+    deliverAsync(UnifiedPush.ACTION_MESSAGE, token, finishes)
+    assertEquals(1, finishes.get())
+    assertEquals(1, bell.state().queueRejected)
+    assertTrue(InstinctDoorbell.diagnosis(app), InstinctDoorbell.diagnosis(app).contains("cola de recepción llena"))
+  }
+
+  @Test fun `finish is called once even when the work throws`() {
+    register()
+    val finishes = java.util.concurrent.atomic.AtomicInteger()
+    InstinctPushIntake.receive(app, { PushFinisher { finishes.incrementAndGet() } }) { error("falla") }
+    assertEquals(1, finishes.get())
+    val once = OnceFinisher { finishes.incrementAndGet() }
+    once.finish(); once.finish()
+    assertEquals(2, finishes.get())
+  }
+
+  @Test fun `an order received before the process died runs after it, once, verified again`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    // The process «dies» right after storing: the dispatcher never runs.
+    InstinctPushDispatcher.execute = { }
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    val order = order("#insto poner el volumen al 40 por ciento")
+    ringWith(token, payload(order))
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(1, InstinctPushDispatcher.inbox(app).size())
+    assertEquals("the rescue job", InstinctPushPolicy.RESCUE_DELAY_MILLIS, drainJobs.last())
+    // A new process: the rescue job drains it.
+    InstinctPushDispatcher.reset()
+    InstinctPushDispatcher.execute = { it.run() }
+    InstinctPushDispatcher.drain(app)
+    assertTrue(audio.getStreamVolume(AudioManager.STREAM_MUSIC) > 0)
+    assertEquals(0, InstinctPushDispatcher.inbox(app).size())
+    assertTrue("the rescue job is cancelled once empty", "drain" in cancelled)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    InstinctPushDispatcher.drain(app)
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
+  }
+
+  @Test fun `an order recovered after its window is refused, not run`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    InstinctPushDispatcher.execute = { }
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringWith(token, payload(order("#insto poner el volumen al 40 por ciento")))
+    wall += 16 * 60_000L
+    InstinctPushDispatcher.reset(); InstinctPushDispatcher.execute = { it.run() }
+    InstinctPushDispatcher.drain(app)
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+  }
+
+  @Test fun `an order recovered with the mailbox turned off meanwhile does nothing`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    InstinctPushDispatcher.execute = { }
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringWith(token, payload(order("#insto poner el volumen al 40 por ciento")))
+    box.setEnabled(false)
+    InstinctPushDispatcher.reset(); InstinctPushDispatcher.execute = { it.run() }
+    InstinctPushDispatcher.drain(app)
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(0, InstinctPushDispatcher.inbox(app).size())
+  }
+
+  @Test fun `an order a dead process claimed is reported as incierta and never repeated`() {
+    register()
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    val order = order("#insto poner el volumen al 40 por ciento")
+    val inbox = InstinctPushDispatcher.inbox(app)
+    val entry = (inbox.add(PushEntry.Kind.ORDER, order, encrypted = true) as InstinctPushInbox.Added.Queued).entry
+    assertTrue(InstinctMailbox.seen(app).claim(order.id))
+    assertTrue(inbox.markClaimed(entry.seq))
+    InstinctPushDispatcher.drain(app)
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals(listOf("incierto"), acks("poner el volumen al 40 por ciento"))
+    assertEquals(1, bell.state().uncertain)
+    assertEquals(0, inbox.size())
+  }
+
+  @Test fun `twenty orders in a burst run once each, without reading the sheet`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    val orders = (1..20).map { order("#insto ver estado") }
+    orders.forEach { ringWith(token, payload(it)) }
+    assertEquals(20, bell.state().directOrders)
+    assertEquals(0, gets)
+    assertEquals(0, InstinctPushDispatcher.inbox(app).size())
+    // The same twenty again, as a distributor that resends: nothing runs.
+    orders.forEach { ringWith(token, payload(it)) }
+    assertEquals(20, bell.state().directOrders)
+    assertEquals(20, bell.state().duplicates)
+  }
+
+  @Test fun `a push and a poll that read the same order at the same time run it once`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    repeat(10) {
+      audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+      InstinctMailbox.gate.reset()
+      val order = order("#insto poner el volumen al 40 por ciento")
+      inbox += order
+      val start = java.util.concurrent.CountDownLatch(1)
+      val poll = Thread { start.await(); InstinctMailbox.poll(app) }
+      val push = Thread { start.await(); ringWith(token, payload(order)) }
+      poll.start(); push.start(); start.countDown(); poll.join(10_000); push.join(10_000)
+      org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      assertEquals("round $it", 1, acks("poner el volumen al 40 por ciento").size)
+      InstinctLog.outbox(app).remove(InstinctLog.outbox(app).batch(500).map { e -> e.id }.toSet())
+    }
+  }
+
+  @Test fun `repeated pushes while an order is running do not run it again`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    val order = order("#insto poner el volumen al 40 por ciento")
+    var nested = 0
+    // While the first copy is being dispatched, two more copies arrive.
+    InstinctPushDispatcher.execute = { task -> task.run(); if (nested++ == 0) { ringWith(token, payload(order)); ringWith(token, payload(order)) } }
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringWith(token, payload(order))
+    assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
+    assertEquals(1, bell.state().directOrders)
+  }
+
 }

@@ -141,7 +141,11 @@ object InstinctMailbox {
     val now = SystemClock.elapsedRealtime()
     if (lastPollAt != 0L && now - lastPollAt < MIN_SPACING_MILLIS) return
     lastPollAt = now
-    background(Runnable { runCatching { poll(app) } })
+    background(Runnable {
+      runCatching { poll(app) }
+      // Pushes left on disk by a process that died (1.19.0): opening Insto dispatches them too.
+      runCatching { if (InstinctPushDispatcher.inbox(app).size() > 0) InstinctPushDispatcher.kick(app) }
+    })
   }
 
   sealed interface Result {

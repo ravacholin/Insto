@@ -89,12 +89,26 @@ data class DoorbellState(
   val directOrders: Int = 0,
   /** Payloads that were not an order, and orders inside the doorbell with a bad signature or out of time. */
   val badPayloads: Int = 0,
+  /** 1.19.0: pushes that repeated an order already taken (by a poll or another push). */
+  val duplicates: Int = 0,
+  /** Broadcasts let go because the receiving queue was full. */
+  val queueRejected: Int = 0,
+  /** Orders claimed by a process that died before handing them over: logged as «incierta», never repeated. */
+  val uncertain: Int = 0,
+  /** Writes that failed (the inbox, the record of seen ids). */
+  val storageFailures: Int = 0,
+  /** Wall-clock millis of the last order of the doorbell that was verified and handed over. */
+  val lastDirectAt: Long? = null,
+  /** The last transport error, in Spanish, without any content; null when none. */
+  val lastError: String? = null,
 ) {
   fun encode(): String = JSONObject().put("confirmed", confirmed).put("informPending", informPending).put("rings", rings).put("ringPolls", ringPolls)
     .put("withOrderConfirmed", withOrderConfirmed).put("directOrders", directOrders).put("badPayloads", badPayloads)
+    .put("duplicates", duplicates).put("queueRejected", queueRejected).put("uncertain", uncertain).put("storageFailures", storageFailures)
     .apply {
       token?.let { put("token", it) }; distributor?.let { put("distributor", it) }; informedAt?.let { put("informedAt", it) }
-      failure?.let { put("failure", it) }; lastRingAt?.let { put("lastRingAt", it) }
+      failure?.let { put("failure", it) }; lastRingAt?.let { put("lastRingAt", it) }; lastDirectAt?.let { put("lastDirectAt", it) }
+      lastError?.let { put("lastError", it) }
     }.toString()
 
   companion object {
@@ -104,7 +118,9 @@ data class DoorbellState(
       DoorbellState(o.optString("token").takeIf(UnifiedPush::validToken), o.optString("distributor").takeIf { it.isNotEmpty() },
         o.optBoolean("confirmed"), o.optLong("informedAt", 0L).takeIf { it > 0 }, o.optBoolean("informPending"),
         o.optString("failure").takeIf { it.isNotEmpty() }, o.optLong("lastRingAt", 0L).takeIf { it > 0 },
-        o.optInt("rings"), o.optInt("ringPolls"), o.optBoolean("withOrderConfirmed"), o.optInt("directOrders"), o.optInt("badPayloads"))
+        o.optInt("rings"), o.optInt("ringPolls"), o.optBoolean("withOrderConfirmed"), o.optInt("directOrders"), o.optInt("badPayloads"),
+        o.optInt("duplicates"), o.optInt("queueRejected"), o.optInt("uncertain"), o.optInt("storageFailures"),
+        o.optLong("lastDirectAt", 0L).takeIf { it > 0 }, o.optString("lastError").takeIf { it.isNotEmpty() }?.take(200))
     }.getOrDefault(DoorbellState())
   }
 }
@@ -279,8 +295,8 @@ object InstinctDoorbellPolicy {
    * the sheet and picks up any other pending one. It respects [InstinctMailboxGate].
    */
   const val FOLLOW_UP_MILLIS = 60_000L
-  /** A ring-triggered poll that has not finished by then lets the broadcast go (it keeps running). */
-  const val POLL_TIMEOUT_MILLIS = 20_000L
+  /** The rescue job waits at most this long for the polls it started (1.19.0). */
+  const val JOB_WAIT_MILLIS = 60_000L
   /** «Probar timbre» waits this long for the ring. */
   const val TEST_WAIT_MILLIS = 30_000L
 
@@ -381,7 +397,10 @@ object InstinctDoorbellText {
    * fails. Never any content: neither the payload nor the order.
    */
   fun diagnosis(state: DoorbellState, distributors: Int, clock: (Long) -> String): String {
-    val counts = "timbres ${state.rings} · sondeos por timbre ${state.ringPolls} · órdenes directas ${state.directOrders} · payload inválido ${state.badPayloads}"
+    val counts = "timbres ${state.rings} · sondeos por timbre ${state.ringPolls} · órdenes directas ${state.directOrders} · payload inválido ${state.badPayloads}" +
+      (if (state.duplicates > 0) " · duplicados descartados ${state.duplicates}" else "") +
+      (if (state.uncertain > 0) " · inciertas ${state.uncertain}" else "") +
+      (state.lastError?.let { " · último error: $it" } ?: "")
     return when {
       distributors == 0 -> "Timbre: sin distribuidor (instalá ntfy) · $counts"
       state.failure != null -> "Timbre: no funciona (motivo: ${state.failure}) · $counts"
