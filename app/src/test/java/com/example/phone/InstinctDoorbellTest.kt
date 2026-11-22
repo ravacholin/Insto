@@ -2,6 +2,7 @@ package com.example.phone
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -69,6 +70,10 @@ class InstinctDoorbellTest {
   @Test fun `the state survives a round trip and a broken file is a fresh one`() {
     val state = DoorbellState("tok", "io.heckel.ntfy", true, 1_790_000_000_000L, false, null, 1_790_000_100_000L, 3, 2)
     assertEquals(state, DoorbellState.decode(state.encode()))
+    val direct = state.copy(withOrderConfirmed = true, directOrders = 5, badPayloads = 2)
+    assertEquals(direct, DoorbellState.decode(direct.encode()))
+    assertEquals("a 1.17.0 file has no counters of 1.18.0", state, DoorbellState.decode(org.json.JSONObject(state.encode())
+      .apply { remove("withOrderConfirmed"); remove("directOrders"); remove("badPayloads") }.toString()))
     assertEquals(DoorbellState(), DoorbellState.decode("{roto"))
     assertFalse("the state file never holds the endpoint", state.encode().contains("ntfy.sh"))
   }
@@ -133,9 +138,89 @@ class InstinctDoorbellTest {
     assertEquals("el script no conoce «probar-timbre»: actualizalo", InstinctDoorbellScript.testFailure(body("""{"ok":true,"accepted":[]}""")))
     assertEquals("el script no tiene el endpoint guardado", InstinctDoorbellScript.testFailure(body("""{"ok":false,"error":"sin-endpoint"}""")))
     assertTrue(InstinctDoorbellScript.informBody("t0ken-largo", endpoint).contains("\"action\":\"timbre\""))
+    // 1.18.0: conOrden always goes; a deletion never asks for the order.
+    assertEquals(true, org.json.JSONObject(InstinctDoorbellScript.informBody("t0ken-largo", endpoint, withOrder = true)).get("conOrden"))
+    assertEquals(false, org.json.JSONObject(InstinctDoorbellScript.informBody("t0ken-largo", endpoint)).get("conOrden"))
+    assertEquals(false, org.json.JSONObject(InstinctDoorbellScript.informBody("t0ken-largo", "", withOrder = true)).get("conOrden"))
+    assertEquals(InstinctDoorbellScript.Answer.Confirmed(true, withOrder = true),
+      InstinctDoorbellScript.parseInform(body("""{"ok":true,"timbre":"guardado","conOrden":true}""")))
+    assertEquals("a 1.17.0 script does not repeat conOrden", InstinctDoorbellScript.Answer.Confirmed(true, withOrder = null),
+      InstinctDoorbellScript.parseInform(body("""{"ok":true,"timbre":"guardado"}""")))
     org.json.JSONObject(InstinctDoorbellScript.testBody("t0ken-largo")).let {
       assertEquals("t0ken-largo", it.getString("token")); assertEquals("probar-timbre", it.getString("action")); assertEquals(2, it.length())
     }
+  }
+
+  // The order inside the doorbell (1.18.0): a strict parser
+
+  private val payloadId = "3b241101-e2bb-4255-8caf-4136c566a962"
+  private val payloadAt = "2026-11-21T09:30:00-03:00"
+  private val payloadSig = "0118c3671f915c0c55cc4364838ce32afcc3ce33e984617ea69b60f2377859df"
+  private fun payload(edit: org.json.JSONObject.() -> Unit = {}): String = org.json.JSONObject().put("v", 1).put("id", payloadId)
+    .put("at", payloadAt).put("lines", org.json.JSONArray(listOf("#insto poner el volumen al 30 por ciento"))).put("sig", payloadSig)
+    .apply(edit).toString()
+  private fun parse(text: String) = InstinctDoorbellPayload.parse(text.toByteArray(Charsets.UTF_8))
+
+  @Test fun `a payload with exactly the signed order parses, as the script writes it`() {
+    val order = parse("""{"v":1,"id":"$payloadId","at":"$payloadAt","lines":["#insto poner el volumen al 30 por ciento","#insto avisarme Hola."],"sig":"$payloadSig"}""")
+    assertEquals(MailboxOrder(payloadId, payloadAt, listOf("#insto poner el volumen al 30 por ciento", "#insto avisarme Hola."), payloadSig), order)
+    assertEquals("three lines of 300 characters", 3, parse(payload { put("lines", org.json.JSONArray(List(3) { "#insto " + "x".repeat(293) })) })!!.lines.size)
+    assertNotNull("upper-case UUID and milliseconds with Z", parse(payload { put("id", payloadId.uppercase()); put("at", "2026-11-21T12:30:00.123Z") }))
+    assertNotNull("whitespace between tokens is JSON", parse(" " + payload() + "\n"))
+    assertNotNull("UTF-8 in a line", parse(payload { put("lines", org.json.JSONArray(listOf("#insto avisarme Bajé el volumen, ¿todo bien?"))) }))
+  }
+
+  @Test fun `anything else is no order, extra or missing keys, other versions, long lines, garbage`() {
+    val refused = listOf(
+      payload { put("extra", 1) } to "an extra key",
+      payload { put("token", "secreto") } to "a token",
+      payload { remove("sig") } to "no signature",
+      payload { put("v", 2) } to "v 2",
+      payload { put("v", "1") } to "v as text",
+      payload { put("v", 1.5) } to "v 1.5",
+      payload { put("id", "no-es-un-uuid") } to "an id that is not a UUID",
+      payload { put("at", "2026-11-21T09:30:00") } to "at without a zone",
+      payload { put("at", " $payloadAt") } to "at with spaces",
+      payload { put("sig", payloadSig.uppercase()) } to "upper-case signature",
+      payload { put("sig", payloadSig.drop(1)) } to "a short signature",
+      payload { put("lines", org.json.JSONArray()) } to "no lines",
+      payload { put("lines", org.json.JSONArray(List(4) { "#insto subir el volumen" })) } to "four lines",
+      payload { put("lines", org.json.JSONArray(listOf("#insto " + "x".repeat(294)))) } to "a line of 301 characters",
+      payload { put("lines", org.json.JSONArray(listOf("#insto a\n#insto b"))) } to "a line break inside a line",
+      payload { put("lines", org.json.JSONArray(listOf(1))) } to "a line that is not text",
+      payload { put("lines", "#insto subir el volumen") } to "lines that are not a list",
+      payload() + "x" to "trailing garbage",
+      "[" + payload() + "]" to "an array",
+      "insto-timbre" to "the plain doorbell",
+      "" to "empty",
+      "{roto" to "broken JSON",
+      "#insto poner el volumen al 100 por ciento" to "a bare order",
+    )
+    refused.forEach { (text, why) -> assertNull(why, parse(text)) }
+    assertNull(InstinctDoorbellPayload.parse(null))
+    assertNull("not UTF-8", InstinctDoorbellPayload.parse(byteArrayOf(0x7b, 0xff.toByte(), 0x7d)))
+    assertNull("over 4096 bytes", InstinctDoorbellPayload.parse((payload() + " ".repeat(4_097)).toByteArray()))
+  }
+
+  @Test fun `a message hands over the parsed order, and counts only real garbage as malformed`() {
+    val order = InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, id = "m-1", payload = payload().toByteArray())
+    assertEquals(InstinctDoorbellProtocol.Action.Ring("m-1", parse(payload())), order)
+    assertEquals("the plain doorbell is not malformed", InstinctDoorbellProtocol.Action.Ring(null),
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, payload = "insto-timbre".toByteArray()))
+    assertEquals(InstinctDoorbellProtocol.Action.Ring(null, malformed = true),
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, payload = payload { put("v", 2) }.toByteArray()))
+    assertEquals("another token, even with a valid order, is ignored", InstinctDoorbellProtocol.Action.Ignore,
+      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "otro", registered, payload = payload().toByteArray()))
+  }
+
+  @Test fun `the catalog says nothing changes for Instinct when the order travels in the doorbell`() {
+    val log = InstinctCatalogLog("https://script.google.com/macros/s/AKfycbx-ejemplo_123456/exec", "token-largo-de-prueba")
+    val direct = InstinctProtocolCatalog.text(emptyList(), log = log, mailbox = log, doorbell = true, doorbellDirect = true)
+    assertTrue(direct.contains(InstinctDoorbellText.CATALOG_DIRECT_LINE))
+    assertFalse(InstinctProtocolCatalog.text(emptyList(), log = log, mailbox = log, doorbell = true).contains(InstinctDoorbellText.CATALOG_DIRECT_LINE))
+    assertFalse("without the doorbell active, no line", InstinctProtocolCatalog.text(emptyList(), log = log, mailbox = log, doorbellDirect = true)
+      .contains(InstinctDoorbellText.CATALOG_DIRECT_LINE))
+    assertFalse(direct.contains("ntfy"))
   }
 
   // Never the endpoint where it can travel
@@ -143,9 +228,11 @@ class InstinctDoorbellTest {
   @Test fun `the diagnosis and the status never carry the endpoint`() {
     val clock: (Long) -> String = { "09:30" }
     val rang = registered.copy(lastRingAt = 1L, rings = 4, ringPolls = 3, informedAt = 1L)
-    assertEquals("Timbre: último 09:30 · timbres 4 · sondeos por timbre 3", InstinctDoorbellText.diagnosis(rang, 1, clock))
-    assertEquals("Timbre: sin distribuidor (instalá ntfy) · timbres 0 · sondeos por timbre 0", InstinctDoorbellText.diagnosis(DoorbellState(), 0, clock))
-    assertEquals("Timbre: no funciona (motivo: el script no confirmó el endpoint) · timbres 0 · sondeos por timbre 0",
+    assertEquals("Timbre: último 09:30 · timbres 4 · sondeos por timbre 3 · órdenes directas 0 · payload inválido 0", InstinctDoorbellText.diagnosis(rang, 1, clock))
+    assertEquals("Timbre: último 09:30 · timbres 4 · sondeos por timbre 3 · órdenes directas 2 · payload inválido 1",
+      InstinctDoorbellText.diagnosis(rang.copy(directOrders = 2, badPayloads = 1), 1, clock))
+    assertEquals("Timbre: sin distribuidor (instalá ntfy) · timbres 0 · sondeos por timbre 0 · órdenes directas 0 · payload inválido 0", InstinctDoorbellText.diagnosis(DoorbellState(), 0, clock))
+    assertEquals("Timbre: no funciona (motivo: el script no confirmó el endpoint) · timbres 0 · sondeos por timbre 0 · órdenes directas 0 · payload inválido 0",
       InstinctDoorbellText.diagnosis(registered.copy(failure = InstinctDoorbellScript.NOT_CONFIRMED), 1, clock))
     val status = InstinctDoorbellText.status(endpoint, rang, clock)
     assertEquals("Endpoint ••••" + endpoint.takeLast(6) + " · avisado al script 09:30", status)

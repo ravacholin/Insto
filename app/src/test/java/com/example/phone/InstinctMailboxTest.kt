@@ -125,6 +125,52 @@ class InstinctMailboxTest {
     assertTrue(file.readText().contains(id))
   }
 
+  // One claim per id (1.18.0): the doorbell and the poll never run the same order twice
+
+  @Test fun `claim takes an id once, on disk, also across instances on the same file`() {
+    val file = File(dir(), InstinctMailboxSeen.FILE)
+    val a = InstinctMailboxSeen(file) { atMillis }
+    val b = InstinctMailboxSeen(file) { atMillis }
+    assertTrue(a.claim(id))
+    assertFalse("the same id again", a.claim(id))
+    assertFalse("another instance on the same file", b.claim(id.uppercase()))
+    assertTrue(InstinctMailboxSeen(file) { atMillis }.contains(id))
+    assertEquals(setOf("00000000-0000-4000-8000-000000000001"),
+      a.claimAll(listOf(id, "00000000-0000-4000-8000-000000000001")))
+  }
+
+  @Test fun `a claim and a poll racing for the same order, exactly one runs it`() {
+    repeat(50) { round ->
+      val file = File(dir(), InstinctMailboxSeen.FILE)
+      val seen = InstinctMailboxSeen(file) { atMillis }
+      val order = signed(id = java.util.UUID.randomUUID().toString())
+      val start = java.util.concurrent.CountDownLatch(1)
+      val runs = java.util.concurrent.atomic.AtomicInteger()
+      val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+      val tasks = listOf(
+        { start.await(); if (seen.claim(order.id)) runs.incrementAndGet() },
+        { start.await(); runs.addAndGet(InstinctMailboxPoll.process(listOf(order), key, atMillis, seen).valid.size) },
+        // Another instance, as another entry point would have.
+        { start.await(); if (InstinctMailboxSeen(file) { atMillis }.claim(order.id)) runs.incrementAndGet() },
+        { start.await(); runs.addAndGet(InstinctMailboxPoll.process(listOf(order), key, atMillis, InstinctMailboxSeen(file) { atMillis }).valid.size) },
+      ).map { pool.submit(it) }
+      start.countDown()
+      tasks.forEach { it.get() }
+      pool.shutdown()
+      assertEquals("round $round", 1, runs.get())
+    }
+  }
+
+  @Test fun `an order the doorbell claimed first is not returned by the poll, but is still taken`() {
+    val seen = InstinctMailboxSeen(File(dir(), "c.json")) { atMillis }
+    val order = signed()
+    assertTrue(seen.claim(order.id))
+    val outcome = InstinctMailboxPoll.process(listOf(order), key, atMillis, seen)
+    assertTrue(outcome.valid.isEmpty())
+    assertEquals(1, outcome.repeated)
+    assertEquals(listOf(order.id), outcome.taken)
+  }
+
   @Test fun `at most 10 orders per poll, every id read is taken and invalid ones are only counted`() {
     val orders = (0 until 12).map { i -> signed(id = "3b241101-e2bb-4255-8caf-4136c566a9%02d".format(i)) } +
       listOf(signed().copy(sig = "f".repeat(64)))

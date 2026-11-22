@@ -462,6 +462,8 @@ private fun InstinctDoorbellSection(revision: Int, onChange: () -> Unit) {
   val current = remember(revision) { doorbell.distributor(context) }
   val blocker = remember(revision) { doorbell.blocker(context) }
   val status = remember(revision) { doorbell.status(context) }
+  val withOrder = remember(revision) { settings.withOrder() }
+  val withOrderStatus = remember(revision) { doorbell.withOrderStatus(context) }
   var notice by remember { mutableStateOf<String?>(null) }
   var busy by remember { mutableStateOf(false) }
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_doorbell")) {
@@ -481,6 +483,12 @@ private fun InstinctDoorbellSection(revision: Int, onChange: () -> Unit) {
     }
     if (enabled) {
       SettingsDescription(status, modifier = Modifier.testTag("instinct_doorbell_status"))
+      // 1.18.0: the signed order inside the doorbell. Off by default; the script hears it like the endpoint.
+      Column(Modifier.testTag("instinct_doorbell_with_order")) {
+        SettingsSwitch(com.example.phone.InstinctDoorbellText.WITH_ORDER_LABEL, withOrder,
+          { doorbell.setWithOrder(context, it); onChange() }, com.example.phone.InstinctDoorbellText.WITH_ORDER_DESCRIPTION)
+      }
+      if (withOrder) SettingsDescription(withOrderStatus, modifier = Modifier.testTag("instinct_doorbell_with_order_status"))
       OutlinedButton(onClick = {
         busy = true; notice = "Pidiéndole al script que toque el timbre…"
         scope.launch {

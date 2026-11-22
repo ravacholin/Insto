@@ -114,22 +114,49 @@ object InstinctMailboxSignature {
 
 /**
  * The ids already taken, kept [RETENTION_MILLIS] in one file written atomically: the dedupe survives a restart.
- * [clock] is wall-clock millis.
+ * [clock] is wall-clock millis. Every instance on the same file shares one lock (1.18.0), so the poll and an order
+ * that came inside the doorbell can never both take the same id: [claim] checks and marks in one section.
  */
 class InstinctMailboxSeen(private val file: File, private val clock: () -> Long = System::currentTimeMillis) {
-  @Synchronized fun read(): Map<String, Long> = if (!file.exists()) emptyMap() else runCatching {
-    val o = JSONObject(file.readText().also { require(it.length <= 262_144) })
-    o.keys().asSequence().associateWith { o.getLong(it) }
-  }.getOrDefault(emptyMap())
+  private val lock: Any = synchronized(LOCKS) { LOCKS.getOrPut(file.absolutePath) { Any() } }
 
-  @Synchronized fun contains(id: String): Boolean = id.lowercase() in fresh(read())
+  fun read(): Map<String, Long> = synchronized(lock) {
+    if (!file.exists()) emptyMap() else runCatching {
+      val o = JSONObject(file.readText().also { require(it.length <= 262_144) })
+      o.keys().asSequence().associateWith { o.getLong(it) }
+    }.getOrDefault(emptyMap())
+  }
+
+  fun contains(id: String): Boolean = synchronized(lock) { id.lowercase() in fresh(read()) }
 
   /** Marks [ids] seen on disk. Returns only after the write, so a dispatch after it never repeats an order. */
-  @Synchronized fun markAll(ids: Collection<String>) {
-    if (ids.isEmpty()) return
-    val now = clock()
+  fun markAll(ids: Collection<String>) = synchronized(lock) {
+    if (ids.isEmpty()) return@synchronized
+    write(fresh(read()).toMutableMap().apply { val now = clock(); ids.forEach { this[it.lowercase()] = now } })
+  }
+
+  /**
+   * Takes [id] if nobody took it: checks and marks it on disk in the same section. True only for the one caller that
+   * wins; whoever gets false must not run the order. A write that fails takes nothing (false): an order never runs
+   * without its record.
+   */
+  fun claim(id: String): Boolean = runCatching { id.lowercase() in claimAll(listOf(id)) }.getOrDefault(false)
+
+  /**
+   * [claim] for several ids at once, with one write: the ids (lowercase) this call took. Throws when the write fails,
+   * like [markAll]: the poll then stops before marking anything as taken in the sheet, so nothing is lost.
+   */
+  fun claimAll(ids: Collection<String>): Set<String> = synchronized(lock) {
     val all = fresh(read()).toMutableMap()
-    ids.forEach { all[it.lowercase()] = now }
+    val won = ids.map { it.lowercase() }.filterTo(LinkedHashSet()) { it !in all }
+    if (won.isEmpty()) return@synchronized emptySet()
+    val now = clock()
+    won.forEach { all[it] = now }
+    write(all)
+    won
+  }
+
+  private fun write(all: Map<String, Long>) {
     val kept = all.entries.sortedByDescending { it.value }.take(CAPACITY).associate { it.key to it.value }
     writeAtomically(file, JSONObject(kept).toString(), "insto-mailbox-seen-")
   }
@@ -143,6 +170,8 @@ class InstinctMailboxSeen(private val file: File, private val clock: () -> Long 
     const val FILE = "instinct-mailbox-seen.json"
     const val RETENTION_MILLIS = 48 * 60 * 60_000L
     private const val CAPACITY = 2_000
+    /** One lock per file, whoever holds an instance. */
+    private val LOCKS = HashMap<String, Any>()
   }
 }
 
@@ -161,23 +190,26 @@ object InstinctMailboxPoll {
   )
 
   /**
-   * At most [MAX_ORDERS] orders. Each is verified; every valid one is marked seen on disk **before** this returns,
-   * so dispatching happens only after the record exists. Two copies of one id in the same poll count once.
+   * At most [MAX_ORDERS] orders. Each is verified; the valid ones are claimed on disk ([InstinctMailboxSeen.claimAll])
+   * **before** this returns, so dispatching happens only after the record exists. One that an order inside the doorbell
+   * claimed first (1.18.0) counts as repeated and is not returned. Two copies of one id in the same poll count once.
    */
   fun process(orders: List<MailboxOrder>, key: String, now: Long, seen: InstinctMailboxSeen): Outcome {
     val batch = orders.take(MAX_ORDERS)
-    val valid = ArrayList<MailboxOrder>()
+    val verified = ArrayList<MailboxOrder>()
     var bad = 0; var expired = 0; var repeated = 0
     val known = HashSet<String>()
     for (order in batch) {
       when (InstinctMailboxSignature.verify(key, order, now) { it in known || seen.contains(it) }) {
-        InstinctMailboxSignature.Verdict.VALID -> { valid += order; known += order.id.lowercase() }
+        InstinctMailboxSignature.Verdict.VALID -> { verified += order; known += order.id.lowercase() }
         InstinctMailboxSignature.Verdict.BAD_SIGNATURE -> bad++
         InstinctMailboxSignature.Verdict.EXPIRED -> expired++
         InstinctMailboxSignature.Verdict.REPEATED -> repeated++
       }
     }
-    seen.markAll(valid.map { it.id })
+    val won = if (verified.isEmpty()) emptySet() else seen.claimAll(verified.map { it.id })
+    val valid = verified.filter { it.id.lowercase() in won }
+    repeated += verified.size - valid.size
     return Outcome(valid, bad, expired, repeated, batch.map { it.id }.filter { it.isNotBlank() }.distinct())
   }
 
@@ -241,8 +273,11 @@ object InstinctMailboxCatalog {
   const val EXAMPLE_AT = "2026-11-21T09:30:00-03:00"
   val EXAMPLE_LINES = listOf("#insto poner el volumen al 30 por ciento", "#insto avisarme Te bajé el volumen para la clase.")
 
-  /** [doorbell] (1.17.0): the doorbell is on, so Instinct does not need to announce an order through WhatsApp. */
-  fun text(log: InstinctCatalogLog?, forChat: Boolean, doorbell: Boolean = false): String = buildString {
+  /**
+   * [doorbell] (1.17.0): the doorbell is on, so Instinct does not need to announce an order through WhatsApp.
+   * [doorbellDirect] (1.18.0): the order also travels inside the doorbell; nothing changes for Instinct.
+   */
+  fun text(log: InstinctCatalogLog?, forChat: Boolean, doorbell: Boolean = false, doorbellDirect: Boolean = false): String = buildString {
     fun example(line: String) = (if (forChat) InstinctProtocolCatalog.CHAT_MARK else "") + line
     appendLine("Buzón firmado (además de WhatsApp):")
     appendLine("También podés mandarle órdenes a Insto por la misma planilla, sin escribir en el chat. Cada orden va firmada con una clave que tenés vos y Insto; la planilla no la conoce. Sin firma válida, Insto la descarta en silencio.")
@@ -261,6 +296,7 @@ object InstinctMailboxCatalog {
     appendLine("La clave nunca va en este texto: la persona te la pasa aparte.")
     appendLine("Reglas: un UUID nuevo por orden (uno repetido se descarta); at con no más de 15 minutos de antigüedad ni 2 minutos en el futuro; Insto lee como máximo ${InstinctMailboxPoll.MAX_ORDERS} órdenes por vez. Revisa el buzón cada pocos minutos (Android puede demorarlo) y apenas llega un mensaje tuyo por WhatsApp.")
     if (doorbell) appendLine(InstinctDoorbellText.CATALOG_LINE)
+    if (doorbell && doorbellDirect) appendLine(InstinctDoorbellText.CATALOG_DIRECT_LINE)
     appendLine("Los resultados de las órdenes del buzón van siempre a la bitácora; su mensaje_id sale del SHA-256 del id de la orden.")
     appendLine("Solo por el buzón podés usar \"${InstinctProposalProtocol.PREFIX} ${InstinctNotice.PHRASE} <texto>\": una notificación de Insto para la persona, de 1 a ${InstinctNotice.MAX_CHARS} caracteres, texto plano, como máximo ${InstinctNotice.PER_HOUR} por hora. No es un mensaje a nadie más. Desde WhatsApp se rechaza.")
     append("Pseudocódigo: cadena = \"\\n\".join([\"insto-v4\", id, at] + lineas); sig = hmac_sha256(clave.utf8, cadena.utf8).hex()")

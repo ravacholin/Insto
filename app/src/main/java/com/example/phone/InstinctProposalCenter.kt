@@ -533,8 +533,10 @@ object InstinctProposalCenter {
     val mailbox = if (!InstinctMailboxSettings(context).enabled()) null
       else if (forChat) InstinctCatalogLog.HIDDEN
       else InstinctLogSettings(context).let { InstinctCatalogLog(it.url(), it.token()) }
+    val doorbell = mailbox != null && InstinctDoorbell.active(context)
     return InstinctProtocolCatalog.text(InstinctRoutineGrants(context).access().enabledNames(), forChat, log,
-      InstinctAutonomySettings(context).policy(), mailbox, doorbell = mailbox != null && InstinctDoorbell.active(context))
+      InstinctAutonomySettings(context).policy(), mailbox, doorbell = doorbell,
+      doorbellDirect = doorbell && InstinctDoorbell.settings(context).withOrder())
   }
 
   /**
