@@ -230,6 +230,12 @@ object ExecutionRecoveryPolicy {
   sealed interface Action {
     /** Nothing touched the phone yet and it is still in time: validated again and continued. */
     data object Resume : Action
+    /** Read the state back, never run anything: an interrupted set, or an action that returned but was not checked. */
+    data object Verify : Action
+    /** A confirmation still in its time: offered again, still waiting for the person. */
+    data object RestoreWaiting : Action
+    /** A scheduled row: compared with what the scheduler still holds. */
+    data object Reconcile : Action
     data class Settle(val state: ExecutionState, val reason: String) : Action
     data object Leave : Action
   }
@@ -237,17 +243,44 @@ object ExecutionRecoveryPolicy {
   const val RECOVERED = "(recuperada tras reiniciarse Insto)"
   const val LAPSED = "Insto se cerró antes de ejecutarla y ya pasó su plazo; no se ejecutó."
   const val INTERRUPTED = "Insto se cerró mientras la ejecutaba; puede haberse hecho o no. No se repite: revisalo."
+  const val WAIT_LAPSED = "venció sin que se confirmara; no se ejecutó."
+  const val READ_INTERRUPTED = "se interrumpió una consulta; pedila de nuevo."
+  const val SATISFIED = "el estado pedido se cumple; no se puede probar que lo produjo esta ejecución."
+  const val NOT_SCHEDULED = "ya no está programada (se canceló o se apagó «Recibir órdenes»)."
 
-  fun decide(row: ExecutionRecord, now: Long): Action = when (row.state) {
+  /** [effect] is the effect of the row's command, when it is known (it is stored when the dispatch begins). */
+  fun decide(row: ExecutionRecord, now: Long, effect: ActionEffect? = null): Action = when (row.state) {
     ExecutionState.RECEIVED, ExecutionState.VALIDATED, ExecutionState.READY ->
       if (inTime(row, now)) Action.Resume else Action.Settle(ExecutionState.EXPIRED, LAPSED)
-    ExecutionState.DISPATCHING, ExecutionState.VERIFYING -> Action.Settle(ExecutionState.UNCERTAIN, INTERRUPTED)
+    // Maybe it touched the phone: never again. A set can be read back; anything else stays uncertain.
+    ExecutionState.DISPATCHING -> when (effect) {
+      ActionEffect.IDEMPOTENT_SET -> Action.Verify
+      ActionEffect.READ_ONLY -> Action.Settle(ExecutionState.FAILED, READ_INTERRUPTED)
+      else -> Action.Settle(ExecutionState.UNCERTAIN, INTERRUPTED)
+    }
+    // It returned and only the check was missing: repeating a read is always safe.
+    ExecutionState.VERIFYING -> Action.Verify
+    ExecutionState.WAITING ->
+      if (now - row.updatedAt in 0 until ExecutionJournalPolicy.WAITING_TTL_MILLIS) Action.RestoreWaiting
+      else Action.Settle(ExecutionState.EXPIRED, WAIT_LAPSED)
+    ExecutionState.SCHEDULED -> Action.Reconcile
     else -> Action.Leave
   }
 
   /** Within its own deadline (a signed order's window) and the resume window since it arrived. */
   fun inTime(row: ExecutionRecord, now: Long): Boolean =
     now - row.receivedAt in 0..ExecutionJournalPolicy.RESUME_WINDOW_MILLIS && (row.deadline == null || now <= row.deadline)
+
+  /**
+   * After a read-back: an interrupted dispatch whose state holds is «satisfied», never «caused»; one that does not hold
+   * stays uncertain (it may have run and been changed back). An action that had returned and is not observable was
+   * handed off.
+   */
+  fun afterVerify(row: ExecutionRecord, verdict: OutcomeVerdict): ExecutionState = when {
+    verdict == OutcomeVerdict.VERIFIED -> ExecutionState.VERIFIED
+    row.state == ExecutionState.VERIFYING && verdict == OutcomeVerdict.NOT_OBSERVABLE -> ExecutionState.HANDED_OFF
+    else -> ExecutionState.UNCERTAIN
+  }
 
   /** What the log hears for a row recovery ends. */
   fun ack(state: ExecutionState): AckKind? = when (state) {

@@ -158,5 +158,89 @@ se ejecuta. Los estados terminales nunca se reejecutan.
 - Una entrada `claimed` de `instinct-push-inbox.json` sin fila en el diario (heredada de 1.19.0) se registra como
   `UNCERTAIN` y se informa `incierta` una sola vez; nunca se ejecuta.
 
-Los detalles de verificación, recuperación, autonomía con pantalla bloqueada y backup están en las secciones
-siguientes, que se completan en cada fase.
+## 7. Verificación de resultados (fase 2)
+
+`ActionOutcomeVerifier` lee el teléfono antes y después de cada acción y `ActionOutcomeRules` decide:
+
+| Veredicto | Significa | Estado del diario | Acuse |
+| --- | --- | --- | --- |
+| `VERIFIED` | se observó el estado pedido | `VERIFIED` | `ok`, «Verificado: …» |
+| `NOT_ACHIEVED` | evidencia de que no se alcanzó | `FAILED` | `error`, «No se logró: …» |
+| `NOT_OBSERVABLE` | no hay forma confiable de comprobarlo | `HANDED_OFF` | `ok`, «Entregado; Insto no puede comprobar el resultado final.» |
+| `INDETERMINATE` | evidencia incompleta o contradictoria | `UNCERTAIN` | `incierto` |
+
+`AckKind` no cambia: un traspaso sigue siendo `ok`, como en 1.19.0, y el texto lo distingue.
+
+Atribución, para no adjudicarle a Insto lo que pudo hacer la persona u otra app:
+
+- `CAUSED`: se leyó antes y después, y cambió por esta ejecución.
+- `ALREADY`: ya estaba en el estado pedido antes de ejecutarla.
+- `SATISFIED`: el estado se cumple ahora, pero no hay lectura previa (panel, recuperación): no se puede probar que la
+  produjo esta ejecución.
+
+### Matriz de acciones verificables
+
+| Acción | Qué se lee | Verificación |
+| --- | --- | --- |
+| Volumen a un porcentaje | `AudioManager` `STREAM_MUSIC`, índice discreto | exacto: `max × % / 100` (la misma cuenta que el ejecutor); un tope de Android (límite de audición) es `NOT_ACHIEVED` |
+| Subir / bajar volumen | índice antes y después | cambió en el sentido pedido; en el tope, `ALREADY` |
+| Silencio, vibración, sonido normal | `ringerMode` efectivo | igualdad |
+| No molestar | `currentInterruptionFilter` efectivo | activo = cualquier filtro salvo «todas» |
+| Linterna | `CameraManager.TorchCallback` | solo si la cámara ya lo informó; si no, `NOT_OBSERVABLE` |
+| Reproducir / pausar | `MediaSession` activa (requiere acceso a notificaciones) | si la sesión ya informa el estado; si no, entregada |
+| Siguiente / anterior | — | `NOT_OBSERVABLE` |
+| Modo temporal | el lease de Insto y el valor actual | aplicado = valor actual igual al aplicado |
+| Restauración del modo temporal | valor actual frente al original | registrada como ejecución propia (`RESTORE`) |
+| Alarma, temporizador, calendario, búsquedas, abrir apps | — | `NOT_OBSERVABLE`: otra app aceptó el pedido, nada más |
+| Consultas (batería, «ver …») | — | la respuesta es lo pedido |
+
+En el hilo principal nunca se espera: lo que Android todavía no informó cuenta como no observable.
+
+## 8. Recuperación (fase 3)
+
+`InstinctExecutionRecoveryManager` corre dentro de lo que ya existía: el job de vaciado del timbre (`KIND_DRAIN`), el
+receptor de arranque y actualización y la apertura de Insto (`InstinctMailbox.pollSoon`). No hay otro servicio, ni
+sondeo, ni wake lock.
+
+Una fila no terminal de **otro proceso** (el campo `owner` guarda un id aleatorio por proceso) quedó de un proceso que
+murió. La recuperación la adopta con una escritura condicional (dos recuperaciones nunca actúan sobre la misma fila) y
+decide con `ExecutionRecoveryPolicy`:
+
+| Estado encontrado | Clase de acción | Qué hace |
+| --- | --- | --- |
+| `RECEIVED`, `VALIDATED`, `READY` | cualquiera | dentro de la ventana (15 min y la vigencia de la firma): revalida con la configuración actual y continúa; fuera: `EXPIRED` |
+| `WAITING` | cualquiera | dentro de los 10 min originales: vuelve a ofrecerla **esperando confirmación** (nunca corre sola); fuera: `EXPIRED` |
+| `SCHEDULED` | cualquiera | si el programador ya no tiene su serie: termina como su disparo único o `CANCELLED` (sin otro mensaje) |
+| `DISPATCHING` | `IDEMPOTENT_SET` | relee: si el estado se cumple, `VERIFIED` con atribución `SATISFIED`; si no, `UNCERTAIN` |
+| `DISPATCHING` | `NON_IDEMPOTENT`, `EXTERNAL_HANDOFF` | `UNCERTAIN`, nunca se repite |
+| `DISPATCHING` | `READ_ONLY` | `FAILED` («pedila de nuevo») |
+| `VERIFYING` | cualquiera | solo repite la lectura |
+| terminal | — | nada |
+
+Clases: `READ_ONLY` (consultas), `IDEMPOTENT_SET` (volumen a un porcentaje, linterna, silencio, vibración, No
+molestar), `NON_IDEMPOTENT` (subir/bajar, modo temporal, rutinas), `EXTERNAL_HANDOFF` (todo lo que entrega a otra app).
+
+Cada fila que la recuperación termina se informa **una vez** a la bitácora con «(recuperada tras reiniciarse Insto)»,
+y solo si no había salido ya un acuse para ella (`reported`). El transporte no informa nada de una orden que tiene
+filas: si la cola push encuentra una entrada reclamada por un proceso muerto, consulta el diario; solo una entrada
+heredada de 1.19.0 sin filas se informa `incierta` (y queda en el diario como `UNCERTAIN`, transporte `LEGACY`).
+
+### Reinicios y restricciones reales
+
+| Situación | Qué pasa |
+| --- | --- |
+| Muerte normal del proceso | el siguiente push, job o alarma arranca un proceso nuevo; la recuperación corre en el vaciado |
+| Reinicio del teléfono | `BOOT_COMPLETED`: el receptor de la bitácora programa el vaciado; el programador rearma sus alarmas |
+| Actualización de Insto | `MY_PACKAGE_REPLACED`: igual que el arranque |
+| Error de almacenamiento | sin diario no se reclama ni se ejecuta; la orden queda en la planilla o en la cola push para el próximo intento |
+| Pérdida de red | lo recibido ya está en disco; los acuses esperan en la bandeja de la bitácora (job con red) |
+| Fallo de la bitácora | no detiene ninguna orden; la bandeja reintenta |
+| Reinicio del distribuidor push | la biblioteca registra de nuevo; el sondeo de respaldo cubre el hueco |
+| Force-stop (persona o sistema) | Android no entrega nada hasta abrir Insto; al abrirlo, la recuperación corre |
+| Arranque en frío sin preferencias | la orden queda `RECEIVED` y el vaciado la reanuda (antes se perdía) |
+
+### Modo temporal
+
+`InstoApplication` ya no quita la propiedad del modo temporal en cada proceso nuevo: solo la quita si el valor actual
+difiere del aplicado (un cambio manual evidente). Al vencer, restaurar sigue exigiendo que el valor sea exactamente el
+aplicado. El reinicio del teléfono sigue siendo conservador (pierde la propiedad), como en 1.19.0.

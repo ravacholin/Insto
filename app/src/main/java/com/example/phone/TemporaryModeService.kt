@@ -35,7 +35,7 @@ class TemporaryModeService:Service() {
  }
  override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
   if(intent?.action=="END"){runCatching{manager.end(force=true)};stopSelf();return START_NOT_STICKY}
-  if(intent==null)manager.loseOwnership()
+  if(intent==null)manager.markUnobserved()
   return START_STICKY
  }
  override fun onDestroy(){unregisterReceiver(changeReceiver);contentResolver.unregisterContentObserver(observer);super.onDestroy()}

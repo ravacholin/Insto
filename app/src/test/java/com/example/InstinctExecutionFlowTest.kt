@@ -415,4 +415,140 @@ class InstinctExecutionFlowTest {
     assertTrue("$row ${row.reason}", row.state == ExecutionState.HANDED_OFF || row.state == ExecutionState.FAILED)
     assertNotEquals(ExecutionState.VERIFIED, row.state)
   }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Recovery (fase 3)
+  // ---------------------------------------------------------------------------------------------------------------
+
+  /** A row a dead process left in [state], with its command stored as a dispatch would. */
+  private fun leftBy(line: String, state: ExecutionState, command: PhoneCommand? = null): ExecutionRecord {
+    val o = order("#insto $line")
+    claimedByDeadProcess(o)
+    val row = journal.forMessage(o.id).single()
+    InstinctExecutionJournal.owner = "proceso-muerto"
+    if (state == ExecutionState.DISPATCHING || state == ExecutionState.VERIFYING) {
+      assertTrue(journal.beginDispatch(row.executionId, command?.let { PhoneCommandCodec.encode(it).toString() }))
+      if (state == ExecutionState.VERIFYING) assertTrue(journal.transition(row.executionId, ExecutionState.VERIFYING))
+    } else assertTrue(journal.transition(row.executionId, state, reason = "la persona pide confirmación para volumen"))
+    InstinctExecutionJournal.owner = live
+    return journal.get(row.executionId)!!
+  }
+
+  @Test fun `a confirmation a dead process left is offered again, still waiting, and never runs by itself`() {
+    val row = leftBy("poner el volumen al 40 por ciento", ExecutionState.WAITING)
+    InstinctExecutionRecoveryManager.recover(app)
+    assertEquals(0, volume())
+    val proposal = InstinctProposalCenter.book.pending().single()
+    assertEquals(row.executionId, proposal.executionId)
+    assertEquals(ExecutionState.WAITING, journal.get(row.executionId)!!.state)
+    // The person confirms it: it runs once and the log hears the outcome.
+    InstinctProposalCenter.claim(app, proposal.id, proposal.token, fromNotification = true).let { claim ->
+      assertTrue(claim is ProposalBook.Claim.Granted)
+      val result = PhoneActionExecutor(app).execute(proposal.command)
+      InstinctProposalCenter.report(app, proposal, result)
+    }
+    assertEquals(max() * 40 / 100, volume())
+    assertEquals(ExecutionState.VERIFIED, journal.get(row.executionId)!!.state)
+    assertEquals(ExecutionAttribution.SATISFIED, journal.get(row.executionId)!!.attribution)
+    assertTrue(events().any { it.kind == "ok" })
+  }
+
+  @Test fun `a confirmation past its time expires, is said once and is not offered`() {
+    val row = leftBy("poner el volumen al 40 por ciento", ExecutionState.WAITING)
+    wall += ProposalBook.TTL_MILLIS + 1
+    InstinctExecutionRecoveryManager.recover(app)
+    InstinctExecutionRecoveryManager.recover(app)
+    assertTrue(InstinctProposalCenter.book.pending().isEmpty())
+    assertEquals(ExecutionState.EXPIRED, journal.get(row.executionId)!!.state)
+    assertEquals(1, events().count { it.kind == "vencida" })
+  }
+
+  @Test fun `an interrupted volume set whose level holds is verified as satisfied, never caused, and not run again`() {
+    val command = PhoneCommand.Volume(VolumeOp.SET, 40)
+    val row = leftBy("poner el volumen al 40 por ciento", ExecutionState.DISPATCHING, command)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, max() * 40 / 100, 0)
+    InstinctExecutionRecoveryManager.recover(app)
+    val after = journal.get(row.executionId)!!
+    assertEquals(ExecutionState.VERIFIED, after.state)
+    assertEquals(ExecutionAttribution.SATISFIED, after.attribution)
+    assertEquals(1, events().count { it.kind == "ok" && it.detail.contains("recuperada") })
+  }
+
+  @Test fun `an interrupted volume set whose level does not hold stays uncertain and is not run again`() {
+    val row = leftBy("poner el volumen al 40 por ciento", ExecutionState.DISPATCHING, PhoneCommand.Volume(VolumeOp.SET, 40))
+    InstinctExecutionRecoveryManager.recover(app)
+    assertEquals(0, volume())
+    assertEquals(ExecutionState.UNCERTAIN, journal.get(row.executionId)!!.state)
+  }
+
+  @Test fun `interrupted during verification - only the read is repeated`() {
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, max() * 40 / 100, 0)
+    val row = leftBy("poner el volumen al 40 por ciento", ExecutionState.VERIFYING, PhoneCommand.Volume(VolumeOp.SET, 40))
+    InstinctExecutionRecoveryManager.recover(app)
+    assertEquals(ExecutionState.VERIFIED, journal.get(row.executionId)!!.state)
+    val alarm = leftBy("poner una alarma a las 7", ExecutionState.VERIFYING, PhoneCommand.Alarm(7, 0))
+    InstinctExecutionRecoveryManager.recover(app)
+    assertEquals(ExecutionState.HANDED_OFF, journal.get(alarm.executionId)!!.state)
+  }
+
+  @Test fun `a scheduled row whose series the scheduler no longer holds is cancelled without a second message`() {
+    val o = order("#insto poner el volumen al 40 por ciento")
+    claimedByDeadProcess(o)
+    val row = journal.forMessage(o.id).single()
+    assertTrue(journal.transition(row.executionId, ExecutionState.SCHEDULED, occurrence = "serie-que-ya-no-existe"))
+    InstinctExecutionRecoveryManager.recover(app)
+    assertEquals(ExecutionState.CANCELLED, journal.get(row.executionId)!!.state)
+    assertTrue(events().isEmpty())
+  }
+
+  @Test fun `a doorbell entry a dead process claimed with its rows is left to the journal - one outcome, not two`() {
+    val o = order("#insto poner el volumen al 40 por ciento")
+    val inbox = InstinctPushDispatcher.inbox(app)
+    val entry = (inbox.add(PushEntry.Kind.ORDER, o, encrypted = true) as InstinctPushInbox.Added.Queued).entry
+    claimedByDeadProcess(o)
+    assertTrue(inbox.markClaimed(entry.seq))
+    InstinctPushDispatcher.drain(app)
+    // Only received: nothing touched the phone, so it is resumed in time and runs once.
+    assertEquals(max() * 40 / 100, volume())
+    assertEquals(0, events().count { it.kind == "incierto" })
+    assertEquals(1, events().count { it.kind == "ok" })
+    assertEquals(0, inbox.size())
+  }
+
+  @Test fun `a temporary mode's restoration is an execution of its own, verified against the original value`() {
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 3, 0)
+    val manager = TemporaryModeManager(app)
+    val applied = manager.execute(PhoneCommand.TemporaryMode(ModeKind.MEDIA_VOLUME, 60, percent = 80, approximate = true), confirmed = true)
+    assertEquals(applied.message, PhoneActionOutcome.COMPLETED, applied.outcome)
+    val lease = manager.read()!!
+    TemporaryModeRestorations.restore(app, manager, lease)
+    assertEquals(3, volume())
+    val row = journal.forMessage("restore:${lease.id}").single()
+    assertEquals(ExecutionState.VERIFIED, row.state)
+    assertEquals(ExecutionTransport.RESTORE, row.transport)
+  }
+
+  @Test fun `a manual change during a temporary mode is kept and recorded as not restored`() {
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 3, 0)
+    val manager = TemporaryModeManager(app)
+    manager.execute(PhoneCommand.TemporaryMode(ModeKind.MEDIA_VOLUME, 60, percent = 80, approximate = true), confirmed = true)
+    val lease = manager.read()!!
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 9, 0)
+    manager.observeManualChange()
+    TemporaryModeRestorations.restore(app, manager, manager.read()!!)
+    assertEquals(9, volume())
+    assertEquals(ExecutionState.CANCELLED, journal.forMessage("restore:${lease.id}").single().state)
+  }
+
+  @Test fun `a new process keeps a temporary mode it can still restore, and drops one that was changed by hand`() {
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 3, 0)
+    val manager = TemporaryModeManager(app)
+    manager.execute(PhoneCommand.TemporaryMode(ModeKind.MEDIA_VOLUME, 60, percent = 80, approximate = true), confirmed = true)
+    manager.markUnobserved()
+    assertTrue(manager.read()!!.owned)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 9, 0)
+    manager.markUnobserved()
+    assertFalse(manager.read()!!.owned)
+    manager.end(force = true)
+  }
 }

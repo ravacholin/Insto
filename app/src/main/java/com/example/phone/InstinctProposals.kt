@@ -345,11 +345,12 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
    * have different executions and are both offered.
    */
   @Synchronized fun offer(order: String, command: PhoneCommand, fingerprint: String, source: ProposalSource = ProposalSource.WHATSAPP,
-    executionId: String? = null): Proposal? {
+    executionId: String? = null, createdAt: Long = clock()): Proposal? {
     expire()
     if (entries.values.any { it.state == State.PENDING &&
         if (executionId != null) it.proposal.executionId == executionId else it.proposal.executionId == null && it.proposal.command == command }) return null
-    val proposal = Proposal(nextId++, order, command, clock(), fingerprint, source = source, executionId = executionId)
+    // [createdAt] is only ever earlier than now (a confirmation recovered with the time it had left), never later.
+    val proposal = Proposal(nextId++, order, command, minOf(createdAt, clock()), fingerprint, source = source, executionId = executionId)
     entries[proposal.id] = Entry(proposal, State.PENDING)
     while (entries.size > CAPACITY) entries.remove(entries.keys.first())
     return proposal

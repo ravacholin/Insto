@@ -833,6 +833,31 @@ object InstinctProposalCenter {
 
   const val NOT_RECORDED = "no se pudo registrar el comienzo de la ejecución; no se ejecutó."
 
+  /**
+   * A confirmation a dead process left pending (1.20.0): offered again under the same execution, with its notification,
+   * until its original expiry ([until], wall clock). It still waits for the person, whatever the gate would say now:
+   * recovering a pending confirmation never turns it into an automatic execution. False when it can no longer be
+   * offered (invalid now, refused by «Nunca», the configuration changed).
+   */
+  internal fun restoreWaiting(context: Context, row: ExecutionRecord, until: Long): Boolean {
+    val app = context.applicationContext
+    val fingerprint = awaitFingerprint(app) ?: return false
+    val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
+    val check = InstinctProposalValidator.check(row.line, PhoneCommandParser(), now, InstinctRoutineGrants(app).access())
+    if (check !is ProposalCheck.Valid || check.deferred != null || refusedByPolicy(app, check.command)) return false
+    val source = if (row.transport == ExecutionTransport.WHATSAPP) ProposalSource.WHATSAPP else ProposalSource.BUZON
+    // Its notification keeps the time it had left: the book counts from the original wait, in this process's clock.
+    val left = (until - InstinctScheduler.wallClock()).coerceIn(1_000L, ProposalBook.TTL_MILLIS)
+    val proposal = book.offer(row.line, check.command, fingerprint, source, row.executionId, createdAt = clock() - (ProposalBook.TTL_MILLIS - left))
+      ?: return false
+    InstinctExecutions.link(proposal.id, row.executionId)
+    InstinctExecutions.move(app, row.executionId, ExecutionState.WAITING, proposalId = proposal.id)
+    bind(app)
+    if (row.logMessage.isNotEmpty()) acks.adopt(proposal.id, row.logMessage, AckEntry(AckKind.WAITING, row.line, row.reason.orEmpty()), logOnly = true)
+    askConfirmation(app, proposal, row.reason ?: ExecutionRecoveryPolicy.RECOVERED)
+    return true
+  }
+
   internal fun isRoutine(command: PhoneCommand) = command is PhoneCommand.Platform && command.action == PlatformAction.ROUTINE_RUN
 
   /**

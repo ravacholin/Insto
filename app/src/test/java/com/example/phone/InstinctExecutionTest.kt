@@ -61,7 +61,7 @@ class InstinctExecutionTest {
     assertEquals(ExecutionState.EXPIRED, (late as ExecutionRecoveryPolicy.Action.Settle).state)
     val pastDeadline = ExecutionRecoveryPolicy.decide(row(ExecutionState.VALIDATED, deadline = now - 1), now)
     assertEquals(ExecutionState.EXPIRED, (pastDeadline as ExecutionRecoveryPolicy.Action.Settle).state)
-    assertTrue(ExecutionRecoveryPolicy.decide(row(ExecutionState.SCHEDULED), now) is ExecutionRecoveryPolicy.Action.Leave)
+    assertEquals(ExecutionRecoveryPolicy.Action.Reconcile, ExecutionRecoveryPolicy.decide(row(ExecutionState.SCHEDULED), now))
     for (terminal in ExecutionState.TERMINAL) assertEquals(ExecutionRecoveryPolicy.Action.Leave, ExecutionRecoveryPolicy.decide(row(terminal), now))
   }
 
@@ -88,5 +88,26 @@ class InstinctExecutionTest {
     assertTrue(line, line.contains("cambiado por esta ejecución"))
     assertEquals("No hay ejecuciones registradas en los últimos 7 días.", ExecutionText.list(emptyList(), 0) { "" })
     assertTrue(ExecutionText.status(null, "e12345678", 0) { "" }.contains("No hay ninguna ejecución e12345678"))
+  }
+
+  @Test fun `an interrupted dispatch is read back only when it is a set, and never repeated`() {
+    val dispatching = row(ExecutionState.DISPATCHING)
+    assertEquals(ExecutionRecoveryPolicy.Action.Verify, ExecutionRecoveryPolicy.decide(dispatching, 0, ActionEffect.IDEMPOTENT_SET))
+    for (effect in listOf(ActionEffect.NON_IDEMPOTENT, ActionEffect.EXTERNAL_HANDOFF, null))
+      assertEquals(ExecutionState.UNCERTAIN, (ExecutionRecoveryPolicy.decide(dispatching, 0, effect) as ExecutionRecoveryPolicy.Action.Settle).state)
+    assertEquals(ExecutionState.FAILED, (ExecutionRecoveryPolicy.decide(dispatching, 0, ActionEffect.READ_ONLY) as ExecutionRecoveryPolicy.Action.Settle).state)
+    assertEquals(ExecutionRecoveryPolicy.Action.Verify, ExecutionRecoveryPolicy.decide(row(ExecutionState.VERIFYING), 0))
+    // A read-back never says «caused»: satisfied, handed off (it had returned) or uncertain.
+    assertEquals(ExecutionState.VERIFIED, ExecutionRecoveryPolicy.afterVerify(dispatching, OutcomeVerdict.VERIFIED))
+    assertEquals(ExecutionState.UNCERTAIN, ExecutionRecoveryPolicy.afterVerify(dispatching, OutcomeVerdict.NOT_OBSERVABLE))
+    assertEquals(ExecutionState.HANDED_OFF, ExecutionRecoveryPolicy.afterVerify(row(ExecutionState.VERIFYING), OutcomeVerdict.NOT_OBSERVABLE))
+    assertEquals(ExecutionState.UNCERTAIN, ExecutionRecoveryPolicy.afterVerify(row(ExecutionState.VERIFYING), OutcomeVerdict.NOT_ACHIEVED))
+  }
+
+  @Test fun `a pending confirmation keeps its expiry across a restart`() {
+    val waiting = row(ExecutionState.WAITING).copy(updatedAt = 1_000)
+    assertEquals(ExecutionRecoveryPolicy.Action.RestoreWaiting, ExecutionRecoveryPolicy.decide(waiting, 1_000 + ExecutionJournalPolicy.WAITING_TTL_MILLIS - 1))
+    val late = ExecutionRecoveryPolicy.decide(waiting, 1_000 + ExecutionJournalPolicy.WAITING_TTL_MILLIS)
+    assertEquals(ExecutionState.EXPIRED, (late as ExecutionRecoveryPolicy.Action.Settle).state)
   }
 }

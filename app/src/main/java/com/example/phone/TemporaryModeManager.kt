@@ -84,12 +84,18 @@ class TemporaryModeManager(private val context: Context) {
    // Boot/process gaps cannot prove ownership. Never overwrite a possible manual change.
    write(lease.copy(owned=false))
   }
-  if(TemporaryModePolicy.expired(lease,System.currentTimeMillis()))end()
+  if(TemporaryModePolicy.expired(lease,System.currentTimeMillis()))TemporaryModeRestorations.restore(context,this,lease)
   else {
    val remaining=read()?:return
    schedule(remaining,remaining.exact && (Build.VERSION.SDK_INT<31 || alarms.canScheduleExactAlarms()))
   }
  }}
  fun loseOwnership(){synchronized(LOCK){read()?.let {write(it.copy(owned=false))}}}
+ /**
+  * A new process (1.20.0): nobody watched for manual changes in the gap, but the value Insto applied is still there
+  * if nobody touched it, and [TemporaryModePolicy.canRestore] checks exactly that at expiry. Ownership is kept; a
+  * value that differs from the applied one when it expires is a manual change and is never overwritten.
+  */
+ fun markUnobserved(){synchronized(LOCK){observeManualChange()}}
  companion object {private val LOCK=Any();const val EXPIRE="com.example.phone.EXPIRE_TEMPORARY_MODE"}
 }
