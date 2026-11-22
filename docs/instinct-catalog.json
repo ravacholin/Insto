@@ -140,6 +140,14 @@
     {
       "orden": "probar <orden>",
       "solo_lectura": true
+    },
+    {
+      "orden": "ver ejecuciones",
+      "solo_lectura": true
+    },
+    {
+      "orden": "estado de ejecución <id>",
+      "solo_lectura": true
     }
   ],
   "firma_buzon": "insto-v4",
@@ -201,7 +209,7 @@
       }
     ]
   },
-  "hash": "229063c62268229436764fb157d0db23288a1361c01adcbc5aab6be728f9157b",
+  "hash": "6758b690311444653bfb93427ba1ef288566b0c36524860410ecf8864ac59b28",
   "horas_de_silencio": null,
   "limites": {
     "atraso_minutos_max": 15,

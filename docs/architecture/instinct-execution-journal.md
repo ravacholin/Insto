@@ -335,3 +335,69 @@ resto.
 El inventario completo está en `backup/BackupInventory.kt` y en las notas de 1.20.0; `BackupInventoryTest` lee el
 código y falla si aparece un archivo, una clave de preferencias, un DataStore o unas SharedPreferences sin clasificar.
 
+## 11. Observabilidad (fase 7)
+
+- `#insto ver ejecuciones`: las últimas 6 filas del diario, cada una con su id corto (`e` y 8 hexadecimales), estado,
+  hora, transporte, orden y resultado. `#insto estado de ejecución <id>`: una fila. Las dos son de solo lectura y
+  responden por el canal de acuses de siempre (la bitácora para el buzón); figuran en el catálogo vivo.
+- Ajustes → Propuestas de Instinct → «Ejecuciones recientes» muestra lo mismo.
+- Los acuses no se multiplican: un acuse por orden, como antes. El texto distingue «Verificado: …» (estado alcanzado y
+  verificado), «Entregado; Insto no puede comprobar el resultado final.» (entregada a otra app), `espera`
+  (pendiente), `error` con «No se logró: …» (fallida), `incierto` e «(recuperada tras reiniciarse Insto)».
+
+## 12. Riesgos residuales
+
+- **Robolectric no es un teléfono.** SQLite, `AudioManager`, `NotificationManager`, `KeyguardManager` y
+  `AlarmManager` son simulados. El callback de la linterna, las sesiones multimedia reales, Doze y el límite de volumen
+  por audición solo se ven en el dispositivo.
+- **Ventana de `READY` tras la muerte del proceso**: una orden ofrecida y no despachada se revalida y se ofrece de nuevo
+  si sigue vigente. Si el proceso murió justo después de escribir `DISPATCHING` pero antes de que Android aplicara el
+  cambio, la relectura puede encontrar el estado anterior y la marca queda `incierta` (correcto: nunca se repite).
+- **Atribución**: con el panel o tras una recuperación no hay lectura previa; Insto dice «el estado se cumple», nunca
+  que lo produjo.
+- **Modo temporal**: un proceso nuevo conserva la propiedad si el valor no cambió. Si la persona cambió el valor y lo
+  volvió a dejar exactamente como lo puso Insto mientras nadie observaba, al vencer se restaura. El reinicio del
+  teléfono sigue perdiendo la propiedad (conservador).
+- **Servicio visible del modo temporal desde segundo plano**: sin exención de batería Android 12+ puede rechazarlo;
+  el modo se aplica y se restaura igual, pero sin el aviso «Terminar» hasta abrir Insto.
+- **Reactivación sin distribuidor**: si ntfy no está instalado en el teléfono nuevo, el timbre queda pendiente y el
+  buzón funciona por sondeo.
+- **Integraciones reales sin probar**: como en 1.19.0, no se probaron ntfy, Apps Script ni Cloudflare reales.
+
+## 13. Prueba física en un Motorola con Android 16
+
+Preparación: `adb` conectado, Insto 1.19.0 funcionando con bitácora, buzón y timbre; ntfy instalado; una hoja de
+cálculo para anotar, en cada paso, la hora de envío, la de «Última recepción push» del detalle del timbre, la del acuse
+en la bitácora y la fila de `#insto ver ejecuciones`. **No inventar métricas**: anotar lo que se ve, o «no medido».
+
+1. **Actualizar sobre 1.19.0.** Instalar el APK 1.20.0 (`adb install -r`). Abrir Insto: los interruptores siguen
+   encendidos. `#insto ver ejecuciones` responde (vacío o con filas nuevas).
+2. **ntfy y distribuidor.** Detalle del timbre: «Registro: registrado», distribuidor ntfy.
+3. **Apps Script 1.19.0 o posterior.** «Probar de punta a punta» con las seis etapas en ✓.
+4. **Timbre cifrado simple.** Detalle: «Cifrado RFC 8291: activo». Mandar una orden: llega por el timbre y el sondeo.
+5. **Orden cifrada directa (si hay relé).** «Despacho: por el timbre, sin leer la planilla».
+6. **Diario.** Tras una orden, `#insto ver ejecuciones` muestra su id y estado `verificada` o `entregada`.
+7. **Pantalla bloqueada.** Bloquear, apagar la pantalla, esperar 1 minuto y mandar «poner el volumen al 30 por
+   ciento». El volumen cambia sin encender la pantalla; la bitácora dice «Verificado: quedó en N de M».
+   Repetir con «activar no molestar» y «silenciá el teléfono durante una hora» (debe correr sin pedir confirmación en
+   Solo y restaurarse a la hora). Repetir con «poner un temporizador de 5 minutos»: debe quedar en espera.
+8. **Verificación.** Con auriculares, «volumen al 100 por ciento»: si Android lo limita, el acuse dice «No se logró».
+9. **Bitácora.** Cada acuse aparece una sola vez.
+10. **Muerte normal del proceso.** `adb shell am kill com.aistudio.pingassist.qvrtkm` (no `force-stop`) y mandar una
+    orden: llega con el siguiente push o job. `ver ejecuciones` no la muestra repetida.
+11. **Reinicio.** Mandar una orden, reiniciar a mitad (o enseguida) y no abrir Insto: tras el arranque, la recuperación
+    la termina o la informa `vencida`/`incierta`, una sola vez.
+12. **Sondeo de respaldo sin ntfy.** `adb shell am force-stop io.heckel.ntfy`, mandar una orden: llega por el sondeo de
+    respaldo (hasta 15 minutos).
+13. **Doze.** `adb shell dumpsys deviceidle force-idle`, mandar una orden, esperar, `adb shell dumpsys deviceidle unforce`.
+    Anotar la demora real.
+14. **Backup completo.** Ajustes → Copia de seguridad → «Crear copia completa». Luego «Copia sin secretos»: abrirla en
+    otro teléfono (o tras reinstalar) y comprobar que pide token y clave.
+15. **Restauración y nuevo registro.** Desinstalar Insto (o usar otro teléfono), instalar 1.20.0, restaurar la copia
+    completa: los interruptores quedan apagados y aparece «Reactivar Instinct en este teléfono». Tocar «Reactivar»:
+    todos los pasos en ✓, en ntfy aparece una suscripción nueva y el detalle del timbre muestra un endpoint distinto
+    del anterior. `#insto ver estado` responde.
+16. **Nombre.** Revisar Launcher, Ajustes → Apps, asistente digital, Accesibilidad («Insto · accesibilidad»),
+    acceso a notificaciones, canales de notificación, mosaico de Ajustes rápidos, widget, atajos y botón flotante: en
+    ningún lado debe decir PingAssist.
+

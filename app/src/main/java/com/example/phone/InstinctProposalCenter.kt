@@ -571,6 +571,7 @@ object InstinctProposalCenter {
     }
   }
   const val STATE_ONLY_LOG = "el estado solo se publica en la bitácora"
+  const val JOURNAL_UNREADABLE = "no se pudo leer el diario de ejecución."
 
   /** The answer to a query. Names of enabled routines only, never their steps. */
   internal fun answer(context: Context, kind: ProposalCheck.QueryKind, argument: String? = null): String = when (kind) {
@@ -586,6 +587,8 @@ object InstinctProposalCenter {
     ProposalCheck.QueryKind.CANCEL_ONE -> InstinctScheduler.cancelShortAnswer(context, argument.orEmpty())
     ProposalCheck.QueryKind.PROBE -> probe(context, "${ProposalCheck.QueryKind.PROBE.phrase} ${argument.orEmpty()}", argument.orEmpty(),
       ProposalSource.BUZON).message
+    ProposalCheck.QueryKind.EXECUTIONS -> runCatching { InstinctExecutionQueries.list(context) }.getOrDefault(JOURNAL_UNREADABLE)
+    ProposalCheck.QueryKind.EXECUTION_STATUS -> runCatching { InstinctExecutionQueries.status(context, argument.orEmpty()) }.getOrDefault(JOURNAL_UNREADABLE)
   }
 
   /** «probar»'s own brake (1.18.0): 20 every 10 minutes. Never the anti-loop one, never the trust ledger. */

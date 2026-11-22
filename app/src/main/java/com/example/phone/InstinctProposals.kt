@@ -52,6 +52,10 @@ sealed interface ProposalCheck {
      * running, saving, scheduling, telling the person or consuming the brake. [ProposalCheck.Query.argument] is the order.
      */
     PROBE("probar", form = "probar <orden>"),
+    /** The journal's last executions (1.20.0): id, state, when, transport, order and result. Read-only. */
+    EXECUTIONS("ver ejecuciones"),
+    /** One execution by the short id «ver ejecuciones» gives (1.20.0). Read-only. */
+    EXECUTION_STATUS("estado de ejecución", form = "estado de ejecución <id>"),
   }
 }
 
@@ -63,6 +67,7 @@ sealed interface ProposalCheck {
  */
 object InstinctProposalValidator {
   private val cancelOne = Regex("^cancelar programada ([0-9a-f]{${InstinctTriggers.SHORT_ID_LENGTH}})$")
+  private val executionStatus = Regex("^estado de ejecucion (e?[0-9a-f]{${ExecutionIds.SHORT}})$")
   private val silenceActions = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
     PlatformAction.DND_ON, PlatformAction.DND_OFF)
 
@@ -78,7 +83,8 @@ object InstinctProposalValidator {
     // Read-only questions about the protocol: exact phrases, before the grammar.
     val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
     ProposalCheck.QueryKind.entries.firstOrNull { it != ProposalCheck.QueryKind.CANCEL_ONE && it != ProposalCheck.QueryKind.PROBE &&
-      PhoneCommandParser.normalize(it.phrase) == folded }?.let { return ProposalCheck.Query(order, it) }
+      it != ProposalCheck.QueryKind.EXECUTION_STATUS && PhoneCommandParser.normalize(it.phrase) == folded }?.let { return ProposalCheck.Query(order, it) }
+    executionStatus.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.EXECUTION_STATUS, it.groupValues[1]) }
     // «probar <orden>»: the order is kept as written and checked by whoever answers, with this same validator.
     probe(order)?.let { inner ->
       return if (inner.isBlank()) ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY) else ProposalCheck.Query(order, ProposalCheck.QueryKind.PROBE, inner)

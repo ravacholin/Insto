@@ -110,4 +110,17 @@ class InstinctExecutionTest {
     val late = ExecutionRecoveryPolicy.decide(waiting, 1_000 + ExecutionJournalPolicy.WAITING_TTL_MILLIS)
     assertEquals(ExecutionState.EXPIRED, (late as ExecutionRecoveryPolicy.Action.Settle).state)
   }
+
+  @Test fun `the two journal queries are read-only and take a short id`() {
+    val parser = PhoneCommandParser()
+    val list = InstinctProposalValidator.check("ver ejecuciones", parser)
+    assertEquals(ProposalCheck.QueryKind.EXECUTIONS, (list as ProposalCheck.Query).kind)
+    val one = InstinctProposalValidator.check("estado de ejecución e1a2b3c4d", parser) as ProposalCheck.Query
+    assertEquals(ProposalCheck.QueryKind.EXECUTION_STATUS, one.kind)
+    assertEquals("e1a2b3c4d", one.argument)
+    assertEquals("1a2b3c4d", (InstinctProposalValidator.check("Estado de ejecucion 1a2b3c4d", parser) as ProposalCheck.Query).argument)
+    assertTrue(InstinctProposalValidator.check("estado de ejecución", parser) !is ProposalCheck.Query ||
+      (InstinctProposalValidator.check("estado de ejecución", parser) as ProposalCheck.Query).kind != ProposalCheck.QueryKind.EXECUTION_STATUS)
+    assertTrue(ProposalCheck.QueryKind.EXECUTIONS.readOnly && ProposalCheck.QueryKind.EXECUTION_STATUS.readOnly)
+  }
 }

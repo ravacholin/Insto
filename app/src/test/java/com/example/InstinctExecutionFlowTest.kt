@@ -639,4 +639,25 @@ class InstinctExecutionFlowTest {
     InstinctReadiness.forgetGranted(app)
     assertTrue("granted is never asked again", InstinctReadiness.missing(app).none { it.capability == InstinctReadiness.Capability.DND_ACCESS })
   }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Observability (fase 7)
+  // ---------------------------------------------------------------------------------------------------------------
+
+  @Test fun `Instinct can list the executions and ask for one by its short id, read-only`() {
+    val o = order("#insto poner el volumen al 40 por ciento")
+    push(o)
+    val row = journal.forMessage(o.id).single()
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    val q = order("#insto ver ejecuciones", "#insto estado de ejecución ${row.shortId}", "#insto estado de ejecución e00000000")
+    push(q)
+    assertEquals("a query changes nothing", 0, volume())
+    val answers = events().filter { it.kind == "ok" && it.message == InstinctMailboxSignature.messageId(q.id) }
+    assertEquals(3, answers.size)
+    assertTrue(answers[0].detail, answers[0].detail.contains("${row.shortId} verificada"))
+    assertTrue(answers[1].detail, answers[1].detail.startsWith("${row.shortId} verificada"))
+    assertTrue(answers[1].detail, answers[1].detail.contains("poner el volumen al 40 por ciento"))
+    assertTrue(answers[2].detail, answers[2].detail.contains("No hay ninguna ejecución e00000000"))
+    assertTrue(answers.all { InstinctLogEvents.safe(it) })
+  }
 }
