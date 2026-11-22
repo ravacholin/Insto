@@ -2,24 +2,19 @@ package com.example.phone
 
 import android.app.BroadcastOptions
 import android.app.PendingIntent
-import android.app.Service
 import android.app.job.JobInfo
 import android.app.job.JobParameters
 import android.app.job.JobScheduler
 import android.app.job.JobService
-import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.os.Binder
 import android.os.Build
-import android.os.IBinder
 import android.os.PersistableBundle
 import java.io.File
 import java.util.Calendar
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
@@ -34,6 +29,7 @@ class InstinctDoorbellSettings(context: Context) {
   private val withOrderFile = File(app.noBackupFilesDir, "instinct-doorbell-with-order")
   private val endpointFile = File(app.noBackupFilesDir, ENDPOINT_FILE)
   private val stateFile = File(app.noBackupFilesDir, STATE_FILE)
+  private val sealedFile = File(app.noBackupFilesDir, SEALED_FILE)
 
   fun enabled(): Boolean = runCatching { enabledFile.readText() == "true" }.getOrDefault(false)
   internal fun writeEnabled(value: Boolean) { if (value) enabledFile.writeText("true") else enabledFile.delete() }
@@ -52,6 +48,12 @@ class InstinctDoorbellSettings(context: Context) {
     if (value == null) endpointFile.delete() else writeAtomically(endpointFile, value, "insto-doorbell-endpoint-")
   }
 
+  /** 1.19.0: the plain doorbell encrypted for Insto's own keys (RFC 8291), base64url, for the script. */
+  internal fun sealed(): String? = runCatching { sealedFile.readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
+  internal fun writeSealed(value: String?) {
+    if (value == null) sealedFile.delete() else writeAtomically(sealedFile, value, "insto-doorbell-sealed-")
+  }
+
   fun state(): DoorbellState = synchronized(LOCK) { runCatching { DoorbellState.decode(stateFile.readText()) }.getOrDefault(DoorbellState()) }
   internal fun update(change: (DoorbellState) -> DoorbellState): DoorbellState = synchronized(LOCK) {
     change(state()).also { runCatching { writeAtomically(stateFile, it.encode(), "insto-doorbell-state-") } }
@@ -60,6 +62,7 @@ class InstinctDoorbellSettings(context: Context) {
   companion object {
     const val ENDPOINT_FILE = "instinct-doorbell-endpoint"
     const val STATE_FILE = "instinct-doorbell-state.json"
+    const val SEALED_FILE = "instinct-doorbell-sealed"
     private val LOCK = Any()
   }
 }
@@ -83,10 +86,16 @@ object InstinctDoorbell {
   private const val DRAIN_JOB_ID = 7_321
 
   internal var clock: () -> Long = { InstinctScheduler.wallClock() }
+  /** The UnifiedPush connector: the official library (1.19.0). */
+  internal var connector: PushConnector = LibraryPushConnector
+  /** The library's Web Push keys; tests use one without the Android Keystore. */
+  internal var keyManager: (Context) -> org.unifiedpush.android.connector.keys.KeyManager = InstinctPushReceiver::defaultKeyManager
   /** The installed distributors; tests replace it. */
-  internal var distributors: (Context) -> List<String> = ::queryDistributors
-  /** Sends a broadcast to a distributor; tests record it. */
+  internal var distributors: (Context) -> List<String> = { connector.distributors(it) }
+  /** Sends a broadcast to a distributor (only the UNREGISTER of a 1.18.0 registration now); tests record it. */
   internal var send: (Context, Intent) -> Unit = ::sendToDistributor
+  /** Registering touches the library's database and may generate keys: never on the main thread. Tests run it inline. */
+  internal var io: (Runnable) -> Unit = { jobs.execute(it) }
   internal var online: (Context) -> Boolean = ::isOnline
   /** Arms a job: [kind], a delay (null: expedited when it can) and whether it needs the network. Tests record it. */
   internal var schedule: (Context, String, Long?) -> Unit = ::scheduleJob
@@ -148,9 +157,9 @@ object InstinctDoorbell {
   }
 
   /**
-   * REGISTER with the current token (re-registration keeps it), or a new one. On Android 14 and later the
-   * broadcast shares Insto's identity; before, the `pi` PendingIntent carries it. `application` is for AND_2
-   * distributors.
+   * REGISTER through the library (1.19.0), off the main thread: it keeps its token (re-registering keeps it), shares
+   * Insto's identity on Android 14 and later or sends the `pi` before, and generates the Web Push keys the first time.
+   * A registration of the hand-written connector of 1.18.0 is unregistered first.
    */
   fun register(context: Context) {
     val app = context.applicationContext
@@ -159,33 +168,45 @@ object InstinctDoorbell {
       s.update { it.copy(failure = if (distributors(app).isEmpty()) "sin distribuidor" else "elegí el distribuidor") }
       return
     }
-    val state = s.update { old ->
-      val token = old.token?.takeIf { old.distributor == distributor } ?: UUID.randomUUID().toString()
-      old.copy(token = token, distributor = distributor, confirmed = old.confirmed && old.token == token,
-        failure = old.failure?.takeIf { old.token == token })
-    }
-    val intent = Intent(UnifiedPush.ACTION_REGISTER).setPackage(distributor)
-      .putExtra(UnifiedPush.EXTRA_TOKEN, state.token)
-      .putExtra(UnifiedPush.EXTRA_MESSAGE, UnifiedPush.DESCRIPTION)
-      .putExtra(UnifiedPush.EXTRA_APPLICATION, app.packageName)
-    if (Build.VERSION.SDK_INT < 34) intent.putExtra(UnifiedPush.EXTRA_PI, identity(app))
-    runCatching { send(app, intent) }
+    io(Runnable {
+      migrateLegacy(app)
+      val previous = s.state().distributor
+      s.update { it.copy(distributor = distributor, confirmed = it.confirmed && previous == distributor,
+        failure = it.failure?.takeIf { previous == distributor }) }
+      runCatching { connector.register(app, distributor) }.onFailure { error ->
+        s.update { it.copy(failure = "no se pudo registrar con el distribuidor", lastError = error.javaClass.simpleName) }
+      }
+    })
   }
 
   /**
-   * UNREGISTER, then the token is forgotten at once (the spec: without waiting for UNREGISTERED), the endpoint
-   * deleted and the script told to delete its copy.
+   * 1.18.0 registered by hand, with its own token in the state. That token is unregistered with the distributor and
+   * forgotten; the library registers anew (a new endpoint, which the script hears). Nothing else of 1.18.0 changes.
    */
-  private fun unregister(context: Context) {
+  internal fun migrateLegacy(context: Context) {
     val app = context.applicationContext
     val s = settings(app)
     val state = s.state()
-    if (state.token != null && state.distributor != null) {
-      val intent = Intent(UnifiedPush.ACTION_UNREGISTER).setPackage(state.distributor).putExtra(UnifiedPush.EXTRA_TOKEN, state.token)
+    val token = state.token ?: return
+    state.distributor?.let { distributor ->
+      val intent = Intent(UnifiedPush.ACTION_UNREGISTER).setPackage(distributor).putExtra(UnifiedPush.EXTRA_TOKEN, token)
         .putExtra(UnifiedPush.EXTRA_APPLICATION, app.packageName)
       if (Build.VERSION.SDK_INT < 34) intent.putExtra(UnifiedPush.EXTRA_PI, identity(app))
       runCatching { send(app, intent) }
     }
+    s.update { it.copy(token = null, confirmed = false) }
+  }
+
+  /**
+   * UNREGISTER through the library, which forgets the token at once (the spec: without waiting for UNREGISTERED);
+   * the endpoint is deleted and the script told to delete its copy.
+   */
+  private fun unregister(context: Context) {
+    val app = context.applicationContext
+    io(Runnable {
+      migrateLegacy(app)
+      runCatching { connector.unregister(app) }
+    })
     forget(app, failure = null)
   }
 
@@ -194,7 +215,9 @@ object InstinctDoorbell {
     val s = settings(context)
     val hadEndpoint = s.endpoint() != null || s.state().informedAt != null
     s.writeEndpoint(null)
-    s.update { it.copy(token = null, confirmed = false, informedAt = null, informPending = hadEndpoint, failure = failure) }
+    s.writeSealed(null)
+    s.update { it.copy(token = null, confirmed = false, informedAt = null, informPending = hadEndpoint, failure = failure,
+      encryptionConfirmed = false, relayConfirmed = false) }
     if (hadEndpoint) inform(context)
     InstinctCatalogPublisher.changed(context)
   }
@@ -204,69 +227,74 @@ object InstinctDoorbell {
     Intent(UnifiedPush.DUMMY_APP).setPackage(UnifiedPush.DUMMY_APP), PendingIntent.FLAG_IMMUTABLE)
 
   /**
-   * A broadcast from the distributor, on the main thread. Since 1.19.0 it only hands the broadcast over to
-   * [InstinctPushIntake] and returns: nothing here waits for the disk, the network or an execution.
+   * NEW_ENDPOINT, on the receiving thread, after the library checked the token. [keys] are the registration's Web Push
+   * keys: Insto encrypts its plain doorbell with them (RFC 8291) for the script. The endpoint and the keys never go to
+   * Logcat, the diagnosis nor the catalog.
    */
-  fun onReceive(context: Context, intent: Intent, async: () -> PushFinisher?) {
+  internal fun onNewEndpoint(context: Context, endpoint: String, keys: PushKeys?, temporary: Boolean) {
     val app = context.applicationContext
-    InstinctPushIntake.receive(app, async) { handle(app, intent) }
+    val s = settings(app)
+    if (!InstinctDoorbellEndpoint.valid(endpoint)) {
+      s.update { it.copy(confirmed = true, failure = "el endpoint no es https o es demasiado largo") }
+      return
+    }
+    val changed = s.endpoint() != endpoint
+    val sealed = keys?.let { k -> runCatching { InstinctPushCrypto.encode(InstinctPushCrypto.seal(k, InstinctDoorbellPayload.PLAIN.toByteArray())) }.getOrNull() }
+    val sealedChanged = keys?.let { s.state().keysFingerprint != fingerprint(it) } ?: true
+    s.writeEndpoint(endpoint)
+    // A new endpoint or new keys: a new sealed doorbell; otherwise the one the script has stays valid.
+    if (changed || sealedChanged || s.sealed() == null) s.writeSealed(sealed)
+    s.update {
+      it.copy(confirmed = true, failure = null, informPending = true, informedAt = it.informedAt.takeUnless { changed || sealedChanged },
+        temporaryEndpoint = temporary, keysFingerprint = keys?.let(::fingerprint),
+        encryptionConfirmed = it.encryptionConfirmed && !changed && !sealedChanged,
+        lastError = if (keys == null) "el distribuidor no entregó claves de cifrado" else it.lastError)
+    }
+    inform(app)
+    InstinctMailbox.rearm(app)
+    // The doorbell became active: the catalog says so.
+    InstinctCatalogPublisher.changed(app)
   }
+
+  /** A short hash of the public keys: only to know whether they changed. */
+  private fun fingerprint(keys: PushKeys): String = InstinctMailboxSignature.messageId(keys.p256dh + "." + keys.auth)
 
   /**
-   * The light part of a broadcast, on the receiving thread: the token, then a MESSAGE is classified and stored in the
-   * inbox **before** it is acknowledged, so what the distributor stops resending is already on disk. The payload is never
-   * logged; a signed order in it is stored only until dispatch.
+   * MESSAGE, on the receiving thread, after the library checked the token and tried to decrypt it. Classified, then
+   * stored in the inbox **before** returning: the library acknowledges it only after this. The content is never logged.
    */
-  internal fun handle(app: Context, intent: Intent) {
+  internal fun onMessage(context: Context, content: ByteArray, decrypted: Boolean) {
+    val app = context.applicationContext
     val s = settings(app)
-    val state = s.state()
-    val payload = if (intent.action == UnifiedPush.ACTION_MESSAGE) payload(intent) else null
-    val action = InstinctDoorbellProtocol.handle(intent.action, intent.getStringExtra(UnifiedPush.EXTRA_TOKEN), state,
-      intent.getStringExtra(UnifiedPush.EXTRA_ENDPOINT), intent.getStringExtra(UnifiedPush.EXTRA_ID), intent.getStringExtra(UnifiedPush.EXTRA_REASON),
-      payload)
-    when (action) {
-      InstinctDoorbellProtocol.Action.Ignore -> Unit
-      is InstinctDoorbellProtocol.Action.Ring -> {
-        accept(app, if (action.inline != null) InstinctPushMessage.Kind.Order(action.inline) else InstinctPushMessage.Kind.Ring,
-          encrypted = false, malformed = action.malformed)
-        ack(app, state, action.ackId)
-      }
-      is InstinctDoorbellProtocol.Action.Endpoint -> {
-        ack(app, state, action.ackId)
-        val changed = s.endpoint() != action.endpoint
-        s.writeEndpoint(action.endpoint)
-        s.update { it.copy(confirmed = true, failure = null, informPending = true, informedAt = it.informedAt.takeUnless { changed }) }
-        inform(app)
-        InstinctMailbox.rearm(app)
-        // The doorbell became active: the catalog says so.
-        InstinctCatalogPublisher.changed(app)
-      }
-      is InstinctDoorbellProtocol.Action.BadEndpoint -> {
-        ack(app, state, action.ackId)
-        s.update { it.copy(confirmed = true, failure = "el endpoint no es https o es demasiado largo") }
-      }
-      is InstinctDoorbellProtocol.Action.Failed -> {
-        // The next registration needs a new token.
-        s.update { it.copy(token = null, confirmed = false, failure = action.reason) }
-      }
-      InstinctDoorbellProtocol.Action.Unregistered -> forget(app, failure = "el distribuidor dio de baja el registro")
+    val classified = InstinctPushMessage.classify(content.takeIf { it.size <= MAX_MESSAGE_BYTES }, decrypted, s.state().encryptionConfirmed)
+    s.update {
+      it.copy(encryptedPushes = it.encryptedPushes + if (classified.encrypted) 1 else 0,
+        plainPushes = it.plainPushes + if (classified.plainLegacy || classified.downgraded) 1 else 0,
+        decryptFailures = it.decryptFailures + if (classified.undecryptable) 1 else 0,
+        lastError = when {
+          classified.undecryptable -> "un timbre cifrado no se pudo descifrar (claves viejas o mensaje dañado)"
+          classified.downgraded -> "llegó un timbre sin cifrar: solo se usó para revisar el buzón"
+          else -> it.lastError
+        })
     }
+    accept(app, classified.kind, classified.encrypted, classified.malformed)
   }
 
-  /** AND_3's `bytesMessage`, or the older `message` text. Too big is no payload at all. */
-  private fun payload(intent: Intent): ByteArray? = runCatching {
-    (intent.getByteArrayExtra(UnifiedPush.EXTRA_BYTES_MESSAGE) ?: intent.getStringExtra(UnifiedPush.EXTRA_MESSAGE)?.toByteArray(Charsets.UTF_8))
-      ?.takeIf { it.size <= InstinctDoorbellPayload.MAX_BYTES }
-  }.getOrNull()
-
-  private fun ack(context: Context, state: DoorbellState, id: String?) {
-    val distributor = state.distributor ?: return
-    if (id == null || state.token == null) return
-    runCatching {
-      send(context, Intent(UnifiedPush.ACTION_MESSAGE_ACK).setPackage(distributor).putExtra(UnifiedPush.EXTRA_TOKEN, state.token)
-        .putExtra(UnifiedPush.EXTRA_ID, id))
-    }
+  /** REGISTRATION_FAILED: the library keeps its token; the reason, for the diagnosis. */
+  internal fun onRegistrationFailed(context: Context, reason: String?) {
+    settings(context).update { it.copy(confirmed = false, failure = InstinctDoorbellProtocol.failureLabel(reason)) }
   }
+
+  /** UNREGISTERED: the library already forgot the registration. */
+  internal fun onUnregistered(context: Context) = forget(context.applicationContext, failure = "el distribuidor dio de baja el registro")
+
+  /** TEMP_UNAVAILABLE: the distributor's server is down; the backup poll covers it. */
+  internal fun onTempUnavailable(context: Context) {
+    settings(context).update { it.copy(lastError = "el servidor del distribuidor no está disponible por ahora; queda la revisión periódica") }
+  }
+
+  /** AND_3: a push message is at most 4096 bytes; more is no payload at all. */
+  private const val MAX_MESSAGE_BYTES = 4_096
 
   /**
    * A push that arrived, already classified: counted, then stored in the inbox with a rescue job, for
@@ -365,7 +393,11 @@ object InstinctDoorbell {
     if (url == null || token == null) { s.update { it.copy(failure = "falta configurar la bitácora") }; return false }
     val endpoint = s.endpoint()?.takeIf { s.enabled() }.orEmpty()
     val withOrder = s.withOrder() && endpoint.isNotEmpty()
-    val raw = runCatching { client().post(url, InstinctDoorbellScript.informBody(token, endpoint, withOrder)) }
+    // 1.19.0: the sealed plain doorbell and, only with the order in the doorbell, the public keys for the relay.
+    val sealed = s.sealed()?.takeIf { endpoint.isNotEmpty() }
+    val keys = if (withOrder && sealed != null) runCatching { connector.publicKeys(app) }.getOrNull() else null
+    val cifrado = sealed?.let { InstinctDoorbellScript.Sealed(it, keys?.p256dh, keys?.auth) }
+    val raw = runCatching { client().post(url, InstinctDoorbellScript.informBody(token, endpoint, withOrder, cifrado)) }
       .getOrElse { InstinctLogClient.Raw.Failed(InstinctLogClient.Failure.NETWORK) }
     return when (val answer = InstinctDoorbellScript.parseInform(raw)) {
       is InstinctDoorbellScript.Answer.Confirmed -> {
@@ -374,7 +406,10 @@ object InstinctDoorbell {
           // A deletion keeps the reason it happened (turned off, unregistered by the distributor). The option counts as
           // confirmed only when the script repeated it: a script older than 1.18.0 does not.
           s.update { it.copy(informPending = false, informedAt = if (answer.saved) clock() else null, failure = if (answer.saved) null else it.failure,
-            withOrderConfirmed = withOrder && answer.withOrder == true) }
+            withOrderConfirmed = withOrder && answer.withOrder == true,
+            // Only a script that saved the sealed doorbell makes clear pushes suspicious (1.19.0).
+            encryptionConfirmed = answer.saved && cifrado != null && answer.sealed == true,
+            relayConfirmed = answer.saved && answer.relay == true, perOrderRing = answer.saved && answer.perOrder == true) }
         false
       }
       is InstinctDoorbellScript.Answer.Failed -> { s.update { it.copy(failure = answer.reason) }; answer.retry }
@@ -431,21 +466,17 @@ object InstinctDoorbell {
     return InstinctDoorbellText.status(s.endpoint(), s.state()) { InstinctDeferral.clock(it, Calendar.getInstance()) }
   }
 
+  /** Whether the doorbell travels encrypted, for Settings. Never a key. */
+  fun encryptionStatus(context: Context): String {
+    val s = settings(context)
+    return InstinctDoorbellText.encryption(s.state(), s.endpoint() != null, s.withOrder())
+  }
+
   /** Under «Incluir la orden en el timbre»: whether the script already confirmed it. */
   fun withOrderStatus(context: Context): String = InstinctDoorbellText.withOrderStatus(settings(context).state())
 
   fun diagnosis(context: Context): String =
     InstinctDoorbellText.diagnosis(settings(context).state(), distributors(context).size) { InstinctDeferral.clock(it, Calendar.getInstance()) }
-
-  /** The distributors installed: apps with a receiver for REGISTER (needs the `<queries>` entry). */
-  private fun queryDistributors(context: Context): List<String> = runCatching {
-    val pm = context.packageManager
-    val intent = Intent(UnifiedPush.ACTION_REGISTER)
-    @Suppress("DEPRECATION")
-    val found = if (Build.VERSION.SDK_INT >= 33) pm.queryBroadcastReceivers(intent, android.content.pm.PackageManager.ResolveInfoFlags.of(0))
-      else pm.queryBroadcastReceivers(intent, 0)
-    found.mapNotNull { it.activityInfo?.packageName }.filter { it != context.packageName }.distinct().sorted()
-  }.getOrDefault(emptyList())
 
   private fun sendToDistributor(context: Context, intent: Intent) {
     if (Build.VERSION.SDK_INT >= 34) {
@@ -485,23 +516,6 @@ object InstinctDoorbell {
     if (runCatching { scheduler.schedule(job) }.getOrDefault(JobScheduler.RESULT_FAILURE) != JobScheduler.RESULT_SUCCESS && delayMillis == null)
       runCatching { scheduler.schedule(builder().build()) }
   }
-}
-
-/**
- * UnifiedPush's broadcasts from the distributor: NEW_ENDPOINT, MESSAGE, REGISTRATION_FAILED, UNREGISTERED and
- * TEMP_UNAVAILABLE. Exported, because the distributor is another app: every request with a token Insto did not
- * register is ignored. `onReceive()` only takes `goAsync()` and queues the work (1.19.0).
- */
-class InstinctDoorbellReceiver : BroadcastReceiver() {
-  override fun onReceive(context: Context, intent: Intent) {
-    runCatching { InstinctDoorbell.onReceive(context, intent) { goAsync()?.let { pending -> PushFinisher { pending.finish() } } } }
-  }
-}
-
-/** AND_3: a service the distributor may bind for a few seconds to raise Insto while it delivers. It does nothing else. */
-class InstinctDoorbellRaiseService : Service() {
-  private val binder = Binder()
-  override fun onBind(intent: Intent?): IBinder = binder
 }
 
 /**

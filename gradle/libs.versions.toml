@@ -14,6 +14,10 @@ androidxTestRunner = "1.7.0"
 androidxTestExtJunit = "1.3.0"
 robolectric = "4.18.1"
 orgJson = "20260814"
+# UnifiedPush connector (Apache 2.0): registration, Web Push keys and RFC 8291 decryption for the doorbell (1.19.0).
+unifiedpushConnector = "3.3.6"
+# The same Tink the connector already brings at runtime: Insto compiles against it to seal its own plain doorbell.
+tink = "1.24.0"
 
 
 [libraries]
@@ -42,6 +46,8 @@ androidx-test-runner = { group = "androidx.test", name = "runner", version.ref =
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
+tink = { group = "com.google.crypto.tink", name = "tink", version.ref = "tink" }
+unifiedpush-connector = { group = "org.unifiedpush.android", name = "connector", version.ref = "unifiedpushConnector" }
 
 
 [plugins]

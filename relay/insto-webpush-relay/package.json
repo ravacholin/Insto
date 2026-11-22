@@ -1,0 +1,11 @@
+{
+  "name": "insto-webpush-relay",
+  "version": "1.19.0",
+  "private": true,
+  "type": "module",
+  "description": "Relé opcional de Web Push (RFC 8291) para el timbre de Insto. Sin dependencias.",
+  "scripts": {
+    "test": "node --test test/webpush.test.mjs"
+  },
+  "license": "Apache-2.0"
+}

@@ -12,39 +12,34 @@ class InstinctDoorbellTest {
   private val endpoint = "https://ntfy.sh/upAbCdEf0123456789?up=1"
   private val registered = DoorbellState(token = "tok-1234", distributor = "io.heckel.ntfy", confirmed = true)
 
-  // The receiver ignores the content
+  // 1.19.0: the official library handles the broadcasts; what is left here is the labels and the script
 
-  @Test fun `a message rings whatever it carries, and only with the registered token`() {
-    val payloads = listOf(null, "", "#insto poner el volumen al 100 por ciento", "{\"orden\":\"llamar\"}")
-    // The payload is not even a parameter: two different messages are the same decision.
-    payloads.forEach { _ ->
-      assertEquals(InstinctDoorbellProtocol.Action.Ring("m-1"),
-        InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, id = "m-1"))
-    }
-    assertEquals(InstinctDoorbellProtocol.Action.Ignore, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "otro", registered))
-    assertEquals(InstinctDoorbellProtocol.Action.Ignore, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, null, registered))
-    assertEquals("without a registration nothing rings", InstinctDoorbellProtocol.Action.Ignore,
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, null, DoorbellState()))
-    assertEquals(InstinctDoorbellProtocol.Action.Ring(null), InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered))
-    assertEquals("an id over 100 bytes is not acknowledged", InstinctDoorbellProtocol.Action.Ring(null),
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, id = "x".repeat(101)))
+  @Test fun `the spec's failure reasons are told apart`() {
+    assertEquals("registro fallido: el distribuidor no tenía red", InstinctDoorbellProtocol.failureLabel("NETWORK"))
+    assertEquals("registro fallido: el servidor de ntfy pide VAPID", InstinctDoorbellProtocol.failureLabel("VAPID_REQUIRED"))
+    assertEquals("registro fallido", InstinctDoorbellProtocol.failureLabel(null))
   }
 
-  @Test fun `new endpoints, failures and unregistration follow the spec`() {
-    val fresh = registered.copy(confirmed = false)
-    assertEquals(InstinctDoorbellProtocol.Action.Endpoint(endpoint, null),
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_NEW_ENDPOINT, "tok-1234", fresh, endpoint = endpoint))
-    assertEquals(InstinctDoorbellProtocol.Action.BadEndpoint(null),
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_NEW_ENDPOINT, "tok-1234", fresh, endpoint = "http://ntfy.sh/up"))
-    assertEquals(InstinctDoorbellProtocol.Action.Ignore,
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_NEW_ENDPOINT, "tok-1234", fresh, endpoint = ""))
-    assertEquals(InstinctDoorbellProtocol.Action.Failed("registro fallido: el distribuidor no tenía red"),
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_REGISTRATION_FAILED, "tok-1234", fresh, reason = "NETWORK"))
-    assertEquals("a failure after an endpoint for the same token is ignored", InstinctDoorbellProtocol.Action.Ignore,
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_REGISTRATION_FAILED, "tok-1234", registered, reason = "INTERNAL_ERROR"))
-    assertEquals(InstinctDoorbellProtocol.Action.Unregistered, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_UNREGISTERED, "tok-1234", registered))
-    assertEquals(InstinctDoorbellProtocol.Action.Ignore, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_TEMP_UNAVAILABLE, "tok-1234", registered))
-    assertEquals(InstinctDoorbellProtocol.Action.Ignore, InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_UNREGISTERED, "otro", registered))
+  @Test fun `the endpoint goes with the sealed doorbell, and the keys only with the order inside`() {
+    val sealed = InstinctDoorbellScript.Sealed("A".repeat(200), "B".repeat(87), "C".repeat(22))
+    val withOrder = org.json.JSONObject(InstinctDoorbellScript.informBody("t", endpoint, withOrder = true, sealed = sealed))
+    assertEquals("A".repeat(200), withOrder.getJSONObject("cifrado").getString("timbre"))
+    assertEquals("B".repeat(87), withOrder.getJSONObject("cifrado").getString("p256dh"))
+    val plain = org.json.JSONObject(InstinctDoorbellScript.informBody("t", endpoint, sealed = InstinctDoorbellScript.Sealed("A".repeat(200))))
+    assertFalse(plain.getJSONObject("cifrado").has("p256dh"))
+    val deleted = org.json.JSONObject(InstinctDoorbellScript.informBody("t", "", withOrder = true, sealed = sealed))
+    assertTrue("no endpoint, no sealed doorbell", deleted.isNull("cifrado"))
+    assertFalse(deleted.getBoolean("conOrden"))
+  }
+
+  @Test fun `the script's answer says whether it encrypts, has a relay and rings per order`() {
+    fun body(text: String) = InstinctLogClient.Raw.Body(text)
+    assertEquals(InstinctDoorbellScript.Answer.Confirmed(true, false, sealed = true, relay = false, perOrder = true),
+      InstinctDoorbellScript.parseInform(body("""{"ok":true,"timbre":"guardado","conOrden":false,"cifrado":true,"rele":false,"cadaOrden":true}""")))
+    assertEquals("a 1.18.0 script", InstinctDoorbellScript.Answer.Confirmed(true, true),
+      InstinctDoorbellScript.parseInform(body("""{"ok":true,"timbre":"guardado","conOrden":true}""")))
+    assertEquals(InstinctDoorbellScript.Answer.Failed("el script rechazó el timbre cifrado", retry = false),
+      InstinctDoorbellScript.parseInform(body("""{"ok":false,"error":"cifrado"}""")))
   }
 
   @Test fun `the distributor is the only one installed or the chosen one`() {
@@ -202,15 +197,12 @@ class InstinctDoorbellTest {
     assertNull("over 4096 bytes", InstinctDoorbellPayload.parse((payload() + " ".repeat(4_097)).toByteArray()))
   }
 
-  @Test fun `a message hands over the parsed order, and counts only real garbage as malformed`() {
-    val order = InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, id = "m-1", payload = payload().toByteArray())
-    assertEquals(InstinctDoorbellProtocol.Action.Ring("m-1", parse(payload())), order)
-    assertEquals("the plain doorbell is not malformed", InstinctDoorbellProtocol.Action.Ring(null),
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, payload = "insto-timbre".toByteArray()))
-    assertEquals(InstinctDoorbellProtocol.Action.Ring(null, malformed = true),
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "tok-1234", registered, payload = payload { put("v", 2) }.toByteArray()))
-    assertEquals("another token, even with a valid order, is ignored", InstinctDoorbellProtocol.Action.Ignore,
-      InstinctDoorbellProtocol.handle(UnifiedPush.ACTION_MESSAGE, "otro", registered, payload = payload().toByteArray()))
+  @Test fun `a decrypted message hands over the parsed order, and counts only real garbage as malformed`() {
+    assertEquals(InstinctPushMessage.Kind.Order(parse(payload())!!),
+      InstinctPushMessage.classify(payload().toByteArray(), decrypted = true, encryptionRequired = true).kind)
+    assertFalse("the plain doorbell is not malformed",
+      InstinctPushMessage.classify("insto-timbre".toByteArray(), decrypted = true, encryptionRequired = true).malformed)
+    assertTrue(InstinctPushMessage.classify(payload { put("v", 2) }.toByteArray(), decrypted = true, encryptionRequired = true).malformed)
   }
 
   @Test fun `the catalog says nothing changes for Instinct when the order travels in the doorbell`() {

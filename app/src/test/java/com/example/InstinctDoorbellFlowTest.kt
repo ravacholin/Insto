@@ -37,11 +37,20 @@ class InstinctDoorbellFlowTest {
   private val endpoint = "https://ntfy.sh/upAbCdEf0123456789?up=1"
   private val ntfy = "io.heckel.ntfy"
   private val inbox = mutableListOf<MailboxOrder>()
+  private val PLAIN = InstinctDoorbellPayload.PLAIN.toByteArray()
   private val taken = mutableListOf<String>()
   /** What the fake Apps Script received for the doorbell. */
   private val scriptBodies = mutableListOf<JSONObject>()
   private var scriptKnowsDoorbell = true
-  private val toDistributor = mutableListOf<Intent>()
+  /** What Insto sent by hand (only a 1.18.0 registration's UNREGISTER now). */
+  private val sentByInsto = mutableListOf<Intent>()
+  /** Every broadcast to the distributor: the library's (REGISTER, MESSAGE_ACK, UNREGISTER) and Insto's own. */
+  private val toDistributor: List<Intent> get() = shadowOf(app).broadcastIntents.toList() + sentByInsto
+  /** The library's Web Push keys, without the Android Keystore. */
+  private val keys = TestPushKeys()
+  /** The script answers like 1.19.0 (it saves the sealed doorbell); false: like 1.18.0. */
+  private var scriptSeals = true
+  private var scriptRelay = false
   private val ringJobs = mutableListOf<Long?>()
   private val followUps = mutableListOf<Long?>()
   private val mailboxJobs = mutableListOf<Long?>()
@@ -71,7 +80,10 @@ class InstinctDoorbellFlowTest {
     InstinctMailbox.lastPollAt = 0L
     InstinctMailbox.gate.reset()
     InstinctDoorbell.distributors = { listOf(ntfy) }
-    InstinctDoorbell.send = { _, intent -> toDistributor += intent }
+    InstinctDoorbell.send = { _, intent -> sentByInsto += intent }
+    InstinctDoorbell.keyManager = { keys }
+    InstinctDoorbell.io = { it.run() }
+    resetConnectorDatabase()
     InstinctDoorbell.online = { online }
     // 1.19.0: receiving and dispatching run inline here; the rescue job is recorded.
     InstinctPushIntake.execute = { it.run() }
@@ -99,7 +111,13 @@ class InstinctDoorbellFlowTest {
             scriptBodies += body
             if (!scriptKnowsDoorbell) FakeHttp.Reply(200, """{"ok":true,"accepted":[]}""")
             else FakeHttp.Reply(200, JSONObject().put("ok", true).put("timbre", if (body.optString("endpoint").isEmpty()) "borrado" else "guardado")
-              .apply { if (body.has("conOrden")) put("conOrden", body.getBoolean("conOrden")) }.toString())
+              .apply {
+                if (body.has("conOrden")) put("conOrden", body.getBoolean("conOrden"))
+                if (scriptSeals && body.has("cifrado")) {
+                  val sealed = !body.isNull("cifrado")
+                  put("cifrado", sealed).put("rele", sealed && scriptRelay && body.getJSONObject("cifrado").has("p256dh")).put("cadaOrden", true)
+                }
+              }.toString())
           }
           else -> FakeHttp.Reply(200, """{"ok":true,"accepted":[]}""")
         }
@@ -147,12 +165,18 @@ class InstinctDoorbellFlowTest {
     return MailboxOrder(id, iso, lines.toList(), InstinctMailboxSignature.sign(key, InstinctMailboxSignature.canonical(id, iso, lines.toList())))
   }
 
-  private fun deliver(action: String, token: String?, extras: Intent.() -> Unit = {}) {
-    val intent = Intent(action).apply { token?.let { putExtra(UnifiedPush.EXTRA_TOKEN, it) }; extras() }
-    InstinctDoorbellReceiver().onReceive(app, intent)
+  /** The library keeps one database per process; each test gets a fresh one, like a fresh install. */
+  private fun resetConnectorDatabase() {
+    val store = Class.forName("org.unifiedpush.android.connector.internal.DBStore")
+    store.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
   }
 
-  /** Turns the doorbell on and answers the REGISTER with [endpoint]; returns the token. */
+  private fun deliver(action: String, token: String?, extras: Intent.() -> Unit = {}) {
+    val intent = Intent(action).setPackage(app.packageName).apply { token?.let { putExtra(UnifiedPush.EXTRA_TOKEN, it) }; extras() }
+    InstinctPushReceiver().onReceive(app, intent)
+  }
+
+  /** Turns the doorbell on and answers the library's REGISTER with [endpoint] and its keys; returns the token. */
   private fun register(): String {
     InstinctDoorbell.setEnabled(app, true)
     val register = toDistributor.last { it.action == UnifiedPush.ACTION_REGISTER }
@@ -161,6 +185,12 @@ class InstinctDoorbellFlowTest {
     deliver(UnifiedPush.ACTION_NEW_ENDPOINT, token) { putExtra(UnifiedPush.EXTRA_ENDPOINT, endpoint); putExtra(UnifiedPush.EXTRA_ID, "e-1") }
     return token
   }
+
+  /** The registration's public keys, as the script and the relay get them. */
+  private fun publicKeys(): PushKeys = keys.getPublicKeySet(LibraryPushConnector.INSTANCE)!!.let { PushKeys(it.pubKey, it.auth) }
+
+  /** [bytes] encrypted for Insto (RFC 8291), as the relay or the sealed doorbell arrive. */
+  private fun sealed(bytes: ByteArray): ByteArray = InstinctPushCrypto.seal(publicKeys(), bytes)
 
   @Test fun `registering keeps the endpoint in noBackupFilesDir, tells the script and shows it masked`() {
     val token = register()
@@ -193,22 +223,22 @@ class InstinctDoorbellFlowTest {
   @Test fun `a ring with another token is ignored`() {
     register()
     deliver(UnifiedPush.ACTION_MESSAGE, "inventado") { putExtra("bytesMessage", byteArrayOf(1)) }
-    deliver(UnifiedPush.ACTION_MESSAGE, null)
+    deliver(UnifiedPush.ACTION_MESSAGE, null) { putExtra(UnifiedPush.EXTRA_BYTES_MESSAGE, PLAIN) }
     assertEquals(0, gets)
     assertEquals(0, bell.state().rings)
   }
 
   @Test fun `a ring inside the 5-second window is postponed, and one without network waits for it`() {
     val token = register()
-    deliver(UnifiedPush.ACTION_MESSAGE, token)
+    ringWith(token, PLAIN)
     assertEquals(1, gets)
-    deliver(UnifiedPush.ACTION_MESSAGE, token)
+    ringWith(token, PLAIN)
     assertEquals("not polled twice", 1, gets)
     val delay = ringJobs.single()!!
     assertTrue("$delay", delay in 1..5_000L)
     online = false
     InstinctMailbox.gate.reset()
-    deliver(UnifiedPush.ACTION_MESSAGE, token)
+    ringWith(token, PLAIN)
     assertEquals(null, ringJobs.last())
     assertEquals(3, bell.state().rings)
   }
@@ -218,7 +248,7 @@ class InstinctDoorbellFlowTest {
     mailboxJobs.clear()
     InstinctMailbox.rearm(app)
     assertEquals("before any ring, the chosen 2 minutes", 2 * 60_000L, mailboxJobs.last())
-    deliver(UnifiedPush.ACTION_MESSAGE, token)
+    ringWith(token, PLAIN)
     InstinctMailbox.rearm(app)
     assertEquals(15 * 60_000L, mailboxJobs.last())
     wall += 24 * 60 * 60_000L
@@ -238,7 +268,7 @@ class InstinctDoorbellFlowTest {
     assertEquals(again, toDistributor.last { it.action == UnifiedPush.ACTION_UNREGISTER }.getStringExtra(UnifiedPush.EXTRA_TOKEN))
     assertEquals("", scriptBodies.last().getString("endpoint"))
     // The token is forgotten at once: a late message for it does nothing.
-    deliver(UnifiedPush.ACTION_MESSAGE, again)
+    ringClear(again, PLAIN)
     assertEquals(0, gets)
   }
 
@@ -255,7 +285,11 @@ class InstinctDoorbellFlowTest {
   private fun payload(order: MailboxOrder): ByteArray = JSONObject().put("v", 1).put("id", order.id).put("at", order.at)
     .put("lines", JSONArray(order.lines)).put("sig", order.sig).toString().toByteArray(Charsets.UTF_8)
 
-  private fun ringWith(token: String, bytes: ByteArray) = deliver(UnifiedPush.ACTION_MESSAGE, token) {
+  /** A push whose content is [bytes] encrypted for Insto (RFC 8291), as UnifiedPush requires. */
+  private fun ringWith(token: String, bytes: ByteArray) = ringClear(token, sealed(bytes))
+
+  /** A push whose content is [bytes] as they are: in clear (a 1.18.0 script) or already sealed. */
+  private fun ringClear(token: String, bytes: ByteArray) = deliver(UnifiedPush.ACTION_MESSAGE, token) {
     putExtra(UnifiedPush.EXTRA_BYTES_MESSAGE, bytes); putExtra(UnifiedPush.EXTRA_ID, "m-" + UUID.randomUUID())
   }
 
@@ -374,13 +408,14 @@ class InstinctDoorbellFlowTest {
     assertEquals(0, gets)
   }
 
-  @Test fun `a failed registration needs a new token`() {
+  @Test fun `a failed registration is diagnosed and registering again asks the distributor again`() {
     InstinctDoorbell.setEnabled(app, true)
-    val first = toDistributor.last().getStringExtra(UnifiedPush.EXTRA_TOKEN)
+    val first = toDistributor.last { it.action == UnifiedPush.ACTION_REGISTER }.getStringExtra(UnifiedPush.EXTRA_TOKEN)
     deliver(UnifiedPush.ACTION_REGISTRATION_FAILED, first) { putExtra(UnifiedPush.EXTRA_REASON, "NETWORK") }
     assertTrue(InstinctDoorbell.diagnosis(app).contains("no tenía red"))
+    val before = toDistributor.count { it.action == UnifiedPush.ACTION_REGISTER }
     InstinctDoorbell.register(app)
-    assertNotEquals(first, toDistributor.last().getStringExtra(UnifiedPush.EXTRA_TOKEN))
+    assertEquals(before + 1, toDistributor.count { it.action == UnifiedPush.ACTION_REGISTER })
   }
 
   // 1.19.0: receiving is not running
@@ -388,7 +423,8 @@ class InstinctDoorbellFlowTest {
   /** A broadcast as the system delivers it, with a finisher that counts. */
   private fun deliverAsync(action: String, token: String?, finishes: java.util.concurrent.atomic.AtomicInteger, extras: Intent.() -> Unit = {}) {
     val intent = Intent(action).apply { token?.let { putExtra(UnifiedPush.EXTRA_TOKEN, it) }; extras() }
-    InstinctDoorbell.onReceive(app, intent) { PushFinisher { finishes.incrementAndGet() } }
+    val intent2 = intent.setPackage(app.packageName)
+    InstinctPushReceiver().receive(app, intent2) { PushFinisher { finishes.incrementAndGet() } }
   }
 
   @Test fun `onReceive only queues, nothing is read, polled or run until the receiving thread runs`() {
@@ -399,7 +435,7 @@ class InstinctDoorbellFlowTest {
     audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
     val finishes = java.util.concurrent.atomic.AtomicInteger()
     val order = order("#insto poner el volumen al 40 por ciento")
-    deliverAsync(UnifiedPush.ACTION_MESSAGE, token, finishes) { putExtra(UnifiedPush.EXTRA_BYTES_MESSAGE, payload(order)); putExtra(UnifiedPush.EXTRA_ID, "m-q") }
+    deliverAsync(UnifiedPush.ACTION_MESSAGE, token, finishes) { putExtra(UnifiedPush.EXTRA_BYTES_MESSAGE, sealed(payload(order))); putExtra(UnifiedPush.EXTRA_ID, "m-q") }
     assertEquals("not finished yet", 0, finishes.get())
     assertEquals(0, bell.state().rings)
     assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
@@ -421,7 +457,7 @@ class InstinctDoorbellFlowTest {
     InstinctMailbox.client = { InstinctMailboxClient(InstinctLogClient(OkHttpClient.Builder().addInterceptor(slow).build())) }
     val finishes = java.util.concurrent.atomic.AtomicInteger()
     val started = System.nanoTime()
-    deliverAsync(UnifiedPush.ACTION_MESSAGE, token, finishes)
+    deliverAsync(UnifiedPush.ACTION_MESSAGE, token, finishes) { putExtra(UnifiedPush.EXTRA_BYTES_MESSAGE, sealed(PLAIN)) }
     val elapsed = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
     assertTrue("onReceive took $elapsed ms", elapsed < 300)
     val deadline = System.currentTimeMillis() + 10_000
@@ -440,7 +476,7 @@ class InstinctDoorbellFlowTest {
     val token = register()
     InstinctPushIntake.execute = { throw java.util.concurrent.RejectedExecutionException() }
     val finishes = java.util.concurrent.atomic.AtomicInteger()
-    deliverAsync(UnifiedPush.ACTION_MESSAGE, token, finishes)
+    deliverAsync(UnifiedPush.ACTION_MESSAGE, token, finishes) { putExtra(UnifiedPush.EXTRA_BYTES_MESSAGE, sealed(PLAIN)) }
     assertEquals(1, finishes.get())
     assertEquals(1, bell.state().queueRejected)
     assertTrue(InstinctDoorbell.diagnosis(app), InstinctDoorbell.diagnosis(app).contains("cola de recepción llena"))
@@ -563,6 +599,125 @@ class InstinctDoorbellFlowTest {
     ringWith(token, payload(order))
     assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
     assertEquals(1, bell.state().directOrders)
+  }
+
+
+  // 1.19.0: UnifiedPush with the official library and RFC 8291
+
+  @Test fun `the script gets a sealed plain doorbell that only Insto's keys open, and no keys without the order`() {
+    register()
+    val body = scriptBodies.last()
+    val sealedDoorbell = InstinctPushCrypto.decode(body.getJSONObject("cifrado").getString("timbre").trimEnd('='))
+    assertTrue(InstinctPushMessage.looksEncrypted(sealedDoorbell))
+    assertEquals("insto-timbre", String(keys.decrypt(LibraryPushConnector.INSTANCE, sealedDoorbell)!!))
+    assertFalse("the keys go only with the order inside", body.getJSONObject("cifrado").has("p256dh"))
+    assertTrue(bell.state().encryptionConfirmed)
+    assertTrue(bell.state().perOrderRing)
+    InstinctDoorbell.setWithOrder(app, true)
+    assertEquals(publicKeys().p256dh, scriptBodies.last().getJSONObject("cifrado").getString("p256dh"))
+    assertEquals(publicKeys().auth, scriptBodies.last().getJSONObject("cifrado").getString("auth"))
+    val diagnosis = InstinctDoorbell.diagnosis(app)
+    assertFalse(diagnosis.contains(publicKeys().p256dh)); assertFalse(diagnosis.contains(publicKeys().auth))
+    assertFalse(InstinctProposalCenter.catalog(app).contains(publicKeys().auth))
+  }
+
+  @Test fun `the sealed doorbell as the script sends it rings and polls`() {
+    val token = register()
+    val blob = InstinctPushCrypto.decode(scriptBodies.last().getJSONObject("cifrado").getString("timbre").trimEnd('='))
+    inbox += order("#insto poner el volumen al 40 por ciento")
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringClear(token, blob)
+    assertEquals(1, gets)
+    assertTrue(audio.getStreamVolume(AudioManager.STREAM_MUSIC) > 0)
+    assertEquals(1, bell.state().encryptedPushes)
+    assertEquals(0, bell.state().plainPushes)
+  }
+
+  @Test fun `an encrypted order from the relay runs at once without reading the sheet`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringWith(token, payload(order("#insto poner el volumen al 40 por ciento")))
+    assertTrue(audio.getStreamVolume(AudioManager.STREAM_MUSIC) > 0)
+    assertEquals(0, gets)
+    assertEquals(1, bell.state().encryptedPushes)
+  }
+
+  @Test fun `once the script encrypts, a clear signed order is not run from the push, only polled`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    assertTrue(bell.state().encryptionConfirmed)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    val order = order("#insto poner el volumen al 40 por ciento")
+    inbox += order
+    ringClear(token, payload(order))
+    assertEquals("it polled instead", 1, gets)
+    assertEquals(0, bell.state().directOrders)
+    assertEquals(1, bell.state().plainPushes)
+    assertEquals("the poll ran it, once", listOf("ok"), acks("poner el volumen al 40 por ciento"))
+    assertTrue(InstinctDoorbell.diagnosis(app), InstinctDoorbell.diagnosis(app).contains("sin cifrar"))
+  }
+
+  @Test fun `with a 1_18_0 script the clear doorbell works as before and is marked as not compliant`() {
+    scriptSeals = false
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    assertFalse(bell.state().encryptionConfirmed)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    ringClear(token, payload(order("#insto poner el volumen al 40 por ciento")))
+    assertTrue("1.18.0 behaviour kept", audio.getStreamVolume(AudioManager.STREAM_MUSIC) > 0)
+    assertEquals(0, gets)
+    assertEquals(1, bell.state().plainPushes)
+    assertTrue(InstinctDoorbell.encryptionStatus(app), InstinctDoorbell.encryptionStatus(app).contains("no conforme"))
+  }
+
+  @Test fun `a sealed message Insto cannot decrypt is counted and only polls`() {
+    val token = register()
+    val other = TestPushKeys().apply { generate("x") }
+    val foreign = InstinctPushCrypto.seal(other.getPublicKeySet("x")!!.let { PushKeys(it.pubKey, it.auth) }, payload(order("#insto poner el volumen al 40 por ciento")))
+    ringClear(token, foreign)
+    assertEquals(1, bell.state().decryptFailures)
+    assertEquals(0, bell.state().directOrders)
+    assertEquals(1, gets)
+  }
+
+  @Test fun `a too big push is no order`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    ringClear(token, ByteArray(5_000) { 'a'.code.toByte() })
+    assertEquals(0, bell.state().directOrders)
+  }
+
+  @Test fun `a new endpoint gets a new sealed doorbell and the script must confirm it again`() {
+    register()
+    val first = scriptBodies.last().getJSONObject("cifrado").getString("timbre")
+    val token = toDistributor.last { it.action == UnifiedPush.ACTION_REGISTER }.getStringExtra(UnifiedPush.EXTRA_TOKEN)
+    deliver(UnifiedPush.ACTION_NEW_ENDPOINT, token) { putExtra(UnifiedPush.EXTRA_ENDPOINT, "https://ntfy.sh/upOtro9876543210?up=1") }
+    assertEquals("https://ntfy.sh/upOtro9876543210?up=1", scriptBodies.last().getString("endpoint"))
+    assertNotEquals(first, scriptBodies.last().getJSONObject("cifrado").getString("timbre"))
+    assertTrue(bell.state().encryptionConfirmed)
+  }
+
+  @Test fun `a 1_18_0 registration is unregistered and replaced by the library's`() {
+    // What 1.18.0 left: its own token and distributor in the state.
+    bell.update { it.copy(token = "11111111-2222-3333-4444-555555555555", distributor = ntfy, confirmed = true) }
+    bell.writeEndpoint(endpoint)
+    InstinctDoorbell.setEnabled(app, true)
+    val legacy = sentByInsto.single { it.action == UnifiedPush.ACTION_UNREGISTER }
+    assertEquals("11111111-2222-3333-4444-555555555555", legacy.getStringExtra(UnifiedPush.EXTRA_TOKEN))
+    assertEquals(ntfy, legacy.`package`)
+    assertNull(bell.state().token)
+    val token = toDistributor.last { it.action == UnifiedPush.ACTION_REGISTER }.getStringExtra(UnifiedPush.EXTRA_TOKEN)
+    assertNotEquals("11111111-2222-3333-4444-555555555555", token)
+    // A message for the old token is ignored.
+    ringClear("11111111-2222-3333-4444-555555555555", PLAIN)
+    assertEquals(0, bell.state().rings)
+  }
+
+  @Test fun `the distributor's temporary unavailability is diagnosed and the backup poll stays`() {
+    val token = register()
+    deliver(UnifiedPush.ACTION_TEMP_UNAVAILABLE, token)
+    assertTrue(InstinctDoorbell.diagnosis(app), InstinctDoorbell.diagnosis(app).contains("no está disponible"))
   }
 
 }

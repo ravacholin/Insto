@@ -85,6 +85,8 @@ dependencies {
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.okhttp)
+  implementation(libs.unifiedpush.connector)
+  implementation(libs.tink)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.test.core)
   testImplementation(libs.androidx.test.ext.junit)
