@@ -105,7 +105,7 @@ fun ContactEditorSheet(
 
       Text(
         text =
-          "Choose the single contact PingAssist opens on tap and sends voice messages to on long press. Include country code (e.g. +1, +44, +39).",
+          "Elegí el contacto que Insto abre con un toque y al que manda audios al mantener presionado. Incluí el código de país (por ejemplo, +54, +1, +34).",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )

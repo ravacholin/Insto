@@ -1,12 +1,12 @@
 <resources>
     <string name="app_name">Insto</string>
-    <string name="accessibility_service_label">PingAssist Auto-Send &amp; Triggers</string>
+    <string name="accessibility_service_label">Insto · accesibilidad</string>
     <string name="accessibility_service_description">Asistente de Insto para enviar mensajes y audios por WhatsApp, activar el panel con la burbuja o las teclas de volumen y controlar el cronómetro de Reloj de Google cuando lo pedís. Solo opera las aplicaciones correspondientes a una solicitud activa.</string>
-    <string name="widget_description">Tap to open your pinned WhatsApp contact or tap the mic to record &amp; send a voice note.</string>
-    <string name="qs_tile_label">PingAssist</string>
-    <string name="direct_voice_label">PingAssist Voice</string>
-    <string name="shortcut_open_chat_short">Open Chat</string>
-    <string name="shortcut_open_chat_long">Open WhatsApp Chat</string>
-    <string name="shortcut_voice_short">Voice Ping</string>
-    <string name="shortcut_voice_long">Record &amp; Send Audio</string>
+    <string name="widget_description">Insto: tocá para abrir tu contacto de WhatsApp o tocá el micrófono para grabar y enviar un audio.</string>
+    <string name="qs_tile_label">Insto</string>
+    <string name="direct_voice_label">Insto · voz</string>
+    <string name="shortcut_open_chat_short">Abrir chat</string>
+    <string name="shortcut_open_chat_long">Abrir el chat de WhatsApp</string>
+    <string name="shortcut_voice_short">Insto · voz</string>
+    <string name="shortcut_voice_long">Grabar y enviar un audio</string>
 </resources>

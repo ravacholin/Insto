@@ -23,7 +23,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
-            android:text="PingAssist"
+            android:text="Insto"
             android:textColor="#10D98B"
             android:textSize="11sp"
             android:textStyle="bold" />
@@ -34,7 +34,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
-            android:text="Set Contact"
+            android:text="Elegir contacto"
             android:textColor="#F1F7F5"
             android:textSize="15sp"
             android:textStyle="bold" />

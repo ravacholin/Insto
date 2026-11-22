@@ -56,7 +56,7 @@ class PingAssistWidgetProvider : AppWidgetProvider() {
       contactName: String?,
     ) {
       val views = RemoteViews(context.packageName, R.layout.widget_ping_assist)
-      views.setTextViewText(R.id.widget_contact_name, contactName ?: "Tap to Set Contact")
+      views.setTextViewText(R.id.widget_contact_name, contactName ?: "Tocá para elegir contacto")
 
       val openAppIntent = Intent(context, MainActivity::class.java)
       val openAppPending =

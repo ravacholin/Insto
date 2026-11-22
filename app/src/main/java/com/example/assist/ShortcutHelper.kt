@@ -37,15 +37,15 @@ object ShortcutHelper {
     val openShortcut =
       ShortcutInfoCompat.Builder(context, SHORTCUT_OPEN_CHAT)
         .setShortLabel("Chat ${contact.displayName}".take(18))
-        .setLongLabel("Open ${contact.displayName} on WhatsApp")
+        .setLongLabel("Abrir a ${contact.displayName} en WhatsApp")
         .setIcon(IconCompat.createWithResource(context, R.drawable.ic_chat_bubble))
         .setIntent(openChatIntent)
         .build()
 
     val voiceShortcut =
       ShortcutInfoCompat.Builder(context, SHORTCUT_RECORD_VOICE)
-        .setShortLabel("Voice ${contact.displayName}".take(18))
-        .setLongLabel("Record & send audio to ${contact.displayName}")
+        .setShortLabel("Audio ${contact.displayName}".take(18))
+        .setLongLabel("Grabar y enviar un audio a ${contact.displayName}")
         .setIcon(IconCompat.createWithResource(context, R.drawable.ic_mic_pulse))
         .setIntent(recordVoiceIntent)
         .build()

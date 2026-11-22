@@ -369,9 +369,9 @@ object InstinctProposalCenter {
     fingerprint(context)?.let { return it }
     if (Looper.myLooper() == Looper.getMainLooper() || !InstinctProposalSettings(context).isEnabled()) return null
     val cache = AssistantPreferencesCache.of(context)
-    if (cache.current == null) runCatching {
-      kotlinx.coroutines.runBlocking { kotlinx.coroutines.withTimeoutOrNull(millis) { cache.awaitCurrent() } }
-    }
+    // A bounded wait on this worker thread (never the main one): DataStore usually answers in tens of milliseconds.
+    val deadline = System.nanoTime() + millis * 1_000_000
+    while (cache.current == null && System.nanoTime() < deadline) runCatching { Thread.sleep(25) }
     return fingerprint(context)
   }
   internal var PREFS_WAIT_MILLIS = 3_000L
