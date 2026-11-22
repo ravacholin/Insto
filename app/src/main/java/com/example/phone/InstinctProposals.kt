@@ -319,6 +319,8 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
     val token: String = java.util.UUID.randomUUID().toString(),
     /** Where it came from (1.16.0): WhatsApp, unsigned, or the signed mailbox. */
     val source: ProposalSource = ProposalSource.WHATSAPP,
+    /** Its row in the execution journal (1.20.0); null for a proposal made outside it. */
+    val executionId: String? = null,
   ) {
     val summary: String get() = PhoneCommandCodec.summary(command)
   }
@@ -337,11 +339,17 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
   private var nextId = 1L
   private val entries = LinkedHashMap<Long, Entry>()
 
-  /** Adds a validated proposal. Null when the same command is already pending: the same proposal is never offered twice. */
-  @Synchronized fun offer(order: String, command: PhoneCommand, fingerprint: String, source: ProposalSource = ProposalSource.WHATSAPP): Proposal? {
+  /**
+   * Adds a validated proposal. Null when the same execution (1.20.0), or, for a proposal without one, the same command,
+   * is already pending: the same proposal is never offered twice. Two orders of different messages with the same text
+   * have different executions and are both offered.
+   */
+  @Synchronized fun offer(order: String, command: PhoneCommand, fingerprint: String, source: ProposalSource = ProposalSource.WHATSAPP,
+    executionId: String? = null): Proposal? {
     expire()
-    if (entries.values.any { it.state == State.PENDING && it.proposal.command == command }) return null
-    val proposal = Proposal(nextId++, order, command, clock(), fingerprint, source = source)
+    if (entries.values.any { it.state == State.PENDING &&
+        if (executionId != null) it.proposal.executionId == executionId else it.proposal.executionId == null && it.proposal.command == command }) return null
+    val proposal = Proposal(nextId++, order, command, clock(), fingerprint, source = source, executionId = executionId)
     entries[proposal.id] = Entry(proposal, State.PENDING)
     while (entries.size > CAPACITY) entries.remove(entries.keys.first())
     return proposal

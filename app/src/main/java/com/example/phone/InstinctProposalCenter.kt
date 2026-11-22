@@ -237,31 +237,87 @@ object InstinctProposalIntake {
     val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser, now, routines) }
     if (checks.none { it !is ProposalCheck.Invalid }) diagnose(Diagnosis.NOT_UNDERSTOOD)
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
+    // 1.20.0: every accepted line gets its own row before anything runs; without the journal nothing runs.
+    val records = try {
+      (InstinctExecutions.journal(app).admit(ExecutionIds.whatsapp(outcome.message, InstinctScheduler.wallClock(), java.util.UUID.randomUUID().toString()),
+        ExecutionTransport.WHATSAPP, outcome.orders, outcome.message) as? InstinctExecutionJournal.Admission.Admitted)?.records.orEmpty()
+    } catch (_: Throwable) {
+      diagnose(Diagnosis.FAILED, JOURNAL_FAILED); return
+    }
     val ticket = InstinctProposalCenter.openReply(app, checks.size, replyHandle, outcome.message)
-    InstinctProposalCenter.deliver(app, checks, fingerprint, ticket, outcome.message)
+    records.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.VALIDATED) }
+    InstinctProposalCenter.deliver(app, checks, fingerprint, ticket, outcome.message, records = records)
     log(counters() + " valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")
   }
 
   /**
    * A verified order from the signed mailbox: the same entry point as WhatsApp's, with [ProposalSource.BUZON]. The
    * same validator, allowlist, brake, autonomy, execution, «Deshacer» and deferred orders. Its acknowledgements go to
-   * the log, whatever the channel: there is no WhatsApp notification to answer.
+   * the log, whatever the channel: there is no WhatsApp notification to answer. Since 1.20.0 its orders are the rows
+   * the claim recorded in the journal; only those still [ExecutionState.RECEIVED] go on, so a second call for the same
+   * message (a recovery, a repeated drain) never offers an order twice.
    */
-  fun onMailbox(context: Context, order: MailboxOrder) {
+  fun onMailbox(context: Context, order: MailboxOrder, transport: ExecutionTransport = ExecutionTransport.POLL) {
     val app = context.applicationContext
-    if (!InstinctProposalSettings(app).isEnabled() || !InstinctMailboxSettings(app).enabled()) return
-    val orders = InstinctProposalProtocol.orders(order.lines.joinToString("\n"))
-    if (orders.isEmpty()) return
+    val journal = InstinctExecutions.journal(app)
+    val message = InstinctMailboxSignature.messageId(order.id)
+    val records = try {
+      journal.forMessage(order.id).ifEmpty {
+        // A caller that did not claim through the journal: the rows are made now, without a claim.
+        val lines = InstinctProposalProtocol.orders(order.lines.joinToString("\n"))
+        (journal.admit(order.id, transport, lines, message, claim = false) as? InstinctExecutionJournal.Admission.Admitted)?.records.orEmpty()
+      }
+    } catch (_: Throwable) { diagnose(Diagnosis.FAILED, JOURNAL_FAILED); return }
+    resume(app, records, message, ProposalSource.BUZON)
+  }
+
+  /**
+   * Orders already in the journal as [ExecutionState.RECEIVED] (just claimed, or left by a process that died before
+   * validating them): validated now, with the configuration in force now, and delivered. Without the preferences yet
+   * (a cold start) they stay received and recovery tries again; with the switch off they are cancelled.
+   */
+  internal fun resume(app: Context, rows: List<ExecutionRecord>, message: String, source: ProposalSource, adopted: Boolean = false) {
+    // Each row once at a time in this process: the arrival and a recovery never validate the same order together.
+    // Read again under that guard: only a row still received (or, adopted from a dead process, not offered here) goes on.
+    val journal = InstinctExecutions.journal(app)
+    val taken = rows.filter { resuming.add(it.executionId) }
+    try {
+      val records = taken.mapNotNull { row -> runCatching { journal.get(row.executionId) }.getOrNull() }.filter {
+        if (adopted) it.state in RESUMABLE else it.state == ExecutionState.RECEIVED
+      }
+      if (records.isNotEmpty()) resumeNow(app, records, message, source)
+    } finally { taken.forEach { resuming.remove(it.executionId) } }
+  }
+  private val resuming: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+  private val RESUMABLE = setOf(ExecutionState.RECEIVED, ExecutionState.VALIDATED, ExecutionState.READY)
+
+  private fun resumeNow(app: Context, records: List<ExecutionRecord>, message: String, source: ProposalSource) {
+    if (!InstinctProposalSettings(app).isEnabled() || (source == ProposalSource.BUZON && !InstinctMailboxSettings(app).enabled())) {
+      records.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.CANCELLED, reason = SWITCHED_OFF) }
+      return
+    }
+    val fingerprint = InstinctProposalCenter.awaitFingerprint(app) ?: run {
+      if (AssistantPreferencesCache.of(app).current == null) {
+        // A cold start: DataStore has not answered. Nothing is lost: recovery resumes them.
+        diagnose(Diagnosis.PREFS)
+        InstinctExecutionRecoveryManager.later(app)
+      } else records.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.FAILED, reason = NO_CONTACT) }
+      return
+    }
     val parser = PhoneCommandParser()
     val routines = InstinctRoutineGrants(app).access()
     val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
-    val checks = orders.map { InstinctProposalValidator.check(it, parser, now, routines) }
-    val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
-    val message = InstinctMailboxSignature.messageId(order.id)
-    val ticket = InstinctProposalCenter.openReply(app, checks.size, { null }, message, logOnly = true)
-    InstinctProposalCenter.deliver(app, checks, fingerprint, ticket, message, ProposalSource.BUZON)
+    val checks = records.map { InstinctProposalValidator.check(it.line, parser, now, routines) }
+    records.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.VALIDATED) }
+    val logOnly = source == ProposalSource.BUZON || records.any { it.transport != ExecutionTransport.WHATSAPP }
+    val ticket = InstinctProposalCenter.openReply(app, checks.size, { null }, message, logOnly = logOnly)
+    InstinctProposalCenter.deliver(app, checks, fingerprint, ticket, message, source, records)
     log("mailbox valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")
   }
+
+  const val JOURNAL_FAILED = "No se pudo guardar el diario de ejecución; no se ejecutó nada."
+  const val SWITCHED_OFF = "«Recibir órdenes» o el buzón se apagaron antes de ejecutarla."
+  const val NO_CONTACT = "no hay contacto de Instinct configurado; no se ejecutó."
 
   private fun counters(): String = filter.counters().entries.sortedBy { it.key.ordinal }
     .joinToString(" ") { "${it.key.name.lowercase()}=${it.value}" }
@@ -305,31 +361,61 @@ object InstinctProposalCenter {
     return ProposalBook.fingerprint(contact.displayName, contact.phoneNumber, packageName)
   }
 
+  /**
+   * [fingerprint], waiting (never on the main thread) up to [millis] for DataStore on a cold start: the process a push
+   * or a job just started may not have its preferences yet (1.20.0). Null if they did not load or there is no contact.
+   */
+  internal fun awaitFingerprint(context: Context, millis: Long = PREFS_WAIT_MILLIS): String? {
+    fingerprint(context)?.let { return it }
+    if (Looper.myLooper() == Looper.getMainLooper() || !InstinctProposalSettings(context).isEnabled()) return null
+    val cache = AssistantPreferencesCache.of(context)
+    if (cache.current == null) runCatching {
+      kotlinx.coroutines.runBlocking { kotlinx.coroutines.withTimeoutOrNull(millis) { cache.awaitCurrent() } }
+    }
+    return fingerprint(context)
+  }
+  internal var PREFS_WAIT_MILLIS = 3_000L
+
   fun attach(value: Listener) { listener = value }
   fun detach(value: Listener) { if (listener === value) listener = null }
 
   internal fun deliver(context: Context, checks: List<ProposalCheck>, fingerprint: String, ticket: InstinctAckLedger.Ticket? = null,
-    message: String = "", source: ProposalSource = ProposalSource.WHATSAPP) {
+    message: String = "", source: ProposalSource = ProposalSource.WHATSAPP, records: List<ExecutionRecord> = emptyList()) {
     val app = context.applicationContext
     val offered = ArrayList<ProposalBook.Proposal>()
     checks.forEachIndexed { index, check ->
+      val execution = records.getOrNull(index)?.executionId
+      // An answer given now, without a proposal: the row ends with it (1.20.0).
+      fun answered(entry: AckEntry) {
+        InstinctExecutions.move(app, execution, if (entry.kind == AckKind.OK) ExecutionState.VERIFIED else ExecutionState.FAILED,
+          result = entry.message.takeIf { entry.kind == AckKind.OK }, reason = entry.message.takeIf { entry.kind != AckKind.OK },
+          reported = entry.kind)
+        reply(app, acks.resolve(ticket, index, entry))
+      }
       when (check) {
-        is ProposalCheck.Invalid -> reply(app, acks.resolve(ticket, index, InstinctAck.invalid(check)))
+        is ProposalCheck.Invalid -> answered(InstinctAck.invalid(check))
         // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
-        is ProposalCheck.Query -> reply(app, acks.resolve(ticket, index, when (check.kind) {
+        is ProposalCheck.Query -> answered(when (check.kind) {
           ProposalCheck.QueryKind.STATE -> stateAnswer(app, check.order)
           ProposalCheck.QueryKind.PROBE -> probe(app, check.order, check.argument.orEmpty(), source)
           else -> AckEntry(AckKind.OK, check.order, answer(app, check.kind, check.argument), informative = true)
-        }))
-        is ProposalCheck.Notice -> reply(app, acks.resolve(ticket, index, notice(app, check, source)))
+        })
+        is ProposalCheck.Notice -> answered(notice(app, check, source))
         // «Nunca» refuses at once, whatever the hour; Confirmar and the quiet hours are decided when it runs.
         is ProposalCheck.Valid -> if (refusedByPolicy(app, check.command)) {
+          InstinctExecutions.move(app, execution, ExecutionState.CANCELLED, reason = InstinctAutonomyPolicy.REFUSED, reported = AckKind.ERROR)
           reply(app, acks.resolve(ticket, index, AckEntry(AckKind.ERROR, check.order, InstinctAutonomyPolicy.REFUSED)))
-        } else if (check.deferred != null) schedule(app, check, fingerprint, ticket, index, message, source) else {
-          val proposal = book.offer(check.order, check.command, fingerprint, source)
-          if (proposal == null) reply(app, acks.resolve(ticket, index,
-            AckEntry(AckKind.ERROR, check.order, "ya había una orden igual esperando confirmación; no se duplica.")))
-          else { acks.link(ticket, index, proposal.id); offered += proposal }
+        } else if (check.deferred != null) schedule(app, check, fingerprint, ticket, index, message, source, execution) else {
+          val proposal = book.offer(check.order, check.command, fingerprint, source, execution)
+          if (proposal == null) {
+            InstinctExecutions.move(app, execution, ExecutionState.FAILED, reason = "ya estaba esperando confirmación; no se duplica.")
+            reply(app, acks.resolve(ticket, index,
+              AckEntry(AckKind.ERROR, check.order, "ya había una orden igual esperando confirmación; no se duplica.")))
+          } else {
+            InstinctExecutions.link(proposal.id, execution)
+            InstinctExecutions.move(app, execution, ExecutionState.READY, proposalId = proposal.id)
+            acks.link(ticket, index, proposal.id); offered += proposal
+          }
         }
       }
     }
@@ -411,6 +497,8 @@ object InstinctProposalCenter {
   /** The outcome of [proposal] for Instinct. Only the first outcome of each line and one follow-up are ever sent. */
   fun report(context: Context, proposalId: Long, entry: AckEntry) {
     bind(context)
+    // The journal follows every acknowledgement, unless it already holds something final (1.20.0).
+    InstinctExecutions.settle(context.applicationContext, proposalId, entry)
     // An order of Instinct ran (or may have): a fresh state follows in the log, so Instinct sees the effect.
     if (entry.kind == AckKind.OK || entry.kind == AckKind.UNCERTAIN) InstinctStatePublisher.afterOrder(context)
     reply(context, acks.report(proposalId, entry))
@@ -522,14 +610,20 @@ object InstinctProposalCenter {
 
   /** A deferred order: stored for later, never run now. Instinct hears «#insto-programada» or why not. */
   private fun schedule(context: Context, check: ProposalCheck.Valid, fingerprint: String, ticket: InstinctAckLedger.Ticket?, index: Int,
-    message: String, source: ProposalSource) {
+    message: String, source: ProposalSource, execution: String? = null) {
     when (val outcome = InstinctScheduler.schedule(context, check, fingerprint, message, source)) {
-      is InstinctScheduler.Outcome.Refused -> reply(context, acks.resolve(ticket, index, AckEntry(AckKind.ERROR, check.order, outcome.why)))
+      is InstinctScheduler.Outcome.Refused -> {
+        InstinctExecutions.move(context, execution, ExecutionState.FAILED, reason = outcome.why, reported = AckKind.ERROR)
+        reply(context, acks.resolve(ticket, index, AckEntry(AckKind.ERROR, check.order, outcome.why)))
+      }
       is InstinctScheduler.Outcome.Scheduled -> {
+        // The row waits as «programada» under its series; each firing is an execution of its own.
+        InstinctExecutions.move(context, execution, ExecutionState.SCHEDULED, result = outcome.order.label, occurrence = outcome.order.series)
         notifyScheduled(context, outcome.order, "Instinct programó: ${PhoneCommandCodec.summary(check.command)}",
           "Se ejecuta ${outcome.order.label}. Podés cancelarla en Ajustes → Propuestas de Instinct.")
         if (ticket == null) return
         val key = InstinctScheduler.ackKey(outcome.order.id)
+        InstinctExecutions.link(key, execution)
         acks.link(ticket, index, key)
         report(context, key, AckEntry(AckKind.SCHEDULED, check.order, outcome.order.label))
       }
@@ -647,8 +741,12 @@ object InstinctProposalCenter {
 
   /** The panel is closed: runs the proposal now, or leaves it for Confirmar when it cannot or should not. */
   internal fun runInBackground(context: Context, proposal: ProposalBook.Proposal) {
+    val execution = proposal.executionId
     when (val gate = gate(context, proposal.command, foreground = false, proposal.source)) {
-      is InstinctAutonomyGate.Gate.Refuse -> { refuse(context, proposal, gate.reason); return }
+      is InstinctAutonomyGate.Gate.Refuse -> {
+        InstinctExecutions.move(context, execution, ExecutionState.CANCELLED, reason = gate.reason)
+        refuse(context, proposal, gate.reason); return
+      }
       is InstinctAutonomyGate.Gate.Wait -> {
         askConfirmation(context, proposal, gate.reason)
         report(context, proposal.id, AckEntry(AckKind.WAITING, proposal.order, gate.reason))
@@ -658,6 +756,10 @@ object InstinctProposalCenter {
     }
     val claim = book.claim(proposal.id, fingerprint(context))
     if (claim !is ProposalBook.Claim.Granted) { reportUnavailable(context, proposal, claim); return }
+    // 1.20.0: «despachando» is on disk before anything touches the phone; without it nothing runs.
+    if (!InstinctExecutions.begin(context, execution, proposal.command)) {
+      report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, NOT_RECORDED)); return
+    }
     if (isRoutine(proposal.command)) { runRoutineInBackground(context, proposal); return }
     val capture = InstinctUndoActions.capture(context, proposal.command)
     val result = PhoneActionExecutor(context).execute(proposal.command)
@@ -675,9 +777,10 @@ object InstinctProposalCenter {
       }
       InstinctAck.needsUser(result) -> {
         // It did not happen: it goes back for a touch, which can open the panel, ask a permission or choose.
-        val again = book.offer(proposal.order, proposal.command, proposal.fingerprint, proposal.source)
+        val again = book.offer(proposal.order, proposal.command, proposal.fingerprint, proposal.source, execution)
         if (again != null) {
           acks.relink(proposal.id, again.id)
+          InstinctExecutions.relink(proposal.id, again.id)
           askConfirmation(context, again, result.message)
           report(context, again.id, AckEntry(AckKind.WAITING, proposal.order, result.message))
         } else report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, "ya había una orden igual esperando confirmación; no se duplica."))
@@ -692,6 +795,8 @@ object InstinctProposalCenter {
       }
     }
   }
+
+  const val NOT_RECORDED = "no se pudo registrar el comienzo de la ejecución; no se ejecutó."
 
   internal fun isRoutine(command: PhoneCommand) = command is PhoneCommand.Platform && command.action == PlatformAction.ROUTINE_RUN
 
@@ -769,7 +874,12 @@ object InstinctProposalCenter {
    */
   fun claim(context: Context, id: Long, token: String? = null, fromNotification: Boolean = false, auto: Boolean = false): ProposalBook.Claim {
     val proposal = book.find(id)
-    val claim = book.claim(id, fingerprint(context), token, requireToken = fromNotification)
+    var claim = book.claim(id, fingerprint(context), token, requireToken = fromNotification)
+    // The panel and the notification run it right after this: «despachando» first, or it does not run (1.20.0).
+    if (claim is ProposalBook.Claim.Granted && !InstinctExecutions.begin(context, claim.proposal.executionId, claim.proposal.command)) {
+      report(context, claim.proposal.id, AckEntry(AckKind.ERROR, claim.proposal.order, NOT_RECORDED))
+      claim = ProposalBook.Claim.Used
+    }
     // For the trust ledger: the open panel running it alone, or the person confirming it.
     if (claim is ProposalBook.Claim.Granted) InstinctTrust.record(context, claim.proposal.command,
       if (auto) TrustEvent.EJECUTADA else TrustEvent.CONFIRMADA)

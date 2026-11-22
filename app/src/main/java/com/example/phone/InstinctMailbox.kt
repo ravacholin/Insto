@@ -117,7 +117,7 @@ object InstinctMailboxSignature {
  * [clock] is wall-clock millis. Every instance on the same file shares one lock (1.18.0), so the poll and an order
  * that came inside the doorbell can never both take the same id: [claim] checks and marks in one section.
  */
-class InstinctMailboxSeen(private val file: File, private val clock: () -> Long = System::currentTimeMillis) {
+class InstinctMailboxSeen(private val file: File, private val clock: () -> Long = System::currentTimeMillis) : InstinctOrderClaims {
   private val lock: Any = synchronized(LOCKS) { LOCKS.getOrPut(file.absolutePath) { Any() } }
 
   fun read(): Map<String, Long> = synchronized(lock) {
@@ -127,7 +127,7 @@ class InstinctMailboxSeen(private val file: File, private val clock: () -> Long 
     }.getOrDefault(emptyMap())
   }
 
-  fun contains(id: String): Boolean = synchronized(lock) { id.lowercase() in fresh(read()) }
+  override fun contains(id: String): Boolean = synchronized(lock) { id.lowercase() in fresh(read()) }
 
   /** Marks [ids] seen on disk. Returns only after the write, so a dispatch after it never repeats an order. */
   fun markAll(ids: Collection<String>) = synchronized(lock) {
@@ -140,13 +140,13 @@ class InstinctMailboxSeen(private val file: File, private val clock: () -> Long 
    * wins; whoever gets false must not run the order. A write that fails takes nothing (false): an order never runs
    * without its record.
    */
-  fun claim(id: String): Boolean = runCatching { id.lowercase() in claimAll(listOf(id)) }.getOrDefault(false)
+  override fun claim(id: String): Boolean = runCatching { id.lowercase() in claimAll(listOf(id)) }.getOrDefault(false)
 
   /**
    * [claim] for several ids at once, with one write: the ids (lowercase) this call took. Throws when the write fails,
    * like [markAll]: the poll then stops before marking anything as taken in the sheet, so nothing is lost.
    */
-  fun claimAll(ids: Collection<String>): Set<String> = synchronized(lock) {
+  override fun claimAll(ids: Collection<String>): Set<String> = synchronized(lock) {
     val all = fresh(read()).toMutableMap()
     val won = ids.map { it.lowercase() }.filterTo(LinkedHashSet()) { it !in all }
     if (won.isEmpty()) return@synchronized emptySet()
@@ -190,11 +190,13 @@ object InstinctMailboxPoll {
   )
 
   /**
-   * At most [MAX_ORDERS] orders. Each is verified; the valid ones are claimed on disk ([InstinctMailboxSeen.claimAll])
-   * **before** this returns, so dispatching happens only after the record exists. One that an order inside the doorbell
-   * claimed first (1.18.0) counts as repeated and is not returned. Two copies of one id in the same poll count once.
+   * At most [MAX_ORDERS] orders. Each is verified; the valid ones are claimed on disk ([InstinctOrderClaims.claimOrders])
+   * **before** this returns, so dispatching happens only after the record exists; with the journal (1.20.0) the claim
+   * also records each order's lines in the same transaction. One that an order inside the doorbell claimed first
+   * (1.18.0) counts as repeated and is not returned. Two copies of one id in the same poll count once.
    */
-  fun process(orders: List<MailboxOrder>, key: String, now: Long, seen: InstinctMailboxSeen): Outcome {
+  fun process(orders: List<MailboxOrder>, key: String, now: Long, seen: InstinctOrderClaims,
+    transport: ExecutionTransport = ExecutionTransport.POLL): Outcome {
     val batch = orders.take(MAX_ORDERS)
     val verified = ArrayList<MailboxOrder>()
     var bad = 0; var expired = 0; var repeated = 0
@@ -207,7 +209,7 @@ object InstinctMailboxPoll {
         InstinctMailboxSignature.Verdict.REPEATED -> repeated++
       }
     }
-    val won = if (verified.isEmpty()) emptySet() else seen.claimAll(verified.map { it.id })
+    val won = if (verified.isEmpty()) emptySet() else seen.claimOrders(verified, transport)
     val valid = verified.filter { it.id.lowercase() in won }
     repeated += verified.size - valid.size
     return Outcome(valid, bad, expired, repeated, batch.map { it.id }.filter { it.isNotBlank() }.distinct())
