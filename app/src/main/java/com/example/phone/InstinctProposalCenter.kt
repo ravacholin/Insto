@@ -37,7 +37,7 @@ class InstinctProposalSettings(context: Context) {
   fun isEnabled(): Boolean = Build.VERSION.SDK_INT >= MIN_SDK && runCatching { enabled.readText() == "true" }.getOrDefault(false)
 
   fun setEnabled(value: Boolean) {
-    if (value) { enabled.writeText("true"); InstinctStatePublisher.rearm(app); InstinctMailbox.rearm(app) }
+    if (value) { enabled.writeText("true"); InstinctStatePublisher.rearm(app); InstinctMailbox.rearm(app); InstinctCatalogPublisher.changed(app) }
     else {
       if (enabled.exists()) enabled.delete()
       // The state's heartbeat and the mailbox's polling stop with the switch.
@@ -59,12 +59,14 @@ class InstinctProposalSettings(context: Context) {
       if (replyMode.exists()) replyMode.delete()
       InstinctProposalCenter.acks.clear()
     } else replyMode.writeText(value.name)
+    InstinctCatalogPublisher.changed(app)
   }
 
   /** «Canal de estados» (1.15.0): WhatsApp by default; a restore never brings it, like the other switches. */
   fun channel(): InstinctAckChannel = runCatching { InstinctAckChannel.valueOf(ackChannel.readText()) }.getOrDefault(InstinctAckChannel.WHATSAPP)
   fun setChannel(value: InstinctAckChannel) {
     if (value == InstinctAckChannel.WHATSAPP) { if (ackChannel.exists()) ackChannel.delete() } else ackChannel.writeText(value.name)
+    InstinctCatalogPublisher.changed(app)
   }
 
   companion object {
@@ -466,7 +468,8 @@ object InstinctProposalCenter {
 
   /** The answer to a query. Names of enabled routines only, never their steps. */
   internal fun answer(context: Context, kind: ProposalCheck.QueryKind, argument: String? = null): String = when (kind) {
-    ProposalCheck.QueryKind.CATALOG -> InstinctProtocolCatalog.summary(InstinctRoutineGrants(context).access().enabledNames())
+    ProposalCheck.QueryKind.CATALOG -> InstinctProtocolCatalog.summary(InstinctRoutineGrants(context).access().enabledNames(),
+      InstinctCatalogPublisher.last(context).hash)
     ProposalCheck.QueryKind.SCHEDULED -> InstinctScheduler.describe(context)
     ProposalCheck.QueryKind.CANCEL_SCHEDULED -> when (val n = InstinctScheduler.cancelAll(context)) {
       0 -> "No había órdenes programadas."

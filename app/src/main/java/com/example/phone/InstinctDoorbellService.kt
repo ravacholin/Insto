@@ -119,6 +119,7 @@ object InstinctDoorbell {
     val s = settings(app)
     if (value) { s.writeEnabled(true); register(app) }
     else { unregister(app); s.writeEnabled(false); InstinctMailbox.rearm(app) }
+    InstinctCatalogPublisher.changed(app)
   }
 
   /**
@@ -132,6 +133,7 @@ object InstinctDoorbell {
     s.writeWithOrder(value)
     s.update { it.copy(withOrderConfirmed = false) }
     if (s.enabled() && s.endpoint() != null) inform(app)
+    InstinctCatalogPublisher.changed(app)
   }
 
   /** Several distributors installed: the one chosen in Settings. A change re-registers with it. */
@@ -192,6 +194,7 @@ object InstinctDoorbell {
     s.writeEndpoint(null)
     s.update { it.copy(token = null, confirmed = false, informedAt = null, informPending = hadEndpoint, failure = failure) }
     if (hadEndpoint) inform(context)
+    InstinctCatalogPublisher.changed(context)
   }
 
   /** An IMMUTABLE broadcast to a package that does not exist: only its creator, Insto, matters to the distributor. */
@@ -220,6 +223,8 @@ object InstinctDoorbell {
         s.update { it.copy(confirmed = true, failure = null, informPending = true, informedAt = it.informedAt.takeUnless { changed }) }
         inform(app)
         InstinctMailbox.rearm(app)
+        // The doorbell became active: the catalog says so.
+        InstinctCatalogPublisher.changed(app)
       }
       is InstinctDoorbellProtocol.Action.BadEndpoint -> {
         ack(app, state, action.ackId)

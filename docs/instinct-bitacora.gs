@@ -1,7 +1,7 @@
 /**
  * Bitácora de Insto (Protocolo Insto v6). Apps Script ligado a una planilla de Google.
  * Ver docs/INSTINCT-PROPUESTAS.md, «Bitácora (1.15.0)», «Estado del teléfono», «Buzón firmado» (1.16.0), «Timbre» (1.17.0),
- * y «Orden directa en el timbre» (1.18.0).
+ * «Orden directa en el timbre» y «Catálogo vivo» (1.18.0).
  * Es compatible con Insto 1.15.0 a 1.17.0: un POST o un GET sin las acciones nuevas se comportan exactamente igual que antes.
  *
  * 1. En la planilla: Extensiones → Apps Script. Pegá este archivo y cambiá TOKEN por un texto largo y aleatorio.
@@ -30,6 +30,11 @@
  * Insto la lee de la planilla. Con conOrden encendido (1.18.0) el cuerpo es la orden firmada, en JSON compacto
  * {"v":1,"id":…,"at":…,"lines":[…],"sig":…}: Insto verifica la firma igual que en el sondeo, así que ntfy puede leer las
  * líneas pero no cambiarlas. Si el timbre falla o se saltea, la orden queda anotada igual y la respuesta sigue siendo {ok, id}.
+ *
+ * Catálogo vivo (1.18.0), en la hoja «Catálogo» (una sola fila): las reglas vigentes que publica Insto, para Instinct.
+ * POST {token, action:"catalogo", hash, json}  → {ok, catalogo:"guardado"|"igual"}   ({ok:false, error:"catalogo"} si falta
+ *   algo o el json pasa de 45 000 caracteres)
+ * GET ?token=…&action=catalogo  → {ok, catalogo:{publicado, hash, json} | null}
  * Un token incorrecto responde {ok:false, error:"token"}.
  */
 const TOKEN = 'CAMBIÁ-ESTE-TOKEN';
@@ -48,6 +53,9 @@ const DOORBELL_WITH_ORDER = 'insto_timbre_con_orden';
 const DOORBELL_PAYLOAD = 'insto-timbre';
 const DOORBELL_MAX_PAYLOAD_BYTES = 3500;
 const MAX_LINE_CHARS = 300;
+const CATALOG = 'Catálogo';
+const CATALOG_HEADERS = ['publicado', 'hash', 'json'];
+const CATALOG_MAX_CHARS = 45000;
 
 function sheet_() {
   const book = SpreadsheetApp.getActiveSpreadsheet();
@@ -213,6 +221,54 @@ function postDoorbellTest_() {
   return json_(out);
 }
 
+function catalogSheet_() {
+  const book = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = book.getSheetByName(CATALOG);
+  if (!sheet) {
+    sheet = book.insertSheet(CATALOG);
+    sheet.getRange('A:C').setNumberFormat('@');
+    sheet.appendRow(CATALOG_HEADERS);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+/**
+ * Catálogo vivo (1.18.0): reemplaza la única fila con el que publica Insto. Con el mismo hash no escribe nada. El json se
+ * guarda como texto plano (cell_ con un límite propio: un catálogo pasa de los 1000 caracteres de las otras celdas).
+ */
+function postCatalog_(body) {
+  const hash = typeof body.hash === 'string' ? body.hash : '';
+  const text = typeof body.json === 'string' ? body.json : '';
+  if (!/^[0-9a-f]{64}$/.test(hash) || !text || text.length > CATALOG_MAX_CHARS) return json_({ ok: false, error: 'catalogo' });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = catalogSheet_();
+    if (sheet.getLastRow() >= 2 && String(sheet.getRange(2, 2, 1, 1).getValues()[0][0]) === hash) return json_({ ok: true, catalogo: 'igual' });
+    const row = [new Date().toISOString(), hash, text].map(function (v) { return plain_(v, CATALOG_MAX_CHARS); });
+    sheet.getRange(2, 1, 1, CATALOG_HEADERS.length).setValues([row]);
+    return json_({ ok: true, catalogo: 'guardado' });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Como cell_, con otro límite de largo. */
+function plain_(value, max) {
+  const text = String(value == null ? '' : value).slice(0, max);
+  return /^[=+\-@]/.test(text) ? "'" + text : text;
+}
+
+/** El catálogo publicado, o null si Insto todavía no publicó ninguno. */
+function getCatalog_() {
+  const sheet = catalogSheet_();
+  if (sheet.getLastRow() < 2) return json_({ ok: true, catalogo: null });
+  const r = sheet.getRange(2, 1, 1, CATALOG_HEADERS.length).getValues()[0];
+  if (!r[1]) return json_({ ok: true, catalogo: null });
+  return json_({ ok: true, catalogo: { publicado: iso_(r[0]), hash: String(r[1]), json: String(r[2]).replace(/^'/, '') } });
+}
+
 /** Marca como tomadas las órdenes que Insto ya leyó (válidas o no), para que no vuelvan. */
 function postTaken_(body) {
   const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
@@ -262,6 +318,7 @@ function doPost(e) {
   if (body.action === 'tomadas') return postTaken_(body);
   if (body.action === 'timbre') return postDoorbell_(body);
   if (body.action === 'probar-timbre') return postDoorbellTest_();
+  if (body.action === 'catalogo') return postCatalog_(body);
   // Sin «action»: los eventos de Insto, exactamente como en 1.15.0.
   const events = Array.isArray(body.events) ? body.events.slice(0, MAX_EVENTS) : [];
   const lock = LockService.getScriptLock();
@@ -307,6 +364,7 @@ function doGet(e) {
   if (p.token !== TOKEN) return json_({ ok: false, error: 'token' });
   if (p.action === 'estado') return json_({ ok: true, estado: lastState_() });
   if (p.action === 'ordenes') return getOrders_(p);
+  if (p.action === 'catalogo') return getCatalog_();
   // Sin «action»: los eventos desde «since», exactamente como en 1.15.0.
   const since = p.since ? new Date(p.since).getTime() : 0;
   if (isNaN(since)) return json_({ ok: false, error: 'since' });

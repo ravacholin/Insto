@@ -34,6 +34,7 @@ class InstinctRoutineGrants(context: Context) {
     val stream = file.startWrite()
     try { stream.write(InstinctRoutines.encodeGrants(grants).toByteArray(Charsets.UTF_8)); file.finishWrite(stream) }
     catch (t: Exception) { file.failWrite(stream); throw t }
+    InstinctCatalogPublisher.changed(app)
     return true
   }
 }

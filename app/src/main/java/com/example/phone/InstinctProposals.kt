@@ -113,10 +113,11 @@ object InstinctProposalValidator {
       command.argument?.let(routines::resolve) != null
 
   /**
-   * One canonical form per allowed type: the single source of the examples in the generated catalog
-   * ([InstinctProtocolCatalog]). A test checks that each one is [ProposalCheck.Valid].
+   * One canonical form per allowed type: the single source of the examples in the generated catalog, text and JSON
+   * ([InstinctProtocolCatalog]). A test checks that each one is [ProposalCheck.Valid]. Grouped by form (1.18.0) so the
+   * JSON catalog can say which is which; [examples] keeps them all, in the same order.
    */
-  val examples: List<String> = listOf(
+  val immediateExamples: List<String> = listOf(
     "poner una alarma a las 07:00",
     "poner una alarma a las 07:00 todos los días",
     "poner un temporizador de 25 minutos",
@@ -139,26 +140,36 @@ object InstinctProposalValidator {
     "buscar jazz en YouTube",
     "buscar Cerati en Spotify",
     "agendar reunión mañana a las 17:00 durante una hora",
-    // Deferred and conditional forms (1.14.0): the wrapper, then any order above.
+  )
+  /** Deferred forms (1.14.0): the wrapper, then any order above. */
+  val deferredExamples: List<String> = listOf(
     "a las 22:00: poner el volumen al 10 por ciento",
     "en 30 minutos: apagar la linterna",
     "en 2 horas: desactivar no molestar",
+  )
+  /** One weather condition, only with a time (1.14.0). */
+  val weatherExamples: List<String> = listOf(
     "a las 06:30 si llueve: poner una alarma a las 06:45",
     "a las 06:30 si no llueve: poner música de Soda Stereo",
     "a las 07:00 si hace menos de 10 grados: poner un temporizador de 10 minutos",
     "a las 14:00 si hace más de 30 grados: activar no molestar",
-    // Triggers by state (1.17.0): once each, at most 12 hours (24 with «hasta las HH:MM»).
+  )
+  /** Triggers by state (1.17.0): once each, at most 12 hours (24 with «hasta las HH:MM»). */
+  val triggerExamples: List<String> = listOf(
     "al terminar el evento: desactivar no molestar",
     "al empezar el próximo evento: activar no molestar",
     "al conectar auriculares hasta las 20:00: abrir spotify",
     "al desconectar auriculares: pausar la música",
     "al desbloquear: mostrar las alarmas",
-    // Recurring orders (1.17.0): «hasta el DD/MM» is required, at most 30 days. The tests check them on 21/11.
+  )
+  /** Recurring orders (1.17.0): «hasta el DD/MM» is required, at most 30 days. The tests check them on 21/11. */
+  val recurringExamples: List<String> = listOf(
     "todos los días a las 07:30 hasta el 15/12: poner el volumen al 20 por ciento",
     "los días hábiles a las 08:00 hasta el 15/12: activar no molestar",
     "los fines de semana a las 10:00 hasta el 13/12: poner música de Soda Stereo",
     "todos los días a las 06:30 si llueve hasta el 15/12: poner una alarma a las 06:45",
   )
+  val examples: List<String> = immediateExamples + deferredExamples + weatherExamples + triggerExamples + recurringExamples
 
   /**
    * Allowlist v1 for single commands and routine steps. Everything not named is forbidden, in particular calls

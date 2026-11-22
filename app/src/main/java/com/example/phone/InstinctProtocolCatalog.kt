@@ -18,8 +18,88 @@ data class InstinctCatalogLog(val url: String?, val token: String?) {
   }
 }
 
+/**
+ * What the JSON catalog says about the channels (1.18.0): which are on, never their addresses, tokens, keys or
+ * endpoints. [whatsapp] is false with «Solo buzón».
+ */
+data class InstinctCatalogChannels(
+  val whatsapp: Boolean = true,
+  val log: Boolean = false,
+  val mailbox: Boolean = false,
+  val doorbell: Boolean = false,
+  val doorbellDirect: Boolean = false,
+  val replyMode: InstinctReplyMode = InstinctReplyMode.NEVER,
+  val ackChannel: InstinctAckChannel = InstinctAckChannel.WHATSAPP,
+)
+
+/**
+ * The JSON catalog (1.18.0). [canonical] is the canonical form (keys sorted, no spaces, without `hash` nor
+ * `publicado`); [hash] its SHA-256 in lowercase hex. [published] is what goes to the sheet.
+ */
+data class InstinctCatalogJson(val canonical: String, val hash: String) {
+  /** The catalog with its hash and, when given, the instant it was published. */
+  fun published(at: String? = null): String = InstinctCatalogCanonical.withFields(canonical, listOfNotNull("hash" to hash, at?.let { "publicado" to it }))
+}
+
+/** A JSON writer with one canonical form: keys sorted, no spaces, strings quoted as org.json does. Pure. */
+internal object InstinctCatalogCanonical {
+  fun write(value: Any?): String = buildString { write(this, value) }
+
+  private fun write(out: StringBuilder, value: Any?) {
+    when (value) {
+      null -> out.append("null")
+      is String -> out.append(org.json.JSONObject.quote(value))
+      is Boolean, is Int, is Long -> out.append(value.toString())
+      is Map<*, *> -> {
+        out.append('{')
+        value.entries.map { it.key as String to it.value }.sortedBy { it.first }.forEachIndexed { i, (k, v) ->
+          if (i > 0) out.append(','); out.append(org.json.JSONObject.quote(k)).append(':'); write(out, v)
+        }
+        out.append('}')
+      }
+      is List<*> -> { out.append('['); value.forEachIndexed { i, v -> if (i > 0) out.append(','); write(out, v) }; out.append(']') }
+      else -> throw IllegalArgumentException("tipo no admitido en el catálogo")
+    }
+  }
+
+  /** The same JSON, keys sorted, indented by two spaces: for the reference copy in docs. */
+  fun pretty(text: String): String = buildString { pretty(this, toKotlin(org.json.JSONObject(text)), "") }
+
+  private fun pretty(out: StringBuilder, value: Any?, indent: String) {
+    val inner = "$indent  "
+    when (value) {
+      is Map<*, *> -> if (value.isEmpty()) out.append("{}") else {
+        out.append("{\n")
+        value.entries.map { it.key as String to it.value }.sortedBy { it.first }.forEachIndexed { i, (k, v) ->
+          if (i > 0) out.append(",\n"); out.append(inner).append(org.json.JSONObject.quote(k)).append(": "); pretty(out, v, inner)
+        }
+        out.append('\n').append(indent).append('}')
+      }
+      is List<*> -> if (value.isEmpty()) out.append("[]") else {
+        out.append("[\n")
+        value.forEachIndexed { i, v -> if (i > 0) out.append(",\n"); out.append(inner); pretty(out, v, inner) }
+        out.append('\n').append(indent).append(']')
+      }
+      else -> write(out, value)
+    }
+  }
+
+  /** [canonical] (an object) with [fields] added, keeping the keys sorted. */
+  fun withFields(canonical: String, fields: List<Pair<String, String>>): String {
+    val o = org.json.JSONObject(canonical)
+    return write(toKotlin(o).let { @Suppress("UNCHECKED_CAST") (it as Map<String, Any?>) + fields })
+  }
+
+  private fun toKotlin(value: Any?): Any? = when (value) {
+    is org.json.JSONObject -> value.keys().asSequence().associateWith { toKotlin(value.get(it)) }
+    is org.json.JSONArray -> (0 until value.length()).map { toKotlin(value.get(it)) }
+    org.json.JSONObject.NULL -> null
+    else -> value
+  }
+}
+
 object InstinctProtocolCatalog {
-  const val VERSION = 5
+  const val VERSION = 6
   const val TITLE = "Protocolo Insto v$VERSION"
   const val ROUTINE_FORM = "ejecutar la rutina"
   /** Marks example lines in a copy sent through WhatsApp, so that copy never reads as orders for Insto. */
@@ -46,6 +126,13 @@ object InstinctProtocolCatalog {
       appendLine(example("<orden>"))
       appendLine()
       appendLine("Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa, salvo lo que ella eligió confirmar (ver «Qué hace Insto solo» más abajo). Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.")
+      // The live catalog (1.18.0) lives in the log: without it there is nothing to read.
+      if (log != null) {
+        appendLine()
+        appendLine("Reglas vigentes (catálogo vivo):")
+        if (log.url != null && log.token != null) appendLine(LIVE_RULE.replace("<URL>?token=<token>", "${log.url}?token=${log.token}"))
+        else { appendLine(LIVE_RULE); appendLine(InstinctCatalogLog.ASK) }
+      }
       if (forChat) {
         appendLine()
         appendLine("En este mensaje cada ejemplo va precedido por «${CHAT_MARK.trim()}» para que Insto no lo ejecute. Vos escribí la línea sin ese signo, empezando con \"${InstinctProposalProtocol.PREFIX} \".")
@@ -130,7 +217,93 @@ object InstinctProtocolCatalog {
     }
   }
 
-  /** The answer to «ver catálogo»: the version and the enabled routines, not the whole catalog. */
-  fun summary(routines: List<String>): String =
-    "$TITLE · rutinas habilitadas: " + if (routines.isEmpty()) "ninguna." else routines.joinToString(", ") + "."
+  /**
+   * The answer to «ver catálogo»: the version, the enabled routines and (1.18.0) the hash of the catalog last
+   * published in the log, not the whole catalog.
+   */
+  fun summary(routines: List<String>, publishedHash: String? = null): String =
+    "$TITLE · rutinas habilitadas: " + (if (routines.isEmpty()) "ninguna." else routines.joinToString(", ") + ".") +
+      (publishedHash?.let { " Catálogo publicado: hash $it." } ?: "")
+
+  const val LIVE_RULE = "Las reglas vigentes están en GET <URL>?token=<token>&action=catalogo. Leelo al empezar y cada vez que una orden dé un error inesperado; si el hash cambió, las reglas de ahí mandan sobre este texto."
+
+  /** The fixed blockers that always wait, for the JSON catalog. Same facts as [InstinctAutonomyCatalog]. */
+  val FIXED_BLOCKERS: List<String> = listOf(
+    "el teléfono está bloqueado",
+    "la orden abre otra app y el servicio de Accesibilidad de Insto no está activo",
+    "más de 6 órdenes en 10 minutos",
+    "una orden programada que se dispara con más de ${InstinctDeferral.LATE_MILLIS / 60_000} minutos de atraso",
+    "la acción necesita algo de la persona: un permiso, confirmar una hora que ya pasó, un modo temporal o elegir entre varias apps",
+  )
+
+  val FORBIDDEN: List<String> = listOf("llamadas", "mensajes de cualquier tipo", "enviar o compartir archivos", "guardar lugares",
+    "navegación", "rutinas que no están habilitadas", "varias acciones juntas")
+
+  private fun level(value: InstinctAutonomy) = value.name.lowercase()
+
+  /**
+   * The catalog as JSON (1.18.0), from THE SAME sources as [text]: the allowlist and its examples
+   * ([InstinctProposalValidator]), the forms, the limits, the enabled routines (names only), the autonomy policy, the
+   * quiet hours, the fixed blockers, the channels that are on and the versions. Examples go without the «#insto »
+   * prefix. Never an address, a token, a key nor an endpoint: nothing here receives one. [parse] gives each example's
+   * category.
+   */
+  fun json(routines: List<String>, autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(),
+    channels: InstinctCatalogChannels = InstinctCatalogChannels(), instoVersion: String,
+    parse: (String) -> PhoneRoute = PhoneCommandParser()::parse): InstinctCatalogJson {
+    fun category(order: String) = (parse(order) as? PhoneRoute.Local)?.command?.let(InstinctCategory::of)?.label
+    val quiet = autonomy.quiet
+    val value = mapOf(
+      "protocolo" to TITLE,
+      "version_protocolo" to VERSION,
+      "version_insto" to instoVersion,
+      "prefijo" to "${InstinctProposalProtocol.PREFIX} ",
+      "acciones" to InstinctProposalValidator.immediateExamples.map { mapOf("orden" to it, "categoria" to category(it)) },
+      "formas" to mapOf(
+        "diferidas" to InstinctProposalValidator.deferredExamples.map { mapOf("orden" to it) },
+        "clima" to InstinctProposalValidator.weatherExamples.map { mapOf("orden" to it) },
+        "disparadores" to InstinctProposalValidator.triggerExamples.map { mapOf("orden" to it) },
+        "recurrentes" to InstinctProposalValidator.recurringExamples.map { mapOf("orden" to it) },
+      ),
+      "consultas" to ProposalCheck.QueryKind.entries.map { mapOf("orden" to it.form, "solo_lectura" to it.readOnly) },
+      "rutinas" to routines.map { mapOf("nombre" to it, "orden" to "$ROUTINE_FORM $it") },
+      "limites" to mapOf(
+        "lineas_por_mensaje" to InstinctProposalProtocol.MAX_LINES,
+        "ordenes_automaticas_cada_10_minutos" to 6,
+        "programadas" to InstinctDeferral.MAX_SCHEDULED,
+        "diferida_minutos_min" to (InstinctDeferral.MIN_DELAY_MILLIS / 60_000).toInt(),
+        "diferida_horas_max" to (InstinctDeferral.MAX_DELAY_MILLIS / 3_600_000).toInt(),
+        "atraso_minutos_max" to (InstinctDeferral.LATE_MILLIS / 60_000).toInt(),
+        "disparador_horas" to (InstinctTriggers.DEFAULT_EXPIRY_MILLIS / 3_600_000).toInt(),
+        "disparador_horas_max" to (InstinctTriggers.MAX_EXPIRY_MILLIS / 3_600_000).toInt(),
+        "recurrentes" to InstinctTriggers.MAX_RECURRING,
+        "recurrente_dias_max" to InstinctTriggers.MAX_RECURRING_DAYS,
+        "lluvia_por_ciento" to WeatherConditions.RAIN_THRESHOLD_PERCENT,
+        "rutina_pasos_max" to InstinctRoutines.MAX_STEPS,
+        "orden_caracteres_en_acuse" to InstinctAck.MAX_ORDER_CHARS,
+        "buzon_ordenes_por_sondeo" to InstinctMailboxPoll.MAX_ORDERS,
+        "buzon_antiguedad_minutos_max" to (InstinctMailboxSignature.MAX_AGE_MILLIS / 60_000).toInt(),
+        "buzon_futuro_minutos_max" to (InstinctMailboxSignature.MAX_FUTURE_MILLIS / 60_000).toInt(),
+        "avisos_por_hora" to InstinctNotice.PER_HOUR,
+        "aviso_caracteres_max" to InstinctNotice.MAX_CHARS,
+      ),
+      "autonomia" to InstinctCategory.entries.associate { it.label to level(autonomy.level(it)) },
+      "horas_de_silencio" to quiet?.let { mapOf("desde" to QuietHours.clock(it.start), "hasta" to QuietHours.clock(it.end),
+        "permite_silenciar" to autonomy.silenceInQuiet) },
+      "bloqueos_fijos" to FIXED_BLOCKERS,
+      "prohibido" to FORBIDDEN,
+      "canales" to mapOf(
+        "whatsapp" to channels.whatsapp,
+        "bitacora" to channels.log,
+        "buzon" to channels.mailbox,
+        "timbre" to channels.doorbell,
+        "orden_en_timbre" to (channels.doorbell && channels.doorbellDirect),
+        "acuses" to when (channels.replyMode) { InstinctReplyMode.NEVER -> "nunca"; InstinctReplyMode.PROBLEMS -> "errores y esperas"; InstinctReplyMode.ALWAYS -> "siempre" },
+        "acuses_por" to channels.ackChannel.name.lowercase(),
+      ),
+      "firma_buzon" to InstinctMailboxSignature.VERSION,
+    )
+    val canonical = InstinctCatalogCanonical.write(value)
+    return InstinctCatalogJson(canonical, sha256(canonical))
+  }
 }

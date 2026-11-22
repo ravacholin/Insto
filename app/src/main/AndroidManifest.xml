@@ -98,6 +98,8 @@
         <service android:name=".phone.InstinctLogJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".phone.InstinctStateJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".phone.InstinctMailboxJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
+        <!-- Live catalog (1.18.0): publishes the catalog in the sheet when its hash changes. -->
+        <service android:name=".phone.InstinctCatalogJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <!-- Mailbox doorbell (1.17.0): UnifiedPush AND_3 connector. Exported because the distributor is another app;
              every request with an unknown token is ignored and a MESSAGE only ever polls the mailbox. -->
         <receiver android:name=".phone.InstinctDoorbellReceiver" android:exported="true" tools:ignore="ExportedReceiver">
@@ -114,7 +116,10 @@
         </service>
         <service android:name=".phone.InstinctDoorbellJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <receiver android:name=".phone.InstinctLogBootReceiver" android:exported="false">
-            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
         </receiver>
         <receiver android:name=".phone.InstinctScheduleReceiver" android:exported="false">
             <intent-filter>

@@ -32,6 +32,7 @@ class InstinctMailboxSettings(context: Context) {
   fun setEnabled(value: Boolean) {
     if (value) enabledFile.writeText("true") else enabledFile.delete()
     InstinctMailbox.rearm(app)
+    InstinctCatalogPublisher.changed(app)
   }
 
   internal fun key(): String? = runCatching { keyFile.readText() }.getOrNull()?.takeIf(InstinctMailboxKey::valid)
@@ -54,6 +55,7 @@ class InstinctMailboxSettings(context: Context) {
     runCatching { InstinctMailboxAccept.valueOf(acceptFile.readText()) }.getOrDefault(InstinctMailboxAccept.WHATSAPP_Y_BUZON)
   fun setAccept(value: InstinctMailboxAccept) {
     if (value == InstinctMailboxAccept.WHATSAPP_Y_BUZON) acceptFile.delete() else acceptFile.writeText(value.name)
+    InstinctCatalogPublisher.changed(app)
   }
 
   /** «Las órdenes por WhatsApp (sin firma) como máximo en»: Solo (default) or Confirmar. */

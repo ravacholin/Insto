@@ -284,6 +284,69 @@ test('con conOrden, el espaciado de 5 segundos sigue igual: la segunda orden que
   assert.strictEqual(s.get({ token: T, action: 'ordenes' }).ordenes.length, 2);
 });
 
+// Catálogo vivo (1.18.0)
+
+const HASH_A = 'a'.repeat(64);
+const HASH_B = 'b'.repeat(64);
+const catalog = (hash, json) => ({ token: T, action: 'catalogo', hash, json });
+
+test('sin catálogo publicado, GET action=catalogo devuelve null', () => {
+  const s = load();
+  assert.deepStrictEqual(s.get({ token: T, action: 'catalogo' }), { ok: true, catalogo: null });
+  assert.deepStrictEqual(s.get({ token: 'malo', action: 'catalogo' }), { ok: false, error: 'token' });
+});
+
+test('POST catalogo guarda una sola fila y GET la devuelve tal cual', () => {
+  const s = load();
+  const json = JSON.stringify({ protocolo: 'Protocolo Insto v6', hash: HASH_A });
+  assert.deepStrictEqual(s.post(catalog(HASH_A, json)), { ok: true, catalogo: 'guardado' });
+  const got = s.get({ token: T, action: 'catalogo' }).catalogo;
+  assert.strictEqual(got.hash, HASH_A);
+  assert.strictEqual(got.json, json);
+  assert.strictEqual(got.publicado, new Date(s.env.now).toISOString());
+  s.env.now += 60_000;
+  const other = JSON.stringify({ protocolo: 'Protocolo Insto v6', hash: HASH_B });
+  assert.deepStrictEqual(s.post(catalog(HASH_B, other)), { ok: true, catalogo: 'guardado' });
+  assert.strictEqual(s.sheets['Catálogo'].rows.length, 2, 'encabezado y una sola fila');
+  assert.strictEqual(s.get({ token: T, action: 'catalogo' }).catalogo.json, other);
+});
+
+test('el mismo hash no vuelve a escribir', () => {
+  const s = load();
+  s.post(catalog(HASH_A, '{"x":1}'));
+  const before = s.sheets['Catálogo'].rows[1].slice();
+  s.env.now += 60_000;
+  assert.deepStrictEqual(s.post(catalog(HASH_A, '{"x":2}')), { ok: true, catalogo: 'igual' });
+  assert.deepStrictEqual(s.sheets['Catálogo'].rows[1], before);
+});
+
+test('un catálogo inválido o de más de 45 000 caracteres se rechaza sin tocar nada', () => {
+  const s = load();
+  s.post(catalog(HASH_A, '{"x":1}'));
+  assert.deepStrictEqual(s.post(catalog(HASH_B, '{"x":"' + 'y'.repeat(45_000) + '"}')), { ok: false, error: 'catalogo' });
+  assert.deepStrictEqual(s.post(catalog('no-es-hash', '{}')), { ok: false, error: 'catalogo' });
+  assert.deepStrictEqual(s.post(catalog(HASH_B, '')), { ok: false, error: 'catalogo' });
+  assert.deepStrictEqual(s.post({ token: T, action: 'catalogo', hash: HASH_B }), { ok: false, error: 'catalogo' });
+  assert.strictEqual(s.get({ token: T, action: 'catalogo' }).catalogo.hash, HASH_A);
+  assert.deepStrictEqual(s.post({ token: 'malo', action: 'catalogo', hash: HASH_B, json: '{}' }), { ok: false, error: 'token' });
+});
+
+test('un catálogo de 45 000 caracteres justos entra entero, como texto plano', () => {
+  const s = load();
+  const json = '{"x":"' + 'y'.repeat(45_000 - 8) + '"}';
+  assert.strictEqual(json.length, 45_000);
+  assert.deepStrictEqual(s.post(catalog(HASH_A, json)), { ok: true, catalogo: 'guardado' });
+  assert.strictEqual(s.get({ token: T, action: 'catalogo' }).catalogo.json, json);
+});
+
+test('el catálogo no cambia los eventos, el buzón ni el estado', () => {
+  const s = load();
+  s.post(catalog(HASH_A, '{"x":1}'));
+  assert.deepStrictEqual(s.get({ token: T, since: '2020-01-01T00:00:00Z' }), { ok: true, events: [] });
+  assert.deepStrictEqual(s.get({ token: T, action: 'ordenes' }), { ok: true, ordenes: [] });
+  assert.deepStrictEqual(s.get({ token: T, action: 'estado' }), { ok: true, estado: null });
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try { fn(); console.log('ok   ' + name); } catch (error) { failed++; console.log('FAIL ' + name + '\n     ' + (error && error.message)); }

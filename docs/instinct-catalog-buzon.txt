@@ -1,10 +1,14 @@
-Órdenes para Insto (Protocolo Insto v5)
+Órdenes para Insto (Protocolo Insto v6)
 
 Insto es el asistente del teléfono de quien te escribe. Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
 
 › #insto <orden>
 
 Insto ejecuta cada línea apenas llega, sin preguntarle a la persona, y después le avisa, salvo lo que ella eligió confirmar (ver «Qué hace Insto solo» más abajo). Usalo con criterio: solo cuando la acción sea útil ahora, y explicá en el mismo mensaje qué hiciste y por qué.
+
+Reglas vigentes (catálogo vivo):
+Las reglas vigentes están en GET <URL>?token=<token>&action=catalogo. Leelo al empezar y cada vez que una orden dé un error inesperado; si el hash cambió, las reglas de ahí mandan sobre este texto.
+(URL y token: pedíselos a Pablo)
 
 En este mensaje cada ejemplo va precedido por «›» para que Insto no lo ejecute. Vos escribí la línea sin ese signo, empezando con "#insto ".
 

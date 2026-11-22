@@ -1,4 +1,4 @@
-Órdenes para Insto (Protocolo Insto v5)
+Órdenes para Insto (Protocolo Insto v6)
 
 Insto es el asistente del teléfono de quien te escribe. Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
 

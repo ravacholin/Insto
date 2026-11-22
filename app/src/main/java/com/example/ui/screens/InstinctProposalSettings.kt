@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -107,6 +108,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         itemModifier = { Modifier.testTag("instinct_channel_${it.name.lowercase()}") })
       if (channel.usesLog) InstinctLogConfiguration(revision) { revision++ }
       InstinctStateSection(revision) { revision++ }
+      InstinctCatalogSection(revision) { revision++ }
       InstinctMailboxSection(replyMode, revision) { revision++ }
       InstinctScheduledList(revision) { revision++ }
       InstinctRoutineSwitches(revision) { revision++ }
@@ -351,6 +353,42 @@ private fun InstinctStateSection(revision: Int, onChange: () -> Unit) {
         onChange()
       }
     }, enabled = configured, modifier = Modifier.testTag("instinct_state_publish")) { Text("Publicar estado ahora") }
+    notice?.let { SettingsDescription(it) }
+  }
+}
+
+/**
+ * «Catálogo para Instinct» (1.18.0): the rules in force, published in the sheet when they change. One line and
+ * «Publicar catálogo ahora»; never the address, the token or the key.
+ */
+@Composable
+private fun InstinctCatalogSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val publisher = com.example.phone.InstinctCatalogPublisher
+  var line by remember { mutableStateOf<String?>(null) }
+  var notice by remember { mutableStateOf<String?>(null) }
+  var busy by remember { mutableStateOf(false) }
+  // The line computes the catalog (it parses the examples): off the main thread.
+  LaunchedEffect(revision) { line = withContext(Dispatchers.IO) { publisher.line(context) } }
+  val shown = line ?: return
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_catalog")) {
+    Text("Catálogo para Instinct", style = MaterialTheme.typography.bodyLarge)
+    SettingsDescription("Insto publica en la planilla las reglas vigentes (qué puede pedir Instinct, la autonomía, los límites) cada " +
+      "vez que cambian, para que Instinct no dependa de una copia pegada.")
+    SettingsDescription(shown, modifier = Modifier.testTag("instinct_catalog_line"))
+    OutlinedButton(onClick = {
+      busy = true; notice = "Publicando…"
+      scope.launch {
+        notice = when (val outcome = withContext(Dispatchers.IO) { publisher.publish(context, force = true) }) {
+          is com.example.phone.InstinctCatalogPublisher.Outcome.Published -> "Catálogo publicado."
+          com.example.phone.InstinctCatalogPublisher.Outcome.Unchanged -> "Catálogo publicado."
+          com.example.phone.InstinctCatalogPublisher.Outcome.Inactive -> "Falta configurar la bitácora o encender «Recibir órdenes de Instinct»."
+          is com.example.phone.InstinctCatalogPublisher.Outcome.Failed -> "No se pudo publicar (motivo: ${outcome.reason})."
+        }
+        busy = false; onChange()
+      }
+    }, enabled = !busy, modifier = Modifier.testTag("instinct_catalog_publish")) { Text("Publicar catálogo ahora") }
     notice?.let { SettingsDescription(it) }
   }
 }
