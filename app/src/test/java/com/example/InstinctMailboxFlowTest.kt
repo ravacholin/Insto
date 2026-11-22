@@ -268,4 +268,43 @@ class InstinctMailboxFlowTest {
     assertTrue(taken.isEmpty())
     assertEquals(0, volume())
   }
+
+  // 1.19.0
+
+  @Test fun `an order runs before the sheet hears tomadas`() {
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    var volumeWhenTaken = -1
+    val fake = FakeHttp { ex ->
+      if (ex.request.method == "GET") FakeHttp.Reply(200, JSONObject().put("ok", true).put("ordenes", JSONArray(inbox.filter { it.id !in taken }.map {
+        JSONObject().put("orden_id", it.id).put("at", it.at).put("lineas", JSONArray(it.lines)).put("firma", it.sig)
+      })).toString())
+      else { volumeWhenTaken = audio.getStreamVolume(AudioManager.STREAM_MUSIC); FakeHttp.Reply(200, """{"ok":true}""") }
+    }
+    InstinctMailbox.client = { InstinctMailboxClient(InstinctLogClient(OkHttpClient.Builder().addInterceptor(fake).build())) }
+    inbox += order("#insto poner el volumen al 40 por ciento")
+    InstinctMailbox.poll(app)
+    assertTrue("already ran when tomadas was sent: $volumeWhenTaken", volumeWhenTaken > 0)
+  }
+
+  @Test fun `a record that cannot be written runs nothing and marks nothing taken`() {
+    // A directory where the record should be: every write fails.
+    File(app.noBackupFilesDir, InstinctMailboxSeen.FILE).apply { delete(); mkdirs(); File(this, "x").writeText("x") }
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+    val order = order("#insto poner el volumen al 40 por ciento")
+    inbox += order
+    val result = InstinctMailbox.poll(app)
+    assertEquals(InstinctMailbox.Result.Failed(InstinctMailbox.STORAGE_FAILURE), result)
+    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertFalse(order.id in taken)
+    File(app.noBackupFilesDir, InstinctMailboxSeen.FILE).deleteRecursively()
+  }
+
+  @Test fun `Apps Script unreachable is a failure the next poll recovers from`() {
+    val down = FakeHttp { throw java.io.IOException("sin red") }
+    InstinctMailbox.client = { InstinctMailboxClient(InstinctLogClient(OkHttpClient.Builder().addInterceptor(down).build())) }
+    inbox += order("#insto poner el volumen al 40 por ciento")
+    assertTrue(InstinctMailbox.poll(app) is InstinctMailbox.Result.Failed)
+    assertTrue(InstinctMailbox.diagnosis(app), InstinctMailbox.diagnosis(app).contains("no se pudo sondear"))
+  }
+
 }

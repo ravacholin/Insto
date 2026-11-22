@@ -69,8 +69,12 @@ object InstinctLog {
   fun outbox(context: Context) = InstinctLogOutbox(File(context.applicationContext.noBackupFilesDir, InstinctLogOutbox.FILE))
 
   /** Writes [entries] about message [message] to the outbox and arms the job. Never throws. */
+  /** The message id of the last acknowledgements queued: only for «Probar de punta a punta» (1.19.0). Never content. */
+  @Volatile internal var lastMessage: String? = null
+
   fun enqueue(context: Context, entries: List<AckEntry>, message: String) {
     if (entries.isEmpty()) return
+    lastMessage = message
     val app = context.applicationContext
     runCatching {
       val now = clock()

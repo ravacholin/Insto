@@ -89,22 +89,63 @@ data class DoorbellState(
   val directOrders: Int = 0,
   /** Payloads that were not an order, and orders inside the doorbell with a bad signature or out of time. */
   val badPayloads: Int = 0,
+  /** 1.19.0: pushes that repeated an order already taken (by a poll or another push). */
+  val duplicates: Int = 0,
+  /** Broadcasts let go because the receiving queue was full. */
+  val queueRejected: Int = 0,
+  /** Orders claimed by a process that died before handing them over: logged as «incierta», never repeated. */
+  val uncertain: Int = 0,
+  /** Writes that failed (the inbox, the record of seen ids). */
+  val storageFailures: Int = 0,
+  /** Wall-clock millis of the last order of the doorbell that was verified and handed over. */
+  val lastDirectAt: Long? = null,
+  /** The last transport error, in Spanish, without any content; null when none. */
+  val lastError: String? = null,
+  /** 1.19.0: the script saved the sealed doorbell: from now on a clear push can only poll. */
+  val encryptionConfirmed: Boolean = false,
+  /** The script has a relay configured for the order encrypted inside the doorbell. */
+  val relayConfirmed: Boolean = false,
+  /** The script rings for every new order (1.19.0): no follow-up poll is needed after a direct order. */
+  val perOrderRing: Boolean = false,
+  /** The endpoint comes from a fallback distributor and may change soon. */
+  val temporaryEndpoint: Boolean = false,
+  /** A short hash of the registration's public keys, to tell when they change. Never the keys. */
+  val keysFingerprint: String? = null,
+  /** Pushes that arrived encrypted and decrypted, in clear, and encrypted that could not be decrypted. */
+  val encryptedPushes: Int = 0,
+  val plainPushes: Int = 0,
+  val decryptFailures: Int = 0,
+  /** Ids of direct orders the sheet must still hear as taken (`POST tomadas`); never anything else of the order. */
+  val pendingTaken: List<String> = emptyList(),
 ) {
   fun encode(): String = JSONObject().put("confirmed", confirmed).put("informPending", informPending).put("rings", rings).put("ringPolls", ringPolls)
     .put("withOrderConfirmed", withOrderConfirmed).put("directOrders", directOrders).put("badPayloads", badPayloads)
+    .put("duplicates", duplicates).put("queueRejected", queueRejected).put("uncertain", uncertain).put("storageFailures", storageFailures)
+    .put("encryptionConfirmed", encryptionConfirmed).put("relayConfirmed", relayConfirmed).put("perOrderRing", perOrderRing)
+    .put("temporaryEndpoint", temporaryEndpoint).put("encryptedPushes", encryptedPushes).put("plainPushes", plainPushes)
+    .put("decryptFailures", decryptFailures)
     .apply {
       token?.let { put("token", it) }; distributor?.let { put("distributor", it) }; informedAt?.let { put("informedAt", it) }
-      failure?.let { put("failure", it) }; lastRingAt?.let { put("lastRingAt", it) }
+      failure?.let { put("failure", it) }; lastRingAt?.let { put("lastRingAt", it) }; lastDirectAt?.let { put("lastDirectAt", it) }
+      lastError?.let { put("lastError", it) }; keysFingerprint?.let { put("keysFingerprint", it) }
+      if (pendingTaken.isNotEmpty()) put("pendingTaken", JSONArray(pendingTaken))
     }.toString()
 
   companion object {
+    const val MAX_PENDING_TAKEN = 50
+
     fun decode(text: String): DoorbellState = runCatching {
-      require(text.length <= 8_192)
+      require(text.length <= 16_384)
       val o = JSONObject(text)
       DoorbellState(o.optString("token").takeIf(UnifiedPush::validToken), o.optString("distributor").takeIf { it.isNotEmpty() },
         o.optBoolean("confirmed"), o.optLong("informedAt", 0L).takeIf { it > 0 }, o.optBoolean("informPending"),
         o.optString("failure").takeIf { it.isNotEmpty() }, o.optLong("lastRingAt", 0L).takeIf { it > 0 },
-        o.optInt("rings"), o.optInt("ringPolls"), o.optBoolean("withOrderConfirmed"), o.optInt("directOrders"), o.optInt("badPayloads"))
+        o.optInt("rings"), o.optInt("ringPolls"), o.optBoolean("withOrderConfirmed"), o.optInt("directOrders"), o.optInt("badPayloads"),
+        o.optInt("duplicates"), o.optInt("queueRejected"), o.optInt("uncertain"), o.optInt("storageFailures"),
+        o.optLong("lastDirectAt", 0L).takeIf { it > 0 }, o.optString("lastError").takeIf { it.isNotEmpty() }?.take(200),
+        o.optBoolean("encryptionConfirmed"), o.optBoolean("relayConfirmed"), o.optBoolean("perOrderRing"), o.optBoolean("temporaryEndpoint"),
+        o.optString("keysFingerprint").takeIf { it.isNotEmpty() }, o.optInt("encryptedPushes"), o.optInt("plainPushes"), o.optInt("decryptFailures"),
+        o.optJSONArray("pendingTaken")?.let { a -> (0 until minOf(a.length(), MAX_PENDING_TAKEN)).map { a.optString(it) }.filter { it.isNotEmpty() } }.orEmpty())
     }.getOrDefault(DoorbellState())
   }
 }
@@ -160,52 +201,8 @@ object InstinctDoorbellPayload {
   }
 }
 
-/** What the connector does with each broadcast from a distributor. Only the token authorizes a request. */
+/** The connector's labels and the choice of distributor (1.19.0: the official library handles the broadcasts). */
 object InstinctDoorbellProtocol {
-  sealed interface Action {
-    /** A token Insto does not know, or a malformed request: ignored, as the spec says. */
-    data object Ignore : Action
-    /**
-     * MESSAGE: ring. [ackId] is acknowledged when the distributor sent one. [inline] is the signed order the payload
-     * carried (1.18.0), still to be verified; null polls as before. [malformed]: a payload that was neither empty,
-     * «insto-timbre» nor an order, for the diagnosis.
-     */
-    data class Ring(val ackId: String?, val inline: MailboxOrder? = null, val malformed: Boolean = false) : Action
-    /** NEW_ENDPOINT: save it (or replace it) and tell the script. */
-    data class Endpoint(val endpoint: String, val ackId: String?) : Action
-    /** NEW_ENDPOINT whose endpoint Insto cannot hand to the script (not https, too long). */
-    data class BadEndpoint(val ackId: String?) : Action
-    /** REGISTRATION_FAILED: the next registration needs a new token. */
-    data class Failed(val reason: String) : Action
-    /** UNREGISTERED: delete the endpoint and tell the script. */
-    data object Unregistered : Action
-  }
-
-  /**
-   * [token] is the token in the broadcast, [current] the one Insto registered with. For MESSAGE, [payload] is only
-   * parsed as a signed order ([InstinctDoorbellPayload]): whoever sends it and whatever it says, the most it can do
-   * is hand over an order that must still pass the signature, or poll the mailbox.
-   */
-  fun handle(action: String?, token: String?, current: DoorbellState, endpoint: String? = null, id: String? = null,
-    reason: String? = null, payload: ByteArray? = null): Action {
-    if (current.token == null || token != current.token) return Action.Ignore
-    val ack = id?.takeIf(UnifiedPush::validToken)
-    return when (action) {
-      UnifiedPush.ACTION_MESSAGE -> InstinctDoorbellPayload.parse(payload).let { inline ->
-        Action.Ring(ack, inline, malformed = inline == null && !InstinctDoorbellPayload.plain(payload))
-      }
-      UnifiedPush.ACTION_NEW_ENDPOINT -> when {
-        endpoint.isNullOrEmpty() || endpoint.toByteArray(Charsets.UTF_8).size > UnifiedPush.MAX_ENDPOINT_BYTES -> Action.Ignore
-        InstinctDoorbellEndpoint.valid(endpoint) -> Action.Endpoint(endpoint, ack)
-        else -> Action.BadEndpoint(ack)
-      }
-      // A failure for a token that already got an endpoint is ignored.
-      UnifiedPush.ACTION_REGISTRATION_FAILED -> if (current.confirmed) Action.Ignore else Action.Failed(failureLabel(reason))
-      UnifiedPush.ACTION_UNREGISTERED -> Action.Unregistered
-      else -> Action.Ignore
-    }
-  }
-
   /** The spec's reasons, as the diagnosis says them. */
   fun failureLabel(reason: String?): String = when (reason) {
     "NETWORK" -> "registro fallido: el distribuidor no tenía red"
@@ -279,8 +276,8 @@ object InstinctDoorbellPolicy {
    * the sheet and picks up any other pending one. It respects [InstinctMailboxGate].
    */
   const val FOLLOW_UP_MILLIS = 60_000L
-  /** A ring-triggered poll that has not finished by then lets the broadcast go (it keeps running). */
-  const val POLL_TIMEOUT_MILLIS = 20_000L
+  /** The rescue job waits at most this long for the polls it started (1.19.0). */
+  const val JOB_WAIT_MILLIS = 60_000L
   /** «Probar timbre» waits this long for the ring. */
   const val TEST_WAIT_MILLIS = 30_000L
 
@@ -295,9 +292,22 @@ object InstinctDoorbellScript {
   const val TEST_ACTION = "probar-timbre"
   const val NOT_CONFIRMED = "el script no confirmó el endpoint"
 
-  /** [withOrder] (1.18.0) is always sent; a script older than 1.18.0 ignores it and does not repeat it. */
-  fun informBody(token: String, endpoint: String, withOrder: Boolean = false): String = JSONObject().put("token", token).put("action", ACTION)
-    .put("endpoint", endpoint).put(WITH_ORDER, withOrder && endpoint.isNotEmpty()).toString()
+  /**
+   * 1.19.0: the plain doorbell sealed for Insto's keys ([timbre], base64url) and, only with the order in the doorbell,
+   * the public keys the relay needs to encrypt it.
+   */
+  data class Sealed(val timbre: String, val p256dh: String? = null, val auth: String? = null)
+
+  /**
+   * [withOrder] (1.18.0) is always sent; a script older than 1.18.0 ignores it and does not repeat it. `cifrado`
+   * (1.19.0) is always sent too: the sealed doorbell, or null to delete it. An older script ignores it.
+   */
+  fun informBody(token: String, endpoint: String, withOrder: Boolean = false, sealed: Sealed? = null): String =
+    JSONObject().put("token", token).put("action", ACTION).put("endpoint", endpoint).put(WITH_ORDER, withOrder && endpoint.isNotEmpty())
+      .put(SEALED, sealed?.takeIf { endpoint.isNotEmpty() }?.let { s ->
+        JSONObject().put("timbre", s.timbre).apply { if (s.p256dh != null && s.auth != null) put("p256dh", s.p256dh).put("auth", s.auth) }
+      } ?: JSONObject.NULL).toString()
+  const val SEALED = "cifrado"
   const val WITH_ORDER = "conOrden"
   const val OLD_SCRIPT_WITH_ORDER = "el Apps Script no confirmó «Incluir la orden en el timbre»: pegá el instinct-bitacora.gs de 1.18.0 e implementá una versión nueva. Mientras tanto, el timbre sigue sin la orden"
 
@@ -308,7 +318,8 @@ object InstinctDoorbellScript {
      * The script saved the endpoint ([saved]) or deleted it. [withOrder] is the `conOrden` it repeated (1.18.0), or
      * null when it did not repeat any: a script older than 1.18.0.
      */
-    data class Confirmed(val saved: Boolean, val withOrder: Boolean? = null) : Answer
+    data class Confirmed(val saved: Boolean, val withOrder: Boolean? = null, val sealed: Boolean? = null, val relay: Boolean? = null,
+      val perOrder: Boolean? = null) : Answer
     /** [retry]: a network or HTTP failure; otherwise it waits for the person (token, an old script, a bad endpoint). */
     data class Failed(val reason: String, val retry: Boolean) : Answer
   }
@@ -323,7 +334,9 @@ object InstinctDoorbellScript {
         o == null -> Answer.Failed(InstinctLogClient.Failure.INVALID.label, retry = true)
         !o.optBoolean("ok", false) && o.optString("error") == "token" -> Answer.Failed(InstinctLogClient.Failure.TOKEN.label, retry = false)
         !o.optBoolean("ok", false) && o.optString("error") == "endpoint" -> Answer.Failed("el script rechazó el endpoint", retry = false)
-        o.optBoolean("ok", false) && o.optString(ACTION) == "guardado" -> Answer.Confirmed(saved = true, withOrder(o))
+        !o.optBoolean("ok", false) && o.optString("error") == SEALED -> Answer.Failed("el script rechazó el timbre cifrado", retry = false)
+        o.optBoolean("ok", false) && o.optString(ACTION) == "guardado" ->
+          Answer.Confirmed(saved = true, withOrder(o), o.opt(SEALED) as? Boolean, o.opt("rele") as? Boolean, o.opt("cadaOrden") as? Boolean)
         o.optBoolean("ok", false) && o.optString(ACTION) == "borrado" -> Answer.Confirmed(saved = false, withOrder(o))
         else -> Answer.Failed(NOT_CONFIRMED, retry = false)
       }
@@ -369,6 +382,52 @@ object InstinctDoorbellText {
     else -> InstinctDoorbellScript.OLD_SCRIPT_WITH_ORDER.replaceFirstChar { it.uppercaseChar() } + "."
   }
 
+  /**
+   * 1.19.0: the doorbell in detail, for Settings, one line each. Times through [clock]; never the endpoint (only its
+   * mask), a key, a token nor any content. [lastPoll] is the mailbox's last poll; [inbox] the entries waiting.
+   */
+  fun details(state: DoorbellState, distributor: String?, endpoint: String?, withOrder: Boolean, lastPoll: Long?, inbox: Int,
+    backupMinutes: Int, clock: (Long) -> String): List<String> = buildList {
+    add("Distribuidor: " + (distributor ?: "ninguno elegido"))
+    add("Registro: " + when {
+      state.failure != null -> "con problemas (${state.failure})"
+      endpoint == null -> "pendiente: el distribuidor todavía no dio el endpoint"
+      state.temporaryEndpoint -> "registrado con un distribuidor de respaldo (puede cambiar)"
+      else -> "registrado"
+    })
+    add(encryption(state, endpoint != null, withOrder))
+    add(status(endpoint, state, clock))
+    add("Última recepción push: " + (state.lastRingAt?.let(clock) ?: "ninguna"))
+    add("Última orden directa validada: " + (state.lastDirectAt?.let(clock) ?: "ninguna"))
+    add("Último sondeo del buzón: " + (lastPoll?.let(clock) ?: "ninguno") + " · respaldo cada $backupMinutes min")
+    add("Duplicados descartados ${state.duplicates} · fallos de descifrado ${state.decryptFailures} · fallos de verificación ${state.badPayloads}" +
+      " · sin cifrar ${state.plainPushes} · inciertas ${state.uncertain}")
+    add("Cola de recepción: $inbox pendiente" + (if (inbox == 1) "" else "s") + " · rechazados por cola llena ${state.queueRejected}" +
+      " · «tomadas» por avisar ${state.pendingTaken.size} · fallos de disco ${state.storageFailures}")
+    add("Último error: " + (state.lastError ?: "ninguno"))
+    onlyPolling(state, endpoint, backupMinutes)?.let(::add)
+  }
+
+  /** Why Insto works only by polling now, or null when the push is working. */
+  fun onlyPolling(state: DoorbellState, endpoint: String?, backupMinutes: Int): String? = when {
+    endpoint == null || state.failure != null ->
+      "Ahora Insto funciona solo con la revisión periódica (cada $backupMinutes min): el timbre no está registrado. Las órdenes llegan igual, más tarde."
+    state.lastRingAt == null ->
+      "Todavía no llegó ningún timbre: hasta que llegue, Insto depende de la revisión periódica. Probalo de punta a punta."
+    else -> null
+  }
+
+  /** 1.19.0: whether the doorbell travels encrypted (RFC 8291), and whether the order can travel inside it. */
+  fun encryption(state: DoorbellState, hasEndpoint: Boolean, withOrder: Boolean): String = when {
+    !hasEndpoint -> "Cifrado: esperando el registro con el distribuidor."
+    state.informPending -> "Cifrado: avisándole al script…"
+    !state.encryptionConfirmed -> "Cifrado: el script todavía no lo usa (Apps Script anterior a 1.19.0). El timbre viaja sin cifrar: modo heredado, " +
+      "no conforme con UnifiedPush (RFC 8291). Pegá el instinct-bitacora.gs nuevo e implementá una versión nueva."
+    withOrder && state.relayConfirmed -> "Cifrado RFC 8291: activo. La orden viaja cifrada dentro del timbre (relé configurado) y la firma la autoriza."
+    withOrder -> "Cifrado RFC 8291: activo para el timbre. Sin relé configurado en el script, la orden no viaja en el timbre: Insto la lee de la planilla."
+    else -> "Cifrado RFC 8291: activo. Un timbre sin cifrar ya no puede ejecutar nada: solo hace revisar el buzón."
+  }
+
   /** «Endpoint ••••abc123 · avisado al script HH:MM», or what is missing. */
   fun status(endpoint: String?, state: DoorbellState, clock: (Long) -> String): String = when {
     endpoint == null -> "Esperando el endpoint del distribuidor…"
@@ -381,7 +440,10 @@ object InstinctDoorbellText {
    * fails. Never any content: neither the payload nor the order.
    */
   fun diagnosis(state: DoorbellState, distributors: Int, clock: (Long) -> String): String {
-    val counts = "timbres ${state.rings} · sondeos por timbre ${state.ringPolls} · órdenes directas ${state.directOrders} · payload inválido ${state.badPayloads}"
+    val counts = "timbres ${state.rings} · sondeos por timbre ${state.ringPolls} · órdenes directas ${state.directOrders} · payload inválido ${state.badPayloads}" +
+      (if (state.duplicates > 0) " · duplicados descartados ${state.duplicates}" else "") +
+      (if (state.uncertain > 0) " · inciertas ${state.uncertain}" else "") +
+      (state.lastError?.let { " · último error: $it" } ?: "")
     return when {
       distributors == 0 -> "Timbre: sin distribuidor (instalá ntfy) · $counts"
       state.failure != null -> "Timbre: no funciona (motivo: ${state.failure}) · $counts"

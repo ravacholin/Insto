@@ -11,8 +11,8 @@ android {
     applicationId = "com.aistudio.pingassist.qvrtkm"
     minSdk = 24
     targetSdk = 36
-    versionCode = 27
-    versionName = "1.18.0"
+    versionCode = 28
+    versionName = "1.19.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -85,6 +85,8 @@ dependencies {
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.okhttp)
+  implementation(libs.unifiedpush.connector)
+  implementation(libs.tink)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.test.core)
   testImplementation(libs.androidx.test.ext.junit)

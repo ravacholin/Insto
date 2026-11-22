@@ -1,8 +1,8 @@
 /**
- * Bitácora de Insto (Protocolo Insto v6). Apps Script ligado a una planilla de Google.
+ * Bitácora de Insto (Protocolo Insto v6, Insto 1.19.0). Apps Script ligado a una planilla de Google.
  * Ver docs/INSTINCT-PROPUESTAS.md, «Bitácora (1.15.0)», «Estado del teléfono», «Buzón firmado» (1.16.0), «Timbre» (1.17.0),
- * «Orden directa en el timbre» y «Catálogo vivo» (1.18.0).
- * Es compatible con Insto 1.15.0 a 1.17.0: un POST o un GET sin las acciones nuevas se comportan exactamente igual que antes.
+ * «Orden directa en el timbre» y «Catálogo vivo» (1.18.0) y «Timbre cifrado» (1.19.0).
+ * Es compatible con Insto 1.15.0 a 1.18.0: un POST o un GET sin las acciones nuevas se comportan exactamente igual que antes.
  *
  * 1. En la planilla: Extensiones → Apps Script. Pegá este archivo y cambiá TOKEN por un texto largo y aleatorio.
  * 2. Implementar → Nueva implementación → Aplicación web. Ejecutar como: yo. Quién tiene acceso: cualquier usuario.
@@ -31,6 +31,17 @@
  * {"v":1,"id":…,"at":…,"lines":[…],"sig":…}: Insto verifica la firma igual que en el sondeo, así que ntfy puede leer las
  * líneas pero no cambiarlas. Si el timbre falla o se saltea, la orden queda anotada igual y la respuesta sigue siendo {ok, id}.
  *
+ * Timbre cifrado (1.19.0). UnifiedPush exige que el mensaje vaya cifrado según RFC 8291, y Apps Script no tiene las
+ * primitivas (ECDH P-256, AES-GCM) para hacerlo. Por eso:
+ *   - Insto cifra para sí mismo el timbre simple y manda el resultado en «cifrado.timbre» (base64url): el script lo
+ *     publica tal cual con Content-Encoding: aes128gcm. Es un mensaje RFC 8291 válido que solo dice «sonó».
+ *   - Para que la orden viaje dentro del timbre cifrada (opcional), configurá RELAY_URL y RELAY_SECRET con tu relé de
+ *     Cloudflare Workers (relay/insto-webpush-relay en el repositorio de Insto). Si el relé falla, suena el timbre simple.
+ *   POST {token, action:"timbre", endpoint, conOrden, cifrado:{timbre[, p256dh, auth]} | null}
+ *     → {ok, timbre, conOrden, cifrado:true|false, rele:true|false, cadaOrden:true}
+ *   Con el timbre cifrado guardado, cada orden nueva toca el timbre (como mucho 30 por minuto), sin la espera de 5 s.
+ *   Sin «cifrado» (Insto 1.18.0 o anterior) todo sigue como antes: el timbre va en claro y es «no conforme».
+ *
  * Catálogo vivo (1.18.0), en la hoja «Catálogo» (una sola fila): las reglas vigentes que publica Insto, para Instinct.
  * POST {token, action:"catalogo", hash, json}  → {ok, catalogo:"guardado"|"igual"}   ({ok:false, error:"catalogo"} si falta
  *   algo o el json pasa de 45 000 caracteres)
@@ -38,6 +49,9 @@
  * Un token incorrecto responde {ok:false, error:"token"}.
  */
 const TOKEN = 'CAMBIÁ-ESTE-TOKEN';
+// Relé opcional para la orden cifrada dentro del timbre (1.19.0). Vacíos: apagado (el timbre cifrado simple funciona igual).
+const RELAY_URL = '';
+const RELAY_SECRET = '';
 const SHEET = 'Bitácora';
 const HEADERS = ['recibido', 'evento_id', 'ocurrido', 'tipo', 'orden', 'detalle', 'mensaje_id', 'protocolo'];
 const MAX_EVENTS = 50;
@@ -52,6 +66,14 @@ const DOORBELL_MAX_CHARS = 500;
 const DOORBELL_WITH_ORDER = 'insto_timbre_con_orden';
 const DOORBELL_PAYLOAD = 'insto-timbre';
 const DOORBELL_MAX_PAYLOAD_BYTES = 3500;
+const DOORBELL_SEALED = 'insto_timbre_cifrado';
+const DOORBELL_P256DH = 'insto_timbre_p256dh';
+const DOORBELL_AUTH = 'insto_timbre_auth';
+const DOORBELL_MINUTE = 'insto_timbre_minuto';
+const DOORBELL_PER_MINUTE = 30;
+const DOORBELL_TTL = '300';
+// Un mensaje cifrado de Web Push ocupa como mucho 4096 bytes: en base64url, 5464 caracteres con relleno.
+const DOORBELL_MAX_SEALED_CHARS = 5464;
 const MAX_LINE_CHARS = 300;
 const CATALOG = 'Catálogo';
 const CATALOG_HEADERS = ['publicado', 'hash', 'json'];
@@ -158,9 +180,10 @@ function orderPayload_(body) {
 }
 
 /**
- * Toca el timbre: un POST al endpoint guardado, con «insto-timbre» o, si se pasa, la orden firmada ([payload]). Sin
- * «force», como mucho uno cada 5 segundos. Devuelve el código HTTP, 0 si no se tocó (sin endpoint o dentro de los 5
- * segundos) o -1 si el pedido falló.
+ * Toca el timbre. Con el timbre cifrado de Insto 1.19.0: la orden ([payload]) cifrada por el relé si está configurado,
+ * si no (o si el relé falla) el timbre cifrado simple; como mucho 30 por minuto. Sin él (Insto 1.18.0 o anterior), como
+ * siempre: «insto-timbre» o la orden firmada, en claro, como mucho uno cada 5 segundos. Sin «force» se respetan los
+ * límites. Devuelve el código HTTP, 0 si no se tocó (sin endpoint o por los límites) o -1 si el pedido falló.
  */
 function ring_(force, payload) {
   return ringDetail_(force, payload).code;
@@ -172,6 +195,15 @@ function ringDetail_(force, payload) {
   const endpoint = props.getProperty(DOORBELL_ENDPOINT);
   if (!endpoint) return { code: 0 };
   const now = Date.now();
+  const sealed = props.getProperty(DOORBELL_SEALED);
+  if (sealed) {
+    if (!force && !withinMinute_(props, now)) return { code: 0 };
+    if (payload && relayReady_(props)) {
+      const relayed = relay_(endpoint, payload, props);
+      if (relayed.code >= 200 && relayed.code < 300) return relayed;
+    }
+    return postSealed_(endpoint, sealed);
+  }
   const last = parseInt(props.getProperty(DOORBELL_LAST) || '0', 10) || 0;
   if (!force && now - last >= 0 && now - last < DOORBELL_SPACING_MS) return { code: 0 };
   props.setProperty(DOORBELL_LAST, String(now));
@@ -184,6 +216,76 @@ function ringDetail_(force, payload) {
   } catch (e) {
     return { code: -1, error: String((e && e.message) || e).slice(0, 200) };
   }
+}
+
+/** Cuenta el timbre en el minuto actual; false si ya hubo 30 (un bucle no agota la cuota de UrlFetchApp). */
+function withinMinute_(props, now) {
+  const minute = Math.floor(now / 60000);
+  const parts = String(props.getProperty(DOORBELL_MINUTE) || '').split(':');
+  const count = parseInt(parts[0], 10) === minute ? (parseInt(parts[1], 10) || 0) : 0;
+  if (count >= DOORBELL_PER_MINUTE) return false;
+  props.setProperty(DOORBELL_MINUTE, minute + ':' + (count + 1));
+  return true;
+}
+
+/** El relé está listo: URL https, un secreto de al menos 32 caracteres y las claves públicas de Insto guardadas. */
+function relayReady_(props) {
+  return /^https:\/\/[^\s]+$/.test(RELAY_URL) && RELAY_SECRET.length >= 32 &&
+    !!props.getProperty(DOORBELL_P256DH) && !!props.getProperty(DOORBELL_AUTH);
+}
+
+/** La orden firmada al relé, que la cifra (RFC 8291) y la publica. El relé no puede cambiarla: la firma lo impide. */
+function relay_(endpoint, payload, props) {
+  try {
+    const response = UrlFetchApp.fetch(RELAY_URL, {
+      method: 'post', contentType: 'application/json; charset=utf-8', muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + RELAY_SECRET },
+      payload: JSON.stringify({ endpoint: endpoint, p256dh: props.getProperty(DOORBELL_P256DH), auth: props.getProperty(DOORBELL_AUTH),
+        payload: payload, ttl: parseInt(DOORBELL_TTL, 10), urgency: 'high' }),
+    });
+    let answer = null;
+    try { answer = JSON.parse(response.getContentText()); } catch (_) { }
+    if (answer && answer.ok === true && typeof answer.codigo === 'number') return { code: answer.codigo, relay: true };
+    return { code: -2, relay: true };
+  } catch (e) {
+    return { code: -2, relay: true, error: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+
+/** El timbre cifrado simple, tal cual lo cifró Insto: el cuerpo binario de Web Push con sus cabeceras. */
+function postSealed_(endpoint, sealed) {
+  try {
+    const response = UrlFetchApp.fetch(endpoint, {
+      method: 'post', contentType: 'application/octet-stream', muteHttpExceptions: true,
+      headers: { 'Content-Encoding': 'aes128gcm', TTL: DOORBELL_TTL, Urgency: 'high' },
+      payload: Utilities.base64DecodeWebSafe(sealed),
+    });
+    return { code: response.getResponseCode(), sealed: true };
+  } catch (e) {
+    return { code: -1, sealed: true, error: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+
+/**
+ * «cifrado» (1.19.0): el timbre cifrado por Insto y, solo con la orden en el timbre, sus claves públicas para el relé.
+ * null borra todo; si no viene, no se toca (un Insto 1.18.0 no lo manda). Devuelve false si algo no es válido.
+ */
+function saveSealed_(cifrado) {
+  const props = props_();
+  if (cifrado === null) {
+    [DOORBELL_SEALED, DOORBELL_P256DH, DOORBELL_AUTH].forEach(function (k) { props.deleteProperty(k); });
+    return true;
+  }
+  const timbre = cifrado.timbre;
+  if (typeof timbre !== 'string' || timbre.length < 140 || timbre.length > DOORBELL_MAX_SEALED_CHARS || !/^[A-Za-z0-9_-]+={0,2}$/.test(timbre)) return false;
+  const p256dh = cifrado.p256dh;
+  const auth = cifrado.auth;
+  if (p256dh !== undefined && (typeof p256dh !== 'string' || !/^[A-Za-z0-9_-]{87}$/.test(p256dh))) return false;
+  if (auth !== undefined && (typeof auth !== 'string' || !/^[A-Za-z0-9_-]{22}$/.test(auth))) return false;
+  props.setProperty(DOORBELL_SEALED, timbre);
+  if (p256dh && auth) { props.setProperty(DOORBELL_P256DH, p256dh); props.setProperty(DOORBELL_AUTH, auth); }
+  else { props.deleteProperty(DOORBELL_P256DH); props.deleteProperty(DOORBELL_AUTH); }
+  return true;
 }
 
 /**
@@ -202,13 +304,22 @@ function autorizarTimbre() {
 function postDoorbell_(body) {
   const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : '';
   if (endpoint && (endpoint.length > DOORBELL_MAX_CHARS || !/^https:\/\/[^\s]+$/.test(endpoint))) return json_({ ok: false, error: 'endpoint' });
+  const sealing = Object.prototype.hasOwnProperty.call(body, 'cifrado');
+  if (sealing && body.cifrado !== null && (typeof body.cifrado !== 'object' || Array.isArray(body.cifrado))) return json_({ ok: false, error: 'cifrado' });
+  if (sealing && !saveSealed_(endpoint ? body.cifrado : null)) return json_({ ok: false, error: 'cifrado' });
   const out = { ok: true, timbre: endpoint ? 'guardado' : 'borrado' };
   if (typeof body.conOrden === 'boolean') {
     props_().setProperty(DOORBELL_WITH_ORDER, body.conOrden ? '1' : '0');
     out.conOrden = body.conOrden;
   }
   if (endpoint) props_().setProperty(DOORBELL_ENDPOINT, endpoint);
-  else props_().deleteProperty(DOORBELL_ENDPOINT);
+  else { props_().deleteProperty(DOORBELL_ENDPOINT); saveSealed_(null); }
+  // Solo a quien habla de cifrado (Insto 1.19.0): un Insto anterior recibe exactamente la respuesta de siempre.
+  if (sealing) {
+    out.cifrado = !!props_().getProperty(DOORBELL_SEALED);
+    out.rele = out.cifrado && relayReady_(props_());
+    out.cadaOrden = true;
+  }
   return json_(out);
 }
 
@@ -217,6 +328,7 @@ function postDoorbellTest_() {
   if (!props_().getProperty(DOORBELL_ENDPOINT)) return json_({ ok: false, error: 'sin-endpoint' });
   const rang = ringDetail_(true);
   const out = { ok: true, timbre: rang.code >= 200 && rang.code < 300, codigo: rang.code };
+  if (rang.sealed) out.cifrado = true;
   if (rang.error) out.detalle = rang.error;
   return json_(out);
 }

@@ -1,0 +1,10 @@
+# Relé opcional de Web Push para Insto 1.19.0. Plan gratuito de Cloudflare Workers; sin almacenamiento ni bindings.
+# Antes de desplegar: `npx wrangler secret put RELAY_SECRET` (un texto aleatorio de al menos 32 caracteres).
+name = "insto-webpush-relay"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[vars]
+# Hosts de UnifiedPush a los que el relé puede publicar, separados por comas. Con tu propio ntfy, agregá su host.
+ALLOWED_HOSTS = "ntfy.sh"

@@ -41,7 +41,8 @@ function fakeSheet() {
   };
 }
 
-function load() {
+function load(options) {
+  const opts = options || {};
   const sheets = {};
   const props = {};
   const fetches = [];
@@ -49,6 +50,9 @@ function load() {
     now: 1_790_000_000_000,
     fetchFails: false,
     fetchCode: 200,
+    // El relé (1.19.0): la respuesta JSON que da, o relayFails para que falle.
+    relayAnswer: { ok: true, codigo: 201 },
+    relayFails: false,
   };
   const context = {
     SpreadsheetApp: {
@@ -72,9 +76,15 @@ function load() {
     UrlFetchApp: {
       fetch(url, options) {
         fetches.push({ url, options });
+        if (url === RELAY && env.relayFails) throw new Error('relé caído');
+        if (url === RELAY) return { getResponseCode() { return 200; }, getContentText() { return JSON.stringify(env.relayAnswer); } };
         if (env.fetchFails) throw new Error('sin red');
-        return { getResponseCode() { return env.fetchCode; } };
+        return { getResponseCode() { return env.fetchCode; }, getContentText() { return ''; } };
       },
+    },
+    Utilities: {
+      // Como el de Google: base64 «web safe» a bytes con signo.
+      base64DecodeWebSafe(text) { return Array.from(Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/'), 'base64')).map((b) => (b > 127 ? b - 256 : b)); },
     },
     ContentService: {
       MimeType: { JSON: 'json' },
@@ -87,12 +97,17 @@ function load() {
     JSON, Math, String, Array, Set, parseInt, isNaN,
   };
   vm.createContext(context);
-  vm.runInContext(SOURCE.replace("const TOKEN = 'CAMBIÁ-ESTE-TOKEN';", "const TOKEN = 'token-de-prueba';"), context);
+  let source = SOURCE.replace("const TOKEN = 'CAMBIÁ-ESTE-TOKEN';", "const TOKEN = 'token-de-prueba';");
+  if (opts.relay) source = source.replace("const RELAY_URL = '';", "const RELAY_URL = '" + RELAY + "';")
+    .replace("const RELAY_SECRET = '';", "const RELAY_SECRET = '" + RELAY_SECRET + "';");
+  vm.runInContext(source, context);
   const post = (body) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(body) } }).text);
   const get = (parameter) => JSON.parse(context.doGet({ parameter }).text);
   return { post, get, props, fetches, sheets, env };
 }
 
+const RELAY = 'https://insto-webpush-relay.ejemplo.workers.dev/';
+const RELAY_SECRET = 'secreto-del-rele-de-prueba-0123456789';
 const T = 'token-de-prueba';
 const ENDPOINT = 'https://ntfy.sh/upAbCdEf123456?up=1';
 const order = (id) => ({ token: T, action: 'orden', id, at: '2026-11-21T09:30:00-03:00', lines: ['#insto ver estado'], sig: '0'.repeat(64) });
@@ -345,6 +360,122 @@ test('el catálogo no cambia los eventos, el buzón ni el estado', () => {
   assert.deepStrictEqual(s.get({ token: T, since: '2020-01-01T00:00:00Z' }), { ok: true, events: [] });
   assert.deepStrictEqual(s.get({ token: T, action: 'ordenes' }), { ok: true, ordenes: [] });
   assert.deepStrictEqual(s.get({ token: T, action: 'estado' }), { ok: true, estado: null });
+});
+
+// Timbre cifrado (1.19.0)
+
+// Un cuerpo aes128gcm (el ejemplo de RFC 8291) y unas claves públicas de suscripción con el formato correcto.
+const SEALED = 'DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN';
+const P256DH = 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4';
+const AUTH = 'BTBZMqHH6r4Tts7J_aSIgg';
+const sealedDoorbell = (s, extra) => s.post(Object.assign({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: false, cifrado: { timbre: SEALED } }, extra || {}));
+const orderId = (n) => '3b241101-e2bb-4255-8caf-' + String(n).padStart(12, '0');
+
+test('con cifrado, timbre guarda el timbre cifrado y responde lo que el script sabe hacer', () => {
+  const s = load();
+  assert.deepStrictEqual(sealedDoorbell(s), { ok: true, timbre: 'guardado', conOrden: false, cifrado: true, rele: false, cadaOrden: true });
+  assert.strictEqual(s.props.insto_timbre_cifrado, SEALED);
+  assert.strictEqual(s.props.insto_timbre_p256dh, undefined, 'sin la orden en el timbre, las claves no se guardan');
+});
+
+test('una orden nueva toca el timbre cifrado: cuerpo binario de Web Push con sus cabeceras', () => {
+  const s = load();
+  sealedDoorbell(s);
+  s.post(order(orderId(1)));
+  assert.strictEqual(s.fetches.length, 1);
+  const ring = s.fetches[0];
+  assert.strictEqual(ring.url, ENDPOINT);
+  assert.strictEqual(ring.options.contentType, 'application/octet-stream');
+  assert.strictEqual(ring.options.headers['Content-Encoding'], 'aes128gcm');
+  assert.strictEqual(ring.options.headers.TTL, '300');
+  assert.strictEqual(ring.options.headers.Urgency, 'high');
+  assert.strictEqual(Buffer.from(ring.options.payload.map((b) => b & 255)).toString('base64url'), SEALED);
+  assert.ok(!JSON.stringify(ring.options).includes('ver estado'), 'la orden no viaja en claro');
+});
+
+test('con el timbre cifrado, cada orden nueva toca el timbre sin la espera de 5 segundos, hasta 30 por minuto', () => {
+  const s = load();
+  sealedDoorbell(s);
+  for (let i = 0; i < 31; i++) s.post(order(orderId(i)));
+  assert.strictEqual(s.fetches.length, 30);
+  s.env.now += 60000;
+  s.post(order(orderId(99)));
+  assert.strictEqual(s.fetches.length, 31);
+  s.post(order(orderId(99)));
+  assert.strictEqual(s.fetches.length, 31, 'una repetida no toca el timbre');
+});
+
+test('con la orden en el timbre y sin relé, suena el timbre cifrado simple, nunca la orden en claro', () => {
+  const s = load();
+  sealedDoorbell(s, { conOrden: true, cifrado: { timbre: SEALED, p256dh: P256DH, auth: AUTH } });
+  s.post(order(orderId(1)));
+  assert.strictEqual(s.fetches.length, 1);
+  assert.strictEqual(s.fetches[0].url, ENDPOINT);
+  assert.strictEqual(s.fetches[0].options.headers['Content-Encoding'], 'aes128gcm');
+});
+
+test('con relé, la orden firmada va al relé con el secreto y las claves; el script no la publica en claro', () => {
+  const s = load({ relay: true });
+  assert.strictEqual(sealedDoorbell(s, { conOrden: true, cifrado: { timbre: SEALED, p256dh: P256DH, auth: AUTH } }).rele, true);
+  s.post(order(orderId(1)));
+  assert.strictEqual(s.fetches.length, 1);
+  const call = s.fetches[0];
+  assert.strictEqual(call.url, RELAY);
+  assert.strictEqual(call.options.headers.Authorization, 'Bearer ' + RELAY_SECRET);
+  const body = JSON.parse(call.options.payload);
+  assert.deepStrictEqual(Object.keys(body).sort(), ['auth', 'endpoint', 'p256dh', 'payload', 'ttl', 'urgency']);
+  assert.strictEqual(body.endpoint, ENDPOINT);
+  assert.strictEqual(body.p256dh, P256DH);
+  assert.deepStrictEqual(JSON.parse(body.payload).lines, ['#insto ver estado']);
+});
+
+test('si el relé falla o rechaza, suena el timbre cifrado simple', () => {
+  const s = load({ relay: true });
+  sealedDoorbell(s, { conOrden: true, cifrado: { timbre: SEALED, p256dh: P256DH, auth: AUTH } });
+  s.env.relayFails = true;
+  s.post(order(orderId(1)));
+  assert.deepStrictEqual(s.fetches.map((f) => f.url), [RELAY, ENDPOINT]);
+  s.env.relayFails = false;
+  s.env.relayAnswer = { ok: false, error: 'secreto' };
+  s.post(order(orderId(2)));
+  assert.deepStrictEqual(s.fetches.map((f) => f.url), [RELAY, ENDPOINT, RELAY, ENDPOINT]);
+});
+
+test('con relé configurado pero la orden en el timbre apagada, no se usa el relé', () => {
+  const s = load({ relay: true });
+  assert.strictEqual(sealedDoorbell(s).rele, false);
+  s.post(order(orderId(1)));
+  assert.deepStrictEqual(s.fetches.map((f) => f.url), [ENDPOINT]);
+});
+
+test('cifrado inválido se rechaza sin tocar nada; null o endpoint vacío borran el timbre cifrado y las claves', () => {
+  const s = load();
+  for (const cifrado of [{ timbre: 'corto' }, { timbre: SEALED + '!' }, { timbre: SEALED, p256dh: 'x' }, { timbre: SEALED, auth: 'x' }, 'texto', []]) {
+    assert.deepStrictEqual(s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, cifrado }), { ok: false, error: 'cifrado' }, JSON.stringify(cifrado));
+  }
+  assert.strictEqual(Object.keys(s.props).length, 0);
+  sealedDoorbell(s, { conOrden: true, cifrado: { timbre: SEALED, p256dh: P256DH, auth: AUTH } });
+  assert.strictEqual(s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, cifrado: null }).cifrado, false);
+  assert.strictEqual(s.props.insto_timbre_cifrado, undefined);
+  assert.strictEqual(s.props.insto_timbre_p256dh, undefined);
+  sealedDoorbell(s, { conOrden: true, cifrado: { timbre: SEALED, p256dh: P256DH, auth: AUTH } });
+  s.post({ token: T, action: 'timbre', endpoint: '', cifrado: null });
+  assert.strictEqual(s.props.insto_timbre_cifrado, undefined);
+  assert.strictEqual(s.props.insto_timbre_auth, undefined);
+});
+
+test('un Insto 1.18.0 (sin cifrado) no ve campos nuevos ni pierde el timbre cifrado guardado', () => {
+  const s = load();
+  sealedDoorbell(s);
+  assert.deepStrictEqual(s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: false }), { ok: true, timbre: 'guardado', conOrden: false });
+  assert.strictEqual(s.props.insto_timbre_cifrado, SEALED);
+});
+
+test('probar-timbre usa el timbre cifrado y lo dice', () => {
+  const s = load();
+  sealedDoorbell(s);
+  assert.deepStrictEqual(s.post({ token: T, action: 'probar-timbre' }), { ok: true, timbre: true, codigo: 200, cifrado: true });
+  assert.strictEqual(s.fetches[0].options.headers['Content-Encoding'], 'aes128gcm');
 });
 
 let failed = 0;

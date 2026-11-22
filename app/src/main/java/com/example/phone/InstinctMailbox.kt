@@ -243,7 +243,7 @@ object InstinctMailboxPoll {
   fun tokenRejected(text: String?): Boolean =
     text?.let { runCatching { JSONObject(it) }.getOrNull() }?.let { !it.optBoolean("ok", true) && it.optString("error") == "token" } == true
 
-  /** The body Instinct POSTs to publish an order (documented; Insto never sends it). */
+  /** The body Instinct POSTs to publish an order. Insto sends it only for «Probar de punta a punta» (1.19.0). */
   fun orderBody(token: String, order: MailboxOrder): String = JSONObject().put("token", token).put("action", "orden").put("id", order.id)
     .put("at", order.at).put("lines", JSONArray(order.lines)).put("sig", order.sig).toString()
 
