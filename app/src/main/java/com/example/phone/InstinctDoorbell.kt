@@ -256,6 +256,10 @@ object InstinctDoorbellScript {
         o.optString("error") == "sin-endpoint" -> "el script no tiene el endpoint guardado"
         o.optBoolean("ok", false) && o.optBoolean(ACTION, false) -> null
         o.optBoolean("ok", false) && !o.has(ACTION) -> "el script no conoce «probar-timbre»: actualizalo"
+        // -1: UrlFetchApp failed before reaching ntfy. Almost always the script lacks the authorization for it.
+        o.optInt("codigo", 0) < 0 -> "el script no pudo conectarse a ntfy" + (o.optString("detalle").takeIf { it.isNotBlank() }
+          ?.let { " (Google dice: ${InstinctAck.flat(it).take(160)})" } ?: "") +
+          ". Si es un permiso, abrí el Apps Script, ejecutá una vez «autorizarTimbre», aceptá y volvé a implementar una versión nueva"
         else -> "el script no pudo tocar el timbre" + (o.optInt("codigo", 0).takeIf { it > 0 }?.let { " (HTTP $it)" } ?: "")
       }
     }

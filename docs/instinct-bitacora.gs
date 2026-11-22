@@ -114,19 +114,33 @@ function props_() {
  * Devuelve el código HTTP, 0 si no se tocó (sin endpoint o dentro de los 5 segundos) o -1 si el pedido falló.
  */
 function ring_(force) {
+  return ringDetail_(force).code;
+}
+
+/** Como ring_, con el error de Google cuando el pedido falla (por ejemplo, sin autorización para UrlFetchApp). */
+function ringDetail_(force) {
   const props = props_();
   const endpoint = props.getProperty(DOORBELL_ENDPOINT);
-  if (!endpoint) return 0;
+  if (!endpoint) return { code: 0 };
   const now = Date.now();
   const last = parseInt(props.getProperty(DOORBELL_LAST) || '0', 10) || 0;
-  if (!force && now - last >= 0 && now - last < DOORBELL_SPACING_MS) return 0;
+  if (!force && now - last >= 0 && now - last < DOORBELL_SPACING_MS) return { code: 0 };
   props.setProperty(DOORBELL_LAST, String(now));
   try {
     const response = UrlFetchApp.fetch(endpoint, { method: 'post', payload: 'insto-timbre', muteHttpExceptions: true });
-    return response.getResponseCode();
-  } catch (_) {
-    return -1;
+    return { code: response.getResponseCode() };
+  } catch (e) {
+    return { code: -1, error: String((e && e.message) || e).slice(0, 200) };
   }
+}
+
+/**
+ * Ejecutala UNA vez desde el editor (elegila arriba, en la lista de funciones, y tocá «Ejecutar») para darle al script
+ * el permiso de conectarse a servicios externos, que el timbre necesita. Google muestra el aviso de autorización.
+ * No toca el timbre: solo hace un pedido a ntfy.sh.
+ */
+function autorizarTimbre() {
+  UrlFetchApp.fetch('https://ntfy.sh/v1/health', { muteHttpExceptions: true });
 }
 
 /** Guarda (o, vacío, borra) el endpoint del timbre. */
@@ -144,8 +158,10 @@ function postDoorbell_(body) {
 /** «Probar timbre» desde Insto: toca el timbre ahora, sin esperar los 5 segundos. */
 function postDoorbellTest_() {
   if (!props_().getProperty(DOORBELL_ENDPOINT)) return json_({ ok: false, error: 'sin-endpoint' });
-  const code = ring_(true);
-  return json_({ ok: true, timbre: code >= 200 && code < 300, codigo: code });
+  const rang = ringDetail_(true);
+  const out = { ok: true, timbre: rang.code >= 200 && rang.code < 300, codigo: rang.code };
+  if (rang.error) out.detalle = rang.error;
+  return json_(out);
 }
 
 /** Marca como tomadas las órdenes que Insto ya leyó (válidas o no), para que no vuelvan. */

@@ -127,6 +127,9 @@ class InstinctDoorbellTest {
       InstinctDoorbellScript.parseInform(InstinctLogClient.Raw.Failed(InstinctLogClient.Failure.NETWORK)))
     assertNull(InstinctDoorbellScript.testFailure(body("""{"ok":true,"timbre":true,"codigo":200}""")))
     assertEquals("el script no pudo tocar el timbre (HTTP 404)", InstinctDoorbellScript.testFailure(body("""{"ok":true,"timbre":false,"codigo":404}""")))
+    val denied = InstinctDoorbellScript.testFailure(body("""{"ok":true,"timbre":false,"codigo":-1,"detalle":"No tenés permiso para llamar a UrlFetchApp.fetch."}"""))!!
+    assertTrue(denied, denied.startsWith("el script no pudo conectarse a ntfy (Google dice: No tenés permiso"))
+    assertTrue(denied.contains("autorizarTimbre"))
     assertEquals("el script no conoce «probar-timbre»: actualizalo", InstinctDoorbellScript.testFailure(body("""{"ok":true,"accepted":[]}""")))
     assertEquals("el script no tiene el endpoint guardado", InstinctDoorbellScript.testFailure(body("""{"ok":false,"error":"sin-endpoint"}""")))
     assertTrue(InstinctDoorbellScript.informBody("t0ken-largo", endpoint).contains("\"action\":\"timbre\""))

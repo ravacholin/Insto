@@ -462,7 +462,7 @@ Con el buzón, una orden tarda lo que tarde el próximo sondeo: de 5 a 15 minuto
 | Pedido | Qué hace |
 | --- | --- |
 | `POST {token, action:"timbre", endpoint}` | Guarda el endpoint en `PropertiesService.getScriptProperties()`, **no en la planilla**. Tiene que empezar con `https://` y tener como máximo 500 caracteres; si no, `{ok:false, error:"endpoint"}`. Con `endpoint` vacío lo borra. Responde `{ok, timbre:"guardado"}` o `{ok, timbre:"borrado"}`. |
-| `POST {token, action:"probar-timbre"}` | Toca el timbre ahora y responde `{ok, timbre:true|false, codigo}`, o `{ok:false, error:"sin-endpoint"}`. |
+| `POST {token, action:"probar-timbre"}` | Toca el timbre ahora y responde `{ok, timbre:true|false, codigo}` (con `codigo:-1` y `detalle`, el error de Google, si el pedido ni salió), o `{ok:false, error:"sin-endpoint"}`. |
 | `POST {token, action:"orden", …}` | Igual que en 1.16.0. Además, después de anotar una orden **nueva** (no una repetida), hace `UrlFetchApp.fetch(endpoint, {method:"post", payload:"insto-timbre", muteHttpExceptions:true})`, como mucho una vez cada 5 segundos (la última hora queda en las propiedades del script). Si el fetch falla, la orden queda anotada igual y la respuesta sigue siendo `{ok, id}`. |
 
 Un `POST` o un `GET` sin estas acciones se comporta exactamente igual que en 1.16.0. Con un script viejo, `action:"timbre"` cae en la rama de los eventos y responde `{ok:true, accepted:[]}`: Insto lo toma como «el script no confirmó el endpoint» y lo dice en el diagnóstico, sin reintentar. La prueba del script sin Google está en `scripts/test-bitacora-gs.js` (`node scripts/test-bitacora-gs.js`; `scripts/test-phone-core.py` la corre si hay Node).
@@ -484,7 +484,7 @@ Un `POST` o un `GET` sin estas acciones se comporta exactamente igual que en 1.1
 ### Configuración paso a paso
 
 1. Instalá **ntfy** (F-Droid o Play Store). No hace falta crear una cuenta; podés usar `ntfy.sh` o tu propio servidor. En Android, sacale a ntfy la optimización de batería y, si lo pide, dejale activada la «conexión instantánea».
-2. Actualizá el Apps Script con [`instinct-bitacora.gs`](instinct-bitacora.gs) de esta versión y volvé a implementarlo (**Implementar → Gestionar implementaciones → Editar → Nueva versión**: así se conserva la URL).
+2. Actualizá el Apps Script con [`instinct-bitacora.gs`](instinct-bitacora.gs) de esta versión (conservá tu línea `const TOKEN`). **Autorizá el timbre una vez:** en el editor, elegí la función `autorizarTimbre` en la lista de arriba, tocá **Ejecutar** y aceptá el permiso «Conectarse a un servicio externo». Sin ese permiso, `UrlFetchApp` falla y «Probar timbre» dice «el script no pudo conectarse a ntfy». Después volvé a implementarlo (**Implementar → Gestionar implementaciones → Editar → Nueva versión**: así se conserva la URL).
 3. En Insto, **Ajustes → Propuestas de Instinct → Buzón**, con el buzón ya funcionando, encendé **«Timbre instantáneo (ntfy)»**. ntfy registra a Insto y le da el endpoint; la línea de estado pasa a «Endpoint ••••… · avisado al script HH:MM».
 4. Tocá **«Probar timbre»**: tiene que decir «El timbre llegó en N s».
 

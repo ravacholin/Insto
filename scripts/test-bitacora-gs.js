@@ -181,7 +181,7 @@ test('probar-timbre toca el timbre ahora, sin esperar los 5 segundos', () => {
   s.env.fetchCode = 404;
   assert.deepStrictEqual(s.post({ token: T, action: 'probar-timbre' }), { ok: true, timbre: false, codigo: 404 });
   s.env.fetchFails = true;
-  assert.deepStrictEqual(s.post({ token: T, action: 'probar-timbre' }), { ok: true, timbre: false, codigo: -1 });
+  assert.deepStrictEqual(s.post({ token: T, action: 'probar-timbre' }), { ok: true, timbre: false, codigo: -1, detalle: 'sin red' });
 });
 
 test('tomadas y ordenes siguen igual', () => {
