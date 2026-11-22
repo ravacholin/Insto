@@ -61,7 +61,8 @@ object InstinctPushIntake {
 
 /**
  * Dispatching what the inbox holds, on one thread. An order: [InstinctMailboxSignature.verify] (signature, window,
- * seen), [InstinctMailboxSeen.claimAll] on the record every transport shares, then [InstinctProposalIntake.onMailbox],
+ * seen), [InstinctOrderClaims.claimOrders] on the journal every transport shares (the claim and the order's rows in one
+ * transaction, 1.20.0), then [InstinctProposalIntake.onMailbox],
  * exactly like a polled order; the sheet is not read. A ring: the gate, and the poll on the mailbox's own thread. An
  * order an earlier process claimed but may not have handed over is never run again: the log says «incierta».
  */
@@ -120,16 +121,32 @@ object InstinctPushDispatcher {
         PushEntry.Kind.RING -> ring(app, inbox, entry)
       }
     }
-    if (inbox.size() == 0) InstinctDoorbell.cancel(app, InstinctDoorbell.KIND_DRAIN)
+    // 1.20.0: the same job also continues or settles what the execution journal holds unfinished.
+    runCatching { InstinctExecutionRecoveryManager.recover(app) }
+    if (inbox.size() == 0 && !InstinctExecutionRecoveryManager.pending(app)) InstinctDoorbell.cancel(app, InstinctDoorbell.KIND_DRAIN)
   }
 
   private fun order(app: Context, inbox: InstinctPushInbox, entry: PushEntry) {
     val order = entry.order ?: run { inbox.remove(entry.seq); return }
     val bell = InstinctDoorbell.settings(app)
     if (entry.claimed && entry.seq !in synchronized(handing) { handing.toSet() }) {
-      // Claimed by a process that died before handing it over: maybe it ran, maybe not. Never again.
-      reportUncertain(app, order)
-      bell.update { it.copy(uncertain = it.uncertain + 1, lastError = "Insto se cerró con una orden recibida a medias") }
+      // Claimed by a process that died before handing it over. Since 1.20.0 the claim and the order's rows are one
+      // transaction: if the journal has them, recovery decides from their state, never by running it again here.
+      val journal = InstinctExecutions.journal(app)
+      val records = runCatching { journal.forMessage(order.id) }.getOrNull()
+      if (records == null) {
+        // The journal cannot be read: keep the entry, the next drain asks again.
+        bell.update { it.copy(storageFailures = it.storageFailures + 1, lastError = "no se pudo leer el diario de ejecución") }
+        InstinctDoorbell.schedule(app, InstinctDoorbell.KIND_DRAIN, InstinctPushPolicy.RESCUE_DELAY_MILLIS)
+        return
+      }
+      if (records.isEmpty()) {
+        // 1.19.0 claimed it and recorded nothing: maybe it ran, maybe not. Never again; kept as uncertain.
+        runCatching { journal.recordLegacyUncertain(order.id, InstinctProposalProtocol.orders(order.lines.joinToString("\n")),
+          InstinctMailboxSignature.messageId(order.id), UNCERTAIN_DETAIL) }
+        reportUncertain(app, order)
+        bell.update { it.copy(uncertain = it.uncertain + 1, lastError = "Insto se cerró con una orden recibida a medias") }
+      } else InstinctExecutionRecoveryManager.recover(app)
       inbox.remove(entry.seq); return
     }
     // Revalidated now, whatever happened before: the mailbox may have been turned off, the key changed.
@@ -138,8 +155,9 @@ object InstinctPushDispatcher {
     val seen = InstinctMailbox.seen(app)
     when (InstinctMailboxSignature.verify(key, order, InstinctMailbox.clock(), seen::contains)) {
       InstinctMailboxSignature.Verdict.VALID -> {
-        val won = try { seen.claimAll(listOf(order.id)) } catch (_: Throwable) {
-          // `seen` could not be written: the order does not run without its record. Retried, then left to the poll.
+        // 1.20.0: claiming the id and recording each of its orders are one transaction in the journal.
+        val won = try { seen.claimOrders(listOf(order), ExecutionTransport.PUSH) } catch (_: Throwable) {
+          // The journal could not be written: the order does not run without its record. Retried, then left to the poll.
           bell.update { it.copy(storageFailures = it.storageFailures + 1, lastError = "no se pudo guardar el registro de órdenes vistas") }
           if (entry.attempts + 1 >= InstinctPushPolicy.MAX_CLAIM_ATTEMPTS) { inbox.remove(entry.seq); InstinctDoorbell.ringFallback(app) }
           else { inbox.bumpAttempts(entry.seq); InstinctDoorbell.schedule(app, InstinctDoorbell.KIND_DRAIN, InstinctPushPolicy.RESCUE_DELAY_MILLIS) }
@@ -154,6 +172,7 @@ object InstinctPushDispatcher {
           inbox.markClaimed(entry.seq)
           bell.update { it.copy(directOrders = it.directOrders + 1, lastDirectAt = InstinctDoorbell.clock()) }
           runCatching { InstinctProposalIntake.onMailbox(app, order) }
+          // Safe now: whatever onMailbox did not finish is in the journal, and recovery continues it.
           inbox.remove(entry.seq)
         } finally { synchronized(handing) { handing -= entry.seq } }
         InstinctDoorbell.afterDirect(app, order)

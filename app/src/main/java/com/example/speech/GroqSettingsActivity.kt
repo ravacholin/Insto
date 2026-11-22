@@ -160,7 +160,7 @@ class GroqSettingsActivity : ComponentActivity() {
                   }
                   PROVIDER_GEMINI -> SettingsSection("Gemini Decisions") {
                     SettingsDescription("Los comandos reconocidos se resuelven en el teléfono. Gemini interpreta pedidos nuevos y te pide confirmación antes de ejecutar propuestas generativas.")
-                    SettingsDescription("Requiere internet. El texto se procesa según los términos de Google. PingAssist no comparte contactos, archivos ni notificaciones con Gemini.")
+                    SettingsDescription("Requiere internet. El texto se procesa según los términos de Google. Insto no comparte contactos, archivos ni notificaciones con Gemini.")
                     SettingsDescription(when {
                       geminiConfigured -> "Clave cifrada guardada en este teléfono."
                       geminiUnreadable -> GroqKeyStore.UNREADABLE_MESSAGE

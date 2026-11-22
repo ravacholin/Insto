@@ -212,5 +212,7 @@ class InstinctLogBootReceiver : BroadcastReceiver() {
     runCatching { InstinctMailbox.rearm(context) }
     runCatching { InstinctDoorbell.rearm(context) }
     runCatching { InstinctCatalogPublisher.changed(context) }
+    // 1.20.0: what the journal holds unfinished is continued or settled by the doorbell's drain job, off this thread.
+    runCatching { InstinctExecutionRecoveryManager.later(context) }
   }
 }

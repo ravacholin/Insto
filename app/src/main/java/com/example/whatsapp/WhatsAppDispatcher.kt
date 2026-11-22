@@ -144,8 +144,8 @@ object WhatsAppDispatcher {
       ?: return DispatchResult.Error("Instalá WhatsApp para enviar el mensaje. El borrador se conserva.")
     if (!isAutoSendServiceEnabled || !PingAutoSendAccessibilityService.isConnected()) {
       return DispatchResult.Error(
-        if (!isAutoSendServiceEnabled) "Activá Accesibilidad de PingAssist para enviar con un solo toque. El texto se conserva."
-        else "Android indica que Accesibilidad está habilitada, pero el servicio de PingAssist no está conectado. Desactivalo y activalo una vez en Ajustes. El texto se conserva.")
+        if (!isAutoSendServiceEnabled) "Activá la Accesibilidad de Insto («Insto · accesibilidad») para enviar con un solo toque. El texto se conserva."
+        else "Android indica que Accesibilidad está habilitada, pero la Accesibilidad de Insto no está conectada. Desactivalo y activalo una vez en Ajustes. El texto se conserva.")
     }
     AutoSendCoordinator.arm(pkg, boomerangReturn = true, recipientName = recipientName,
       recipientPhone = phoneNumber, expectedText = text, returnPackage = returnPackage)
@@ -304,7 +304,7 @@ object WhatsAppDispatcher {
     val targetPkg = sendIntent.`package`
     val shouldArm = targetPkg != null && isAutoSendServiceEnabled && PingAutoSendAccessibilityService.isConnected()
     if (recipientName != null && !shouldArm) {
-      return DispatchResult.Error("Activá y conectá Accesibilidad de PingAssist para enviar el audio automáticamente. La grabación se conserva.")
+      return DispatchResult.Error("Activá y conectá la Accesibilidad de Insto («Insto · accesibilidad») para enviar el audio automáticamente. La grabación se conserva.")
     }
 
     if (shouldArm && targetPkg != null) {

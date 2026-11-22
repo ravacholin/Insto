@@ -124,8 +124,9 @@ fun BackupRestoreSettings(onImported: () -> Unit = {}) {
 
   Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.testTag("backup_settings")) {
     SettingsDescription("Guardá toda tu configuración en un archivo cifrado con una contraseña y restaurala en este u otro " +
-      "teléfono. Incluye las claves de API, contactos, ajustes, frases aprendidas, rutinas y lugares. No incluye audios, " +
-      "mensajes ni historial. Todo ocurre en el teléfono, sin servidores.")
+      "teléfono. Incluye las claves de API, contactos, ajustes, frases aprendidas, rutinas, lugares y lo de Instinct (bitácora, " +
+      "buzón, timbre y autonomía). No incluye audios, mensajes, historial ni lo que es propio de este teléfono (las claves " +
+      "y la dirección del timbre se generan de nuevo). Todo ocurre en el teléfono, sin servidores.")
     val available = current.filterValues { it != null }
     if (available.isNotEmpty()) SettingsDescription(available.entries.joinToString(" · ") { (category, text) -> "${category.label}: $text" })
     interrupted?.let { categories ->
@@ -142,10 +143,10 @@ fun BackupRestoreSettings(onImported: () -> Unit = {}) {
 
   if (exportOpen) ExportDialog(current,
     onDismiss = { exportOpen = false },
-    onExport = { selection, password ->
+    onExport = { selection, password, secrets ->
       scope.launch {
         val result = withContext(Dispatchers.Default) {
-          try { Result.success(manager.export(selection, password)) }
+          try { Result.success(manager.export(selection, password, secrets)) }
           catch (error: BackupException) { Result.failure(error) }
           catch (error: Exception) { Result.failure(IllegalStateException("No se pudo preparar la copia.")) }
           finally { password.fill('\u0000') }
@@ -213,7 +214,7 @@ fun BackupRestoreSettings(onImported: () -> Unit = {}) {
 }
 
 @Composable
-private fun ExportDialog(current: Map<BackupCategory, String?>, onDismiss: () -> Unit, onExport: (Set<BackupCategory>, CharArray) -> Unit) {
+private fun ExportDialog(current: Map<BackupCategory, String?>, onDismiss: () -> Unit, onExport: (Set<BackupCategory>, CharArray, Boolean) -> Unit) {
   var selection by remember { mutableStateOf(BackupCategory.entries.filter { current[it] != null }.toSet().ifEmpty { BackupCategory.entries.toSet() }) }
   var password by remember { mutableStateOf("") }
   var confirm by remember { mutableStateOf("") }
@@ -233,8 +234,8 @@ private fun ExportDialog(current: Map<BackupCategory, String?>, onDismiss: () ->
             }
           }
         }
-        if (BackupCategory.CREDENTIALS in selection)
-          SettingsDescription("Las claves se incluyen cifradas dentro del archivo. Nunca se muestran.")
+        if (BackupCategory.CREDENTIALS in selection || BackupCategory.INSTINCT in selection)
+          SettingsDescription("La copia completa incluye cifrados las claves de API, el token de la bitácora y la clave del buzón. Nunca se muestran.")
         OutlinedTextField(password, { password = it }, label = { Text("Contraseña (mínimo ${BackupCrypto.MIN_PASSWORD} caracteres)") },
           singleLine = true, visualTransformation = PasswordVisualTransformation(),
           keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth().testTag("backup_password"))
@@ -248,13 +249,14 @@ private fun ExportDialog(current: Map<BackupCategory, String?>, onDismiss: () ->
     },
     confirmButton = {
       Column(horizontalAlignment = Alignment.End) {
-        TextButton(enabled = valid && !busy, onClick = { busy = true; onExport(selection, password.toCharArray()) },
-          modifier = Modifier.testTag("backup_create")) { Text("Crear copia de seguridad") }
+        TextButton(enabled = valid && !busy, onClick = { busy = true; onExport(selection, password.toCharArray(), true) },
+          modifier = Modifier.testTag("backup_create")) { Text("Crear copia completa") }
         TextButton(enabled = valid && !busy && (selection - BackupCategory.CREDENTIALS).isNotEmpty(),
-          onClick = { busy = true; onExport(selection - BackupCategory.CREDENTIALS, password.toCharArray()) }) {
-          Text("Exportar sin claves")
+          onClick = { busy = true; onExport(selection - BackupCategory.CREDENTIALS, password.toCharArray(), false) },
+          modifier = Modifier.testTag("backup_create_without_secrets")) {
+          Text("Copia sin secretos")
         }
-        SettingsDescription("«Exportar sin claves» no restaura Groq ni Gemini: habrá que volver a cargarlas.")
+        SettingsDescription("«Copia sin secretos» no lleva las claves de Groq y Gemini, el token de la bitácora ni la clave del buzón: habrá que volver a cargarlos.")
       }
     },
     dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancelar") } },
@@ -340,6 +342,12 @@ private fun RestoreDialog(
                 label = { Text("Fusionar") })
               FilterChip(selected = choices[category] == RestoreMode.REPLACE, onClick = { choices = choices + (category to RestoreMode.REPLACE) },
                 label = { Text("Reemplazar") })
+            }
+            if (category == BackupCategory.INSTINCT && choices[category] == RestoreMode.MERGE) {
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(options.replaceInstinctSecrets, { options = options.copy(replaceInstinctSecrets = it) })
+                Text("Reemplazar el token de la bitácora y la clave del buzón actuales si son distintos", style = MaterialTheme.typography.bodySmall)
+              }
             }
             if (category == BackupCategory.CREDENTIALS && choices[category] == RestoreMode.MERGE) {
               Row(verticalAlignment = Alignment.CenterVertically) {

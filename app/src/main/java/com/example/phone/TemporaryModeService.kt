@@ -23,7 +23,7 @@ class TemporaryModeService:Service() {
  override fun onCreate(){
   super.onCreate()
   val nm=getSystemService(NotificationManager::class.java)
-  if(Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(NotificationChannel("temporary-mode","Modo temporal",NotificationManager.IMPORTANCE_LOW))
+  if(Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(NotificationChannel("temporary-mode","Insto · modo temporal",NotificationManager.IMPORTANCE_LOW))
   val end=PendingIntent.getService(this,0,Intent(this,TemporaryModeService::class.java).setAction("END"),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
   val builder=if(Build.VERSION.SDK_INT>=26)Notification.Builder(this,"temporary-mode") else Notification.Builder(this)
   startForeground(43,builder.setSmallIcon(android.R.drawable.ic_lock_silent_mode).setContentTitle("Modo temporal de Insto activo").setContentText("Restauración programada · tocar Terminar para restaurar ahora").setOngoing(true).addAction(Notification.Action.Builder(null,"Terminar",end).build()).build())
@@ -35,7 +35,7 @@ class TemporaryModeService:Service() {
  }
  override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
   if(intent?.action=="END"){runCatching{manager.end(force=true)};stopSelf();return START_NOT_STICKY}
-  if(intent==null)manager.loseOwnership()
+  if(intent==null)manager.markUnobserved()
   return START_STICKY
  }
  override fun onDestroy(){unregisterReceiver(changeReceiver);contentResolver.unregisterContentObserver(observer);super.onDestroy()}

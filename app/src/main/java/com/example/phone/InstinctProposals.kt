@@ -52,6 +52,10 @@ sealed interface ProposalCheck {
      * running, saving, scheduling, telling the person or consuming the brake. [ProposalCheck.Query.argument] is the order.
      */
     PROBE("probar", form = "probar <orden>"),
+    /** The journal's last executions (1.20.0): id, state, when, transport, order and result. Read-only. */
+    EXECUTIONS("ver ejecuciones"),
+    /** One execution by the short id «ver ejecuciones» gives (1.20.0). Read-only. */
+    EXECUTION_STATUS("estado de ejecución", form = "estado de ejecución <id>"),
   }
 }
 
@@ -63,6 +67,7 @@ sealed interface ProposalCheck {
  */
 object InstinctProposalValidator {
   private val cancelOne = Regex("^cancelar programada ([0-9a-f]{${InstinctTriggers.SHORT_ID_LENGTH}})$")
+  private val executionStatus = Regex("^estado de ejecucion (e?[0-9a-f]{${ExecutionIds.SHORT}})$")
   private val silenceActions = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
     PlatformAction.DND_ON, PlatformAction.DND_OFF)
 
@@ -78,7 +83,8 @@ object InstinctProposalValidator {
     // Read-only questions about the protocol: exact phrases, before the grammar.
     val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
     ProposalCheck.QueryKind.entries.firstOrNull { it != ProposalCheck.QueryKind.CANCEL_ONE && it != ProposalCheck.QueryKind.PROBE &&
-      PhoneCommandParser.normalize(it.phrase) == folded }?.let { return ProposalCheck.Query(order, it) }
+      it != ProposalCheck.QueryKind.EXECUTION_STATUS && PhoneCommandParser.normalize(it.phrase) == folded }?.let { return ProposalCheck.Query(order, it) }
+    executionStatus.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.EXECUTION_STATUS, it.groupValues[1]) }
     // «probar <orden>»: the order is kept as written and checked by whoever answers, with this same validator.
     probe(order)?.let { inner ->
       return if (inner.isBlank()) ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY) else ProposalCheck.Query(order, ProposalCheck.QueryKind.PROBE, inner)
@@ -319,6 +325,8 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
     val token: String = java.util.UUID.randomUUID().toString(),
     /** Where it came from (1.16.0): WhatsApp, unsigned, or the signed mailbox. */
     val source: ProposalSource = ProposalSource.WHATSAPP,
+    /** Its row in the execution journal (1.20.0); null for a proposal made outside it. */
+    val executionId: String? = null,
   ) {
     val summary: String get() = PhoneCommandCodec.summary(command)
   }
@@ -337,11 +345,18 @@ class ProposalBook(private val clock: () -> Long, private val ttlMillis: Long = 
   private var nextId = 1L
   private val entries = LinkedHashMap<Long, Entry>()
 
-  /** Adds a validated proposal. Null when the same command is already pending: the same proposal is never offered twice. */
-  @Synchronized fun offer(order: String, command: PhoneCommand, fingerprint: String, source: ProposalSource = ProposalSource.WHATSAPP): Proposal? {
+  /**
+   * Adds a validated proposal. Null when the same execution (1.20.0), or, for a proposal without one, the same command,
+   * is already pending: the same proposal is never offered twice. Two orders of different messages with the same text
+   * have different executions and are both offered.
+   */
+  @Synchronized fun offer(order: String, command: PhoneCommand, fingerprint: String, source: ProposalSource = ProposalSource.WHATSAPP,
+    executionId: String? = null, createdAt: Long = clock()): Proposal? {
     expire()
-    if (entries.values.any { it.state == State.PENDING && it.proposal.command == command }) return null
-    val proposal = Proposal(nextId++, order, command, clock(), fingerprint, source = source)
+    if (entries.values.any { it.state == State.PENDING &&
+        if (executionId != null) it.proposal.executionId == executionId else it.proposal.executionId == null && it.proposal.command == command }) return null
+    // [createdAt] is only ever earlier than now (a confirmation recovered with the time it had left), never later.
+    val proposal = Proposal(nextId++, order, command, minOf(createdAt, clock()), fingerprint, source = source, executionId = executionId)
     entries[proposal.id] = Entry(proposal, State.PENDING)
     while (entries.size > CAPACITY) entries.remove(entries.keys.first())
     return proposal

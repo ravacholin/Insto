@@ -47,7 +47,7 @@ class PingQuickSettingsTileService : TileService() {
     if (prefs == null) {
       // Not loaded yet: neither a contact nor a missing-contact prompt, since neither is known.
       tile.state = Tile.STATE_INACTIVE
-      tile.label = "PingAssist"
+      tile.label = "Insto"
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = null
       tile.updateTile()
       return
@@ -56,22 +56,22 @@ class PingQuickSettingsTileService : TileService() {
     val contact = route.contact
     if (contact != null) {
       tile.state = Tile.STATE_ACTIVE
-      tile.label = "Ping: ${contact.displayName}".take(20)
+      tile.label = "Insto: ${contact.displayName}".take(20)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         tile.subtitle =
           route.activeContextLabel
             ?: when (route.activationMode) {
-              AssistantActivationMode.TAP_CHAT_HOLD_AUDIO -> "Tap Chat / Hold Voice"
-              AssistantActivationMode.DYNAMIC_VOICE_OR_CHAT -> "Smart Chat / Voice"
-              AssistantActivationMode.INSTANT_RECORD_AUDIO -> "Record Voice"
-              AssistantActivationMode.INSTANT_OPEN_CHAT -> "Open Chat"
+              AssistantActivationMode.TAP_CHAT_HOLD_AUDIO -> "Tocar: chat · Mantener: audio"
+              AssistantActivationMode.DYNAMIC_VOICE_OR_CHAT -> "Chat o audio"
+              AssistantActivationMode.INSTANT_RECORD_AUDIO -> "Grabar audio"
+              AssistantActivationMode.INSTANT_OPEN_CHAT -> "Abrir chat"
             }
       }
     } else {
       tile.state = Tile.STATE_INACTIVE
-      tile.label = "PingAssist"
+      tile.label = "Insto"
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        tile.subtitle = "Set Contact"
+        tile.subtitle = "Elegir contacto"
       }
     }
     tile.updateTile()

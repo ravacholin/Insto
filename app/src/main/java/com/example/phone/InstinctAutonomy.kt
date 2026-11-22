@@ -231,7 +231,8 @@ data class GateSnapshot(
  * So a test and an execution can never decide differently.
  */
 object InstinctGatePreview {
-  const val LOCKED = "El teléfono estaba bloqueado."
+  /** Only for what opens a screen (1.20.0): a setting changes with the phone locked or the screen off. */
+  const val LOCKED = "El teléfono estaba bloqueado y esta acción abre una pantalla."
   const val NO_ACCESSIBILITY = "Para abrir otra app sin tocar nada, Android necesita el servicio de Accesibilidad de Insto activo."
   const val ROUTINE_CHANGED = "La rutina ya no está habilitada para Instinct o cambió."
 
@@ -242,9 +243,13 @@ object InstinctGatePreview {
     else -> true
   }
 
-  /** The checks that existed before the autonomy policy, for one command, without the brake. */
+  /**
+   * The checks that existed before the autonomy policy, for one command, without the brake. Since 1.20.0 a locked
+   * phone stops only what cannot happen locked ([LockScreenPolicy.runsLocked]): volume, torch, silence, vibration, Do
+   * not disturb, media, temporary modes and reads run with the phone locked or the screen off, as Android allows.
+   */
   fun blocker(command: PhoneCommand, snapshot: GateSnapshot): String? = when {
-    !snapshot.foreground && snapshot.locked -> LOCKED
+    !snapshot.foreground && snapshot.locked && !LockScreenPolicy.runsLocked(command) -> LOCKED
     !snapshot.foreground && opensActivity(command) && !snapshot.accessibility -> NO_ACCESSIBILITY
     else -> null
   }
@@ -270,11 +275,39 @@ object InstinctGatePreview {
    * when it runs.
    */
   fun needs(command: PhoneCommand, minuteOfDay: Int): String? = when {
-    command is PhoneCommand.TemporaryMode -> "un modo temporal siempre espera la confirmación de la persona"
+    // 1.20.0: a temporary mode the gate lets run is authorized: its own «¿Confirmás?» is not asked again
+    // ([InstinctConfirmations]). Only a missing permission or exact alarms can still make it wait, when it runs.
     command is PhoneCommand.Alarm && command.date == null && command.days.isEmpty() && command.hour * 60 + command.minute <= minuteOfDay ->
       "esa hora ya pasó hoy; la persona tiene que confirmar que es para mañana"
     else -> null
   }
+}
+
+/**
+ * What can happen with the phone locked or the screen off (1.20.0): a setting changed through a system service or a
+ * read, with no screen to show. Android lets any app do these from the background with the permissions Insto already
+ * asks for (and the lock screen's quick settings allow them too). Opening another app, the Clock, a search, a call or
+ * a file needs the phone unlocked, so those keep waiting.
+ */
+object LockScreenPolicy {
+  private val lockSafe = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
+    PlatformAction.DND_ON, PlatformAction.DND_OFF, PlatformAction.BATTERY, PlatformAction.ROUTINE_LIST)
+
+  fun runsLocked(command: PhoneCommand): Boolean = when (command) {
+    is PhoneCommand.Volume, is PhoneCommand.Torch, is PhoneCommand.Media, is PhoneCommand.TemporaryMode, PhoneCommand.EndMode -> true
+    is PhoneCommand.Platform -> command.action in lockSafe
+    else -> false
+  }
+}
+
+/**
+ * The action's own questions that an authorized order does not ask again (1.20.0). Under «Solo» the person already
+ * said yes for the category: a temporary mode's «¿Confirmás?» is that same yes. Real questions stay: an alarm for a time
+ * already past, which app or contact, a missing permission, and exact alarms that are not allowed (the restoration
+ * would be approximate).
+ */
+object InstinctConfirmations {
+  fun preAuthorized(command: PhoneCommand): Boolean = command is PhoneCommand.TemporaryMode
 }
 
 /** «#insto probar <orden>» (1.18.0): read-only, with its own brake, never the anti-loop one. Pure. */
@@ -491,7 +524,8 @@ object InstinctAutonomyCatalog {
     val quiet = policy.quiet
     if (quiet != null) appendLine("- Horas de silencio, ${quiet.label}: en ese rango todo lo que haría solo espera confirmación" +
       (if (policy.silenceInQuiet) ", salvo silenciar el teléfono, ponerlo en vibración o activar No molestar." else "."))
-    append("- Además siempre esperan confirmación: con el teléfono bloqueado, lo que abre otra app sin la Accesibilidad de Insto, " +
+    appendLine("- Con el teléfono bloqueado o la pantalla apagada hace solo volumen, linterna, silencio, vibración, No molestar, música y modos temporales.")
+    append("- Además siempre esperan confirmación: con el teléfono bloqueado, lo que abre una pantalla; lo que abre otra app sin la Accesibilidad de Insto, " +
       "más de 6 órdenes en 10 minutos y una orden programada que se dispara con más de ${InstinctDeferral.LATE_MILLIS / 60_000} minutos de atraso.")
   }
 }

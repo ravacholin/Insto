@@ -148,14 +148,15 @@ class InstinctReplyFlowTest {
 
   @Test fun `a waiting order is followed up when confirmed`() {
     InstinctProposalSettings(app).setReplyMode(InstinctReplyMode.ALWAYS)
-    InstinctProposalCenter.keyguardLocked = { true }
+    // 1.20.0: the volume runs locked; Confirmar is what makes it wait.
+    InstinctAutonomySettings(app).set(InstinctCategory.VOLUMEN, InstinctAutonomy.CONFIRMAR)
     post(whatsApp("#insto poner el volumen al 35 por ciento"))
-    assertEquals("#insto-espera poner el volumen al 35 por ciento → El teléfono estaba bloqueado.", sent.single())
-    InstinctProposalCenter.keyguardLocked = { false }
+    assertEquals("#insto-espera poner el volumen al 35 por ciento → la persona pide confirmación para volumen", sent.single())
+    InstinctAutonomySettings(app).set(InstinctCategory.VOLUMEN, InstinctAutonomy.SOLO)
     val proposal = InstinctProposalCenter.book.pending().single()
     MainViewModel(app, learnedPhrases = emptyLearnedPhrasesForTest()).confirmInstinctProposalFromNotification(proposal.id, proposal.token)
     assertEquals(2, sent.size)
-    assertEquals("#insto-ok poner el volumen al 35 por ciento → Volumen multimedia ajustado.", sent[1])
+    assertEquals("#insto-ok poner el volumen al 35 por ciento → Volumen multimedia ajustado. Verificado: quedó en 5 de 15.", sent[1])
   }
 
   @Test fun `a waiting order is followed up when discarded`() {

@@ -33,6 +33,7 @@ class TemporaryModeManager(private val context: Context) {
  }
  fun current(kind:ModeKind):Int=when(kind){ModeKind.MEDIA_VOLUME->audio.getStreamVolume(AudioManager.STREAM_MUSIC);ModeKind.SILENT->audio.ringerMode;ModeKind.DND->notifications.currentInterruptionFilter}
  private fun apply(kind:ModeKind,value:Int){when(kind){ModeKind.MEDIA_VOLUME->audio.setStreamVolume(AudioManager.STREAM_MUSIC,value,0);ModeKind.SILENT->audio.ringerMode=value;ModeKind.DND->notifications.setInterruptionFilter(value)}}
+ private var observed=true
  fun execute(command:PhoneCommand.TemporaryMode,confirmed:Boolean):PhoneActionResult {
   val now = System.currentTimeMillis()
   val expiresAt = command.deadlineMillis ?: (now + command.seconds.toLong() * 1000)
@@ -59,7 +60,9 @@ class TemporaryModeManager(private val context: Context) {
   try {
    // Starting from a user action permits the visible foreground observer.
    val service=Intent(context,TemporaryModeService::class.java)
-   if(Build.VERSION.SDK_INT>=26)context.startForegroundService(service) else context.startService(service)
+   // From the background Android 12+ may refuse a foreground service (1.20.0): the mode still applies and restores
+   // by its alarm; only the visible «Terminar» and the watch for manual changes are missing until Insto opens.
+   observed=runCatching {if(Build.VERSION.SDK_INT>=26)context.startForegroundService(service) else context.startService(service)}.isSuccess
    schedule(lease,exact && !command.approximate)
    apply(lease.kind,lease.applied)
    if(current(lease.kind)!=lease.applied) {write(null);alarms.cancel(pending());context.stopService(service);return PhoneActionResult("El sistema no confirmó el ajuste. Revisá el teléfono.",outcome=PhoneActionOutcome.REJECTED)}
@@ -67,7 +70,9 @@ class TemporaryModeManager(private val context: Context) {
    if(current(lease.kind)==lease.applied) runCatching {apply(lease.kind,lease.original)}
    write(null);alarms.cancel(pending());context.stopService(Intent(context,TemporaryModeService::class.java));throw t
   }
-  return PhoneActionResult("Modo temporal aplicado. La restauración será ${if(command.approximate) "aproximada" else "programada"}. Podés decir: terminá el modo y restaurá ahora.")
+  return PhoneActionResult("Modo temporal aplicado. La restauración será ${if(command.approximate) "aproximada" else "programada"}." +
+   (if(observed) "" else " Android no permitió mostrar su aviso desde segundo plano; igual se restaura a su hora.") +
+   " Podés decir: terminá el modo y restaurá ahora.")
  }
  private fun schedule(lease:ModeLease,exact:Boolean){if(exact)alarms.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,lease.expiresAt,pending()) else alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,lease.expiresAt,pending())}
  fun observeManualChange(){synchronized(LOCK){val lease=read()?:return;if(lease.owned && current(lease.kind)!=lease.applied)write(lease.copy(owned=false))}}
@@ -84,12 +89,18 @@ class TemporaryModeManager(private val context: Context) {
    // Boot/process gaps cannot prove ownership. Never overwrite a possible manual change.
    write(lease.copy(owned=false))
   }
-  if(TemporaryModePolicy.expired(lease,System.currentTimeMillis()))end()
+  if(TemporaryModePolicy.expired(lease,System.currentTimeMillis()))TemporaryModeRestorations.restore(context,this,lease)
   else {
    val remaining=read()?:return
    schedule(remaining,remaining.exact && (Build.VERSION.SDK_INT<31 || alarms.canScheduleExactAlarms()))
   }
  }}
  fun loseOwnership(){synchronized(LOCK){read()?.let {write(it.copy(owned=false))}}}
+ /**
+  * A new process (1.20.0): nobody watched for manual changes in the gap, but the value Insto applied is still there
+  * if nobody touched it, and [TemporaryModePolicy.canRestore] checks exactly that at expiry. Ownership is kept; a
+  * value that differs from the applied one when it expires is a manual change and is never overwritten.
+  */
+ fun markUnobserved(){synchronized(LOCK){observeManualChange()}}
  companion object {private val LOCK=Any();const val EXPIRE="com.example.phone.EXPIRE_TEMPORARY_MODE"}
 }

@@ -22,7 +22,9 @@ class PhoneActionExecutor(
   private val preferredMediaPackage: () -> String? = { null },
 ) {
   fun execute(command: PhoneCommand, confirmed: Boolean = false): PhoneActionResult {
-    if (context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return PhoneActionResult("Desbloqueá el teléfono para ejecutar este pedido.", outcome = PhoneActionOutcome.REJECTED)
+    // 1.20.0: only what needs a screen waits for the phone to be unlocked; settings and reads run locked.
+    if (!LockScreenPolicy.runsLocked(command) && context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true)
+      return PhoneActionResult(LOCKED, outcome = PhoneActionOutcome.REJECTED)
     return try {
       PhoneCommandCodec.decode(PhoneCommandCodec.encode(command))
       if(command is PhoneCommand.CalendarEvent && command.beginMillis<=System.currentTimeMillis()) return PhoneActionResult("La fecha del evento ya pasó. No preparé un evento con otra fecha.",outcome=PhoneActionOutcome.REJECTED)
@@ -113,6 +115,7 @@ class PhoneActionExecutor(
   private fun launch(intent: Intent) { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 
   companion object {
+    const val LOCKED = "Desbloqueá el teléfono para ejecutar este pedido."
     fun clockIntent(command: PhoneCommand): Intent? = when (command) {
       is PhoneCommand.Timer -> Intent(AlarmClock.ACTION_SET_TIMER)
         .putExtra(AlarmClock.EXTRA_LENGTH, command.seconds).putExtra(AlarmClock.EXTRA_MESSAGE, command.label).putExtra(AlarmClock.EXTRA_SKIP_UI, true)

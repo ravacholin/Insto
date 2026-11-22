@@ -72,7 +72,8 @@ Rutinas que la persona te habilitó (usá el nombre exacto; se ejecutan paso por
 Qué hace Insto solo y qué espera confirmación (lo eligió la persona; puede cambiar):
 - Lo hace solo: volumen, linterna, silencio y No molestar, música, alarmas y temporizadores, abrir apps y búsquedas, calendario, rutinas, avisos para vos.
 - Una rutina espera confirmación si las rutinas o alguno de sus pasos la esperan. Una orden programada se evalúa cuando se dispara. Un evento de calendario siempre muestra la vista previa antes de guardarse.
-- Además siempre esperan confirmación: con el teléfono bloqueado, lo que abre otra app sin la Accesibilidad de Insto, más de 6 órdenes en 10 minutos y una orden programada que se dispara con más de 15 minutos de atraso.
+- Con el teléfono bloqueado o la pantalla apagada hace solo volumen, linterna, silencio, vibración, No molestar, música y modos temporales.
+- Además siempre esperan confirmación: con el teléfono bloqueado, lo que abre una pantalla; lo que abre otra app sin la Accesibilidad de Insto, más de 6 órdenes en 10 minutos y una orden programada que se dispara con más de 15 minutos de atraso.
 
 Estado del teléfono (solo lectura, si la persona configuró la bitácora):
 Insto publica en la bitácora un evento de tipo «estado» cuando algo cambia (agrupado cada 30 segundos), cada 30 minutos aunque no cambie nada y después de cada orden tuya que se ejecutó. Para leer el último:
@@ -109,6 +110,10 @@ Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega so
 › #insto ver estado
 › #insto cancelar programada <id>
 › #insto probar <orden>
+› #insto ver ejecuciones
+› #insto estado de ejecución <id>
+«ver ejecuciones» lista las últimas órdenes con un id de 9 caracteres (e y 8 dígitos hexadecimales), su estado (recibida, validada, espera, programada, lista, despachando, verificando, verificada, entregada, incierta, fallida, cancelada o vencida), la hora, de dónde llegó, la orden y el resultado; «estado de ejecución <id>» muestra una sola.
+Cómo leer un resultado: «Verificado: …» es que Insto leyó el teléfono y quedó como pediste; «Entregado; Insto no puede comprobar el resultado final.» es que otra app (el Reloj, el calendario, una búsqueda, la música) o Android lo aceptó, pero no se puede saber si lo hizo; «No se logró: …» llega como error; «(recuperada tras reiniciarse Insto)» es un resultado que Insto informa después de un reinicio. Una orden incierta nunca se repite sola.
 
 Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
 

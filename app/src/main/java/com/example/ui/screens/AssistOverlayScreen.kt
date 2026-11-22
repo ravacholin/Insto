@@ -276,7 +276,7 @@ fun AssistOverlayScreen(
           }
         }
           if (state.needsWhatsAppAccessibility) {
-          Text("Para enviar sin volver a tocar WhatsApp, activá el servicio de Accesibilidad de PingAssist.",
+          Text("Para enviar sin volver a tocar WhatsApp, activá «Insto · accesibilidad» en Android.",
             color = secondary, style = MaterialTheme.typography.labelSmall)
           TextButton(onClick = {
             context.startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))

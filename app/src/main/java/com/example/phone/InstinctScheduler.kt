@@ -238,6 +238,13 @@ object InstinctScheduler {
     consumed.successor?.let { alarms(app, it, true) }
     if (order.trigger.byState) alarms(app, order, false)
     try {
+      // 1.20.0: each firing is an execution of its own in the journal, under the row that scheduled it. Its id is the
+      // occurrence's, so a second firing of the same occurrence finds it and never runs twice.
+      val execution = try { occurrence(app, order) } catch (_: Throwable) {
+        InstinctProposalCenter.notifyScheduled(app, order, "Instinct había programado: ${order.summary}", "No se ejecutó: ${InstinctProposalCenter.NOT_RECORDED}")
+        ackKey(app, order)?.let { InstinctProposalCenter.report(app, it, AckEntry(AckKind.ERROR, order.order, InstinctProposalCenter.NOT_RECORDED)) }
+        return
+      } ?: return
       val now = wallClock()
       val routines = InstinctRoutineGrants(app).access()
       val parser = PhoneCommandParser()
@@ -246,7 +253,11 @@ object InstinctScheduler {
       }
       // The chat's line while its handle lives; for the log, also after a restart, from the stored message id.
       val ackKey = ackKey(app, order)
-      fun tell(entry: AckEntry) { if (ackKey != null) InstinctProposalCenter.report(app, ackKey, entry) }
+      ackKey?.let { InstinctExecutions.link(it, execution) }
+      fun tell(entry: AckEntry) {
+        if (ackKey != null) InstinctProposalCenter.report(app, ackKey, entry)
+        else InstinctExecutions.move(app, execution, InstinctExecutions.stateOf(entry) ?: return, reason = entry.message)
+      }
       if (decision is ScheduleFirePolicy.Decision.Drop) {
         // A recurrence that is no longer valid would be dropped every day: it is cancelled whole.
         if (order.recurring) cancelShort(app, order.shortId)
@@ -285,11 +296,13 @@ object InstinctScheduler {
         tell(AckEntry(AckKind.ERROR, order.order, "${InstinctAutonomyPolicy.REFUSED}; se canceló la recurrente entera."))
         return
       }
-      val proposal = InstinctProposalCenter.book.offer(order.order, command, order.fingerprint, order.source) ?: run {
+      val proposal = InstinctProposalCenter.book.offer(order.order, command, order.fingerprint, order.source, execution) ?: run {
         tell(AckEntry(AckKind.ERROR, order.order, "ya había una orden igual esperando confirmación; no se duplica."))
         return
       }
-      if (ackKey != null) InstinctProposalCenter.acks.relink(ackKey, proposal.id)
+      InstinctExecutions.link(proposal.id, execution)
+      InstinctExecutions.move(app, execution, ExecutionState.READY, proposalId = proposal.id)
+      if (ackKey != null) { InstinctProposalCenter.acks.relink(ackKey, proposal.id); InstinctExecutions.relink(ackKey, proposal.id) }
       if (decision is ScheduleFirePolicy.Decision.Late) InstinctProposalCenter.askLate(app, proposal,
         "Llegó tarde: estaba programada ${order.label}.")
       else InstinctProposalCenter.dispatch(app, proposal)
@@ -299,6 +312,25 @@ object InstinctScheduler {
       firing -= id
     }
   }
+
+  /**
+   * The journal row of this firing: admitted now (without a claim: the store already consumed the occurrence) under
+   * the row that scheduled its series. Null when this occurrence already has a row: it fired before and never runs
+   * again. Throws when the journal cannot be written.
+   */
+  private fun occurrence(app: Context, order: ScheduledOrder): String? {
+    val journal = InstinctExecutions.journal(app)
+    val parent = journal.byOccurrence(order.series).firstOrNull { it.transport !in FIRINGS }
+    val transport = when {
+      order.recurring -> ExecutionTransport.RECURRENCE
+      order.trigger.byState || order.trigger.byEvent -> ExecutionTransport.TRIGGER
+      else -> ExecutionTransport.SCHEDULE
+    }
+    val admitted = journal.admit(ExecutionIds.occurrence(order.id), transport, listOf(order.order), order.message,
+      parent = parent?.executionId, occurrence = order.series, claim = false) as? InstinctExecutionJournal.Admission.Admitted ?: return null
+    return admitted.records.single().executionId.also { InstinctExecutions.move(app, it, ExecutionState.VALIDATED) }
+  }
+  private val FIRINGS = setOf(ExecutionTransport.RECURRENCE, ExecutionTransport.TRIGGER, ExecutionTransport.SCHEDULE)
 
   /** A trigger that lapsed without firing: removed, told and logged as «vencida». */
   private fun expire(app: Context, order: ScheduledOrder) {

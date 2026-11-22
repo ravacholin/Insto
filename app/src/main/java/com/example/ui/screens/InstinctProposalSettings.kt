@@ -88,13 +88,16 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       contact == null -> "Configurá primero el contacto de Instinct."
       else -> "Lee solo los mensajes de «${contact.displayName}»."
     }, enabled = InstinctProposalSettings.supported && (contact != null || enabled))
+    InstinctReactivationCard(revision) { revision++ }
     if (enabled) {
       if (!listenerEnabled) {
         SettingsDescription("Falta habilitar «Insto · notificaciones» en Android para recibir las órdenes.")
         OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
           modifier = Modifier.testTag("instinct_proposals_listener")) { Text("Habilitar acceso en Ajustes") }
       }
+      InstinctReadinessSection(revision) { revision++ }
       InstinctAutonomySection(revision) { revision++ }
+      InstinctExecutionsSection(revision) { revision++ }
       Text("Responderle a Instinct", style = MaterialTheme.typography.bodyLarge)
       SettingsDescription("Insto contesta en el mismo chat, con la acción «Responder» de la notificación de WhatsApp, " +
         "una línea por orden (#insto-ok, #insto-espera, #insto-error, #insto-incierto). No abre WhatsApp. " +
@@ -137,6 +140,88 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       },
     )
   }
+}
+
+/**
+ * «Preparar Insto para funcionar bloqueado» (1.20.0): what Android requires granting by hand, once. Only what is missing
+ * is listed, the ones an order already needed first; each button opens its own page in Settings, only when tapped.
+ */
+@Composable
+private fun InstinctReadinessSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val missing = remember(revision) { com.example.phone.InstinctReadiness.forgetGranted(context); com.example.phone.InstinctReadiness.missing(context) }
+  val camera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onChange() }
+  val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onChange() }
+  Text("Funcionar con el teléfono bloqueado", style = MaterialTheme.typography.bodyLarge)
+  if (missing.isEmpty()) {
+    SettingsDescription("Listo: Insto tiene todo lo que Android pide para cambiar volumen, linterna, silencio, No molestar y " +
+      "música con el teléfono bloqueado o la pantalla apagada.")
+    return
+  }
+  SettingsDescription("Con el teléfono bloqueado Insto hace solo lo que no abre una pantalla. Para eso Android pide " +
+    "concederle a mano lo siguiente, una sola vez. Insto nunca lo pide en segundo plano.")
+  missing.forEach { item ->
+    val c = item.capability
+    SettingsDescription("• ${c.label}: ${c.why}" + if (item.neededAt != null) " Una orden de Instinct lo necesitó." else "")
+    OutlinedButton(onClick = {
+      when {
+        c == com.example.phone.InstinctReadiness.Capability.CAMERA -> camera.launch(Manifest.permission.CAMERA)
+        c == com.example.phone.InstinctReadiness.Capability.NOTIFICATIONS && Build.VERSION.SDK_INT >= 33 ->
+          notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        else -> com.example.phone.InstinctReadiness.settingsIntent(context, c)?.let { runCatching { context.startActivity(it) } }
+      }
+      onChange()
+    }, modifier = Modifier.testTag("instinct_ready_${c.name.lowercase()}")) { Text("Conceder: ${c.label}") }
+  }
+  TextButton(onClick = onChange) { Text("Ya lo concedí, revisar de nuevo") }
+}
+
+/**
+ * «Reactivar Instinct en este teléfono» (1.20.0): after a restore, what the copy had on stays off until the person
+ * authorizes it here, once. Nothing turns on remote control by itself on another phone.
+ */
+@Composable
+private fun InstinctReactivationCard(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val request = remember(revision) { com.example.phone.InstinctReactivation.pending(context) }
+  var steps by remember { mutableStateOf<List<com.example.phone.InstinctReactivation.Step>?>(null) }
+  var busy by remember { mutableStateOf(false) }
+  steps?.let { done ->
+    Text("Reactivación", style = MaterialTheme.typography.bodyLarge)
+    done.forEach { SettingsDescription((if (it.ok) "✓ " else "✗ ") + "${it.name}: ${it.detail}") }
+  }
+  if (request == null) return
+  Text("Reactivar Instinct en este teléfono", style = MaterialTheme.typography.bodyLarge)
+  val parts = listOfNotNull("recibir órdenes".takeIf { request.proposals }, "buzón".takeIf { request.mailbox },
+    "timbre".takeIf { request.doorbell }, "${request.recurrences.size} órdenes recurrentes".takeIf { request.recurrences.isNotEmpty() })
+  SettingsDescription("La copia restaurada tenía encendido: ${parts.joinToString(", ")}. En este teléfono quedó apagado hasta que " +
+    "lo autorices. Al reactivar, Insto revisa los permisos, enciende lo que estaba encendido, registra el timbre de nuevo " +
+    "(claves y dirección propias de este teléfono, que se le avisan al Apps Script), prueba la bitácora y el buzón, vuelve " +
+    "a programar las recurrentes y publica el catálogo. No ejecuta ninguna orden.")
+  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    OutlinedButton(enabled = !busy, onClick = {
+      busy = true
+      scope.launch {
+        steps = withContext(Dispatchers.IO) { runCatching { com.example.phone.InstinctReactivation.run(context) }.getOrDefault(emptyList()) }
+        busy = false; onChange()
+      }
+    }, modifier = Modifier.testTag("instinct_reactivate")) { Text(if (busy) "Reactivando…" else "Reactivar") }
+    TextButton(enabled = !busy, onClick = { com.example.phone.InstinctReactivation.dismiss(context); onChange() }) { Text("Dejar apagado") }
+  }
+}
+
+/** «Ejecuciones recientes» (1.20.0): the journal's last rows, as «ver ejecuciones» answers them. */
+@Composable
+private fun InstinctExecutionsSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  var lines by remember(revision) { mutableStateOf<String?>(null) }
+  LaunchedEffect(revision) {
+    lines = withContext(Dispatchers.IO) { runCatching { com.example.phone.InstinctExecutionQueries.list(context) }.getOrNull() }
+  }
+  Text("Ejecuciones recientes", style = MaterialTheme.typography.bodyLarge)
+  SettingsDescription((lines ?: "Leyendo el diario…").split(" | ").joinToString("\n"))
+  TextButton(onClick = onChange) { Text("Actualizar") }
 }
 
 internal fun autonomyLabel(level: InstinctAutonomy): String = when (level) {

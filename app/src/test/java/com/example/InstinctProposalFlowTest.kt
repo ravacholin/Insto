@@ -181,10 +181,13 @@ class InstinctProposalFlowTest {
 
   @Test fun `a locked phone, the confirmation switch and the anti-loop brake leave it for Confirmar`() {
     enable()
+    // 1.20.0: locked, what opens a screen waits (the volume would run).
     InstinctProposalCenter.keyguardLocked = { true }
-    deliver(PhoneCommand.Volume(VolumeOp.SET, 11))
+    InstinctProposalCenter.accessibilityConnected = { true }
+    deliver(PhoneCommand.Timer(60))
     assertEquals(InstinctProposalCenter.CHANNEL_ID, posted().last().channelId)
     InstinctProposalCenter.keyguardLocked = { false }
+    InstinctProposalCenter.accessibilityConnected = { false }
 
     InstinctAutonomySettings(app).setAll(InstinctAutonomy.CONFIRMAR)
     deliver(PhoneCommand.Volume(VolumeOp.SET, 12))

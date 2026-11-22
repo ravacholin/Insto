@@ -186,7 +186,7 @@ fun AssistantHomeScreen(
           ) {
             Column(Modifier.weight(1f).padding(end = 8.dp)) {
               Text(
-                text = "PingAssist",
+                text = "Insto",
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onBackground,
               )
@@ -422,8 +422,8 @@ private fun AssistantSetupSheet(
       SettingsCategory("Asistente y accesos rápidos", expandedCategory == "access", { toggleCategory("access") }) {
         Text("Asistente predeterminado", style = MaterialTheme.typography.titleMedium)
         SettingsDescription(
-          if (system.isDefaultAssistant) "PingAssist está activo como asistente de Android."
-          else "Elegí PingAssist en Android para abrir el panel flotante y hablar o escribir.",
+          if (system.isDefaultAssistant) "Insto está activo como asistente de Android."
+          else "Elegí Insto en Android para abrir el panel flotante y hablar o escribir.",
           modifier = Modifier.testTag("floating_assistant_hint"),
         )
         OutlinedButton(onClick = onSetDefaultAssistantClick, modifier = Modifier.testTag("set_default_assistant_button")) {
@@ -433,7 +433,7 @@ private fun AssistantSetupSheet(
         Text("Servicio de accesibilidad", style = MaterialTheme.typography.titleMedium)
         SettingsDescription(
           if (system.isAutoSendEnabled) "Activo. Controla los atajos de volumen, el botón flotante y el envío automático."
-          else "Activá el servicio de PingAssist en Android para usar los atajos de volumen, el botón flotante y el envío automático.",
+          else "Activá «Insto · accesibilidad» en Android para usar los atajos de volumen, el botón flotante y el envío automático.",
         )
         OutlinedButton(onClick = onOpenAccessibilitySettings) { Text("Abrir Accesibilidad") }
         Text("Mantener presionado un botón de volumen", style = MaterialTheme.typography.titleMedium)
@@ -457,7 +457,7 @@ private fun AssistantSetupSheet(
       SettingsCategory("WhatsApp y notas de voz", expandedCategory == "whatsapp", { toggleCategory("whatsapp") }) {
         if (!system.installedWhatsApp.hasAnyWhatsApp) {
           Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.tertiaryContainer) {
-            Text("WhatsApp no está instalado. PingAssist usará un enlace para abrir el chat.", Modifier.padding(12.dp))
+            Text("WhatsApp no está instalado. Insto usará un enlace para abrir el chat.", Modifier.padding(12.dp))
           }
         }
         Text("Aplicación para abrir chats", style = MaterialTheme.typography.titleMedium)

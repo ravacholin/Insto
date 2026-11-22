@@ -117,16 +117,11 @@ object InstinctMailbox {
 
   /**
    * The one record of seen ids, shared by the poll and the orders that come inside the doorbell (1.18.0): its
-   * [InstinctMailboxSeen.claim] is what keeps an order from running twice.
+   * claim is what keeps an order from running twice. Since 1.20.0 it lives in the execution journal, which imported
+   * `instinct-mailbox-seen.json` once (the file is kept) and records each claimed order's lines in the same
+   * transaction.
    */
-  fun seen(context: Context): InstinctMailboxSeen {
-    val file = File(context.applicationContext.noBackupFilesDir, InstinctMailboxSeen.FILE)
-    return synchronized(sharedLock) { shared?.takeIf { it.first == file.absolutePath }?.second
-      ?: InstinctMailboxSeen(file) { clock() }.also { shared = file.absolutePath to it } }
-  }
-  private var shared: Pair<String, InstinctMailboxSeen>? = null
-  /** Not the poll's lock: an order inside the doorbell must never wait for a poll's network. */
-  private val sharedLock = Any()
+  fun seen(context: Context): InstinctOrderClaims = JournalClaims(InstinctExecutionJournal.of(context))
 
   /** The job, armed while the mailbox can poll; cancelled otherwise. */
   fun rearm(context: Context) {
@@ -147,6 +142,8 @@ object InstinctMailbox {
       runCatching { poll(app) }
       // Pushes left on disk by a process that died (1.19.0): opening Insto dispatches them too.
       runCatching { if (InstinctPushDispatcher.inbox(app).size() > 0) InstinctPushDispatcher.kick(app) }
+      // So are the journal's unfinished rows (1.20.0).
+      runCatching { InstinctExecutionRecoveryManager.recover(app) }
     })
   }
 

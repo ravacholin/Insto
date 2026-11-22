@@ -67,16 +67,16 @@ Los ejemplos salen de una sola fuente en el código (`InstinctProposalValidator.
    5. Tiene líneas `#insto`.
 3. **Validación de cada línea:** primero las consultas y el envoltorio de las diferidas; después, para la orden (o la orden interior), `RequestSafetyPolicy` (también descarta preguntas), `PhoneCommandParser`, `SemanticCommandGuard.review` con la línea como texto del pedido y la lista blanca (más las rutinas habilitadas).
 4. **Ejecución:**
-   - **Flotante cerrado:** `PhoneActionExecutor` en el proceso de Insto, sin `confirmed`. Si sale bien, llega «Instinct hizo: …» en el canal «Insto · acciones de Instinct» (con **Deshacer** si se puede revertir). Si falla, «Instinct pidió: … No se pudo: …». Si el resultado es incierto, se avisa y **no se repite**.
+   - **Flotante cerrado:** `PhoneActionExecutor` en el proceso de Insto; desde 1.20.0 una orden autorizada (Solo) no vuelve a pedir el «¿Confirmás?» del modo temporal, y el resultado se [verifica](#diario-de-ejecución-verificación-y-pantalla-bloqueada-1200). Si sale bien, llega «Instinct hizo: …» en el canal «Insto · acciones de Instinct» (con **Deshacer** si se puede revertir). Si falla, «Instinct pidió: … No se pudo: …». Si el resultado es incierto, se avisa y **no se repite**.
    - **Flotante abierto y libre:** se ejecuta en la sesión del panel, como una orden local. **Flotante ocupado** (texto sin enviar, grabación, interpretación, confirmación, plan o elección): la orden espera y se ejecuta sola cuando el panel se libera. Un evento de calendario pasa por la vista previa de siempre.
    - **Diferida:** se guarda y se ejecuta por este mismo camino cuando llega su hora.
 5. **Cuándo espera tu toque en lugar de ejecutarse** (notificación «Instinct propone: …» con **Confirmar**/**Descartar**, en el canal «Insto · propuestas de Instinct»):
    - la [autonomía](#autonomía-por-acción-1160) de esa categoría es **Confirmar**, o es la hora de silencio (desde 1.16.0; reemplaza a «Pedirme confirmación antes de ejecutar»);
-   - el teléfono está bloqueado;
+   - el teléfono está bloqueado **y la orden abre una pantalla** (desde 1.20.0, volumen, linterna, silencio, No molestar, música y modos temporales se ejecutan con el teléfono bloqueado);
    - la orden (o algún paso de la rutina) abre otra app, el panel está cerrado y el servicio de Accesibilidad de Insto no está conectado (ver Límites);
    - Instinct ya pidió 6 acciones en los últimos 10 minutos (freno anti-bucle; una rutina cuenta como una);
    - una orden diferida se disparó con más de 15 minutos de atraso;
-   - la acción necesita algo tuyo: confirmar «esa hora ya pasó», confirmar un modo temporal, un permiso o elegir entre varias apps.
+   - la acción necesita algo tuyo: confirmar «esa hora ya pasó», un permiso que falta, aceptar una restauración aproximada (sin alarmas exactas) o elegir entre varias apps.
 
 ## Autonomía por acción (1.16.0)
 
@@ -102,9 +102,9 @@ Cada categoría tiene uno de tres niveles:
 
 Una diferida usa la categoría de su orden interior. Una rutina usa **Rutinas** y además la más estricta de las categorías de sus pasos.
 
-**Migración.** Si en 1.15.0 tenías encendido «Pedirme confirmación antes de ejecutar» (`instinct-proposals-ask-first`), todas las categorías arrancan en **Confirmar** y ese archivo se borra. La política vive en `noBackupFilesDir` (`instinct-autonomy.json`, escritura atómica); nunca entra en copias de seguridad ni se restaura. Si el archivo no se puede leer, todo queda en Confirmar hasta que vuelvas a elegir.
+**Migración.** Si en 1.15.0 tenías encendido «Pedirme confirmación antes de ejecutar» (`instinct-proposals-ask-first`), todas las categorías arrancan en **Confirmar** y ese archivo se borra. La política vive en `noBackupFilesDir` (`instinct-autonomy.json`, escritura atómica); desde 1.20.0 viaja en la copia `.insto` (categoría Instinct) y se restaura tal cual. Si el archivo no se puede leer, todo queda en Confirmar hasta que vuelvas a elegir.
 
-**La política solo puede endurecer.** Los bloqueos que ya existían (teléfono bloqueado, abrir otra app sin Accesibilidad, freno anti-bucle, diferida atrasada más de 15 minutos, la acción necesita algo tuyo) siguen mandando sobre **Solo**. Es estructural: `InstinctProposalCenter.gate` decide primero esos bloqueos y después la política (`InstinctAutonomyGate.combine`); el freno se consume último, solo si la orden de verdad se ejecuta. **Nunca** gana sobre todo.
+**La política solo puede endurecer.** Los bloqueos que ya existían (teléfono bloqueado con una acción que abre una pantalla, abrir otra app sin Accesibilidad, freno anti-bucle, diferida atrasada más de 15 minutos, la acción necesita algo tuyo) siguen mandando sobre **Solo**. Es estructural: `InstinctProposalCenter.gate` decide primero esos bloqueos y después la política (`InstinctAutonomyGate.combine`); el freno se consume último, solo si la orden de verdad se ejecuta. **Nunca** gana sobre todo.
 
 ### Horas de silencio
 
@@ -709,6 +709,32 @@ El catálogo de texto (v6), con la bitácora, suma: **«Las reglas vigentes est�
 - **Freno propio:** 20 pruebas cada 10 minutos; la que sobra responde `#insto-error probar … → demasiadas pruebas seguidas`. No cuenta en el ajuste adaptativo de la autonomía.
 - **Catálogo** (texto y JSON): la consulta y la regla **«Si no estás seguro de una forma o de si va a quedar esperando, probala antes con "probar <orden>"»**.
 
+## Diario de ejecución, verificación y pantalla bloqueada (1.20.0)
+
+Diseño, auditoría, matrices y política de recuperación: [`architecture/instinct-execution-journal.md`](architecture/instinct-execution-journal.md).
+
+- **Diario de ejecución** (`instinct-executions.db`, SQLite en `noBackupFilesDir`): una fila por orden aceptada, con id
+  propio, transporte (timbre, buzón, WhatsApp, programada, disparador, recurrente, restauración), estado, resultado e
+  intentos. El timbre de 1.19.0 sigue igual: su cola de recepción se vacía recién cuando el diario tiene la orden.
+- **Verificación**: Insto lee el teléfono antes y después. Volumen, silencio, vibración, No molestar, linterna (si la
+  cámara lo informa), música (si la sesión lo informa) y modos temporales se comprueban. Alarmas, temporizadores,
+  calendario, búsquedas y apps solo se **entregan**: el acuse sigue siendo `ok`, pero dice «Entregado; Insto no puede
+  comprobar el resultado final.». Un estado que no se alcanzó es `error` («No se logró: …»).
+- **Recuperación**: después de una muerte del proceso, un reinicio o una actualización, lo que no tocó el teléfono se
+  continúa si sigue vigente; una confirmación pendiente se vuelve a ofrecer (siempre esperándote); lo que se estaba
+  despachando no se repite: se relee si es un ajuste, y si no, queda `incierta`. Cada resultado recuperado llega una
+  sola vez a la bitácora, con «(recuperada tras reiniciarse Insto)».
+- **Pantalla bloqueada o apagada**: volumen, linterna, silencio, vibración, No molestar, música, modos temporales y
+  consultas se ejecutan solos; lo que abre una pantalla espera el desbloqueo. «Silenciá durante una hora» en Solo ya
+  no pide confirmación.
+- **Preparación**: Ajustes → Propuestas de Instinct → «Funcionar con el teléfono bloqueado» lista los permisos que
+  Android exige conceder a mano (notificaciones, No molestar, alarmas exactas, batería, acceso a notificaciones,
+  cámara). Insto nunca los pide en segundo plano.
+- **Consultas nuevas** (solo lectura): `#insto ver ejecuciones` y `#insto estado de ejecución <id>`.
+- **Backup**: la copia `.insto` incluye todo Instinct (con token y clave en la copia completa); al restaurar queda
+  apagado hasta «Reactivar Instinct en este teléfono», que registra UnifiedPush de nuevo con las claves y el endpoint
+  del teléfono nuevo.
+
 ## Qué tiene que hacer Instinct
 
 1. **Al empezar** (y cada vez que una orden dé un error inesperado), leer las reglas vigentes: `GET <URL>?token=<token>&action=catalogo` (1.18.0). Si el `hash` cambió, mandan sobre el texto pegado en el prompt.
@@ -745,7 +771,7 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 
 ## Idempotencia y vencimiento
 
-- Las órdenes inmediatas viven solo en memoria (`ProposalBook`). Cada una se ejecuta como máximo una vez gracias a un `claim` atómico. Si WhatsApp vuelve a publicar la misma notificación, no pasa nada.
+- Desde 1.20.0 cada orden aceptada tiene una fila en el [diario de ejecución](#diario-de-ejecución-verificación-y-pantalla-bloqueada-1200) (SQLite): reclamar el id y registrar la orden son una sola transacción, y «despachando» se escribe antes de tocar el teléfono. La propuesta en memoria (`ProposalBook`) sigue ejecutándose como máximo una vez gracias a un `claim` atómico, y ahora se identifica por su ejecución: dos órdenes iguales de mensajes distintos ya no se confunden. Si WhatsApp vuelve a publicar la misma notificación, no pasa nada.
 - Las que esperan confirmación vencen a los **10 minutos** (unos 2 segundos antes si hay un acuse pendiente, para poder avisar el vencimiento). Una vencida, descartada o ya ejecutada no se puede volver a ejecutar.
 - Las diferidas se guardan en disco y se marcan consumidas **antes** de ejecutarse: nunca se repiten.
 - Cada orden guarda la huella de la configuración con la que llegó (contacto y app de WhatsApp). Si eso cambió o se apagó el interruptor, no se ejecuta, tampoco una diferida.
@@ -756,12 +782,12 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 
 - La lectura es **pasiva**: con el interruptor encendido, Insto mira cada notificación de WhatsApp y lee solo el último mensaje del chat individual con el contacto configurado. De ese mensaje usa únicamente las líneas `#insto`. Las notificaciones de otras apps solo se miran por su paquete. Las de grupos y otros contactos se descartan antes de leer el texto.
 - El texto del mensaje no se guarda, no se registra (Logcat muestra solo contadores, en debug), no sale del teléfono y no entra en copias de seguridad. La única excepción es la orden de una diferida, que se guarda en `noBackupFilesDir` hasta que se dispara o la cancelás.
-- Los interruptores, el modo de respuesta, los permisos de rutinas y las programadas viven en `noBackupFilesDir`: una restauración nunca enciende ni trae nada de esto.
+- Los interruptores, el modo de respuesta, los permisos de rutinas y las programadas viven en `noBackupFilesDir`. Desde 1.20.0 la copia `.insto` los trae, pero una restauración **nunca enciende** nada: hay que tocar «Reactivar Instinct en este teléfono». Las órdenes únicas programadas no viajan; las recurrentes, como definición.
 - El diagnóstico de Ajustes muestra estados y el motivo del último resultado. Nunca muestra el contenido del mensaje.
 - Los acuses a Instinct (apagados por defecto) solo repiten la orden que Instinct mandó y el texto de resultado que Insto ya te muestra. La acción «Responder» que los envía vive en memoria como máximo 10 minutos y nunca se guarda. A Instinct le llegan los nombres de las rutinas habilitadas, nunca sus pasos.
-- **Bitácora (1.15.0, apagada por defecto):** con «Bitácora» o «Ambos», ahora sí sale algo del teléfono, solo hacia el Apps Script que vos configuraste: la orden recortada a 80 caracteres, el texto de resultado que Insto ya te muestra, el tipo de acuse, la hora y un hash corto del mensaje (12 dígitos hexadecimales). **Nunca** el texto del mensaje de Instinct ni datos del teléfono (contactos, número, ubicación, notificaciones). La URL, el token y la bandeja de salida viven en `noBackupFilesDir`: nunca entran en copias de seguridad. La bitácora queda en tu planilla de Google, con los permisos que le des.
+- **Bitácora (1.15.0, apagada por defecto):** con «Bitácora» o «Ambos», ahora sí sale algo del teléfono, solo hacia el Apps Script que vos configuraste: la orden recortada a 80 caracteres, el texto de resultado que Insto ya te muestra, el tipo de acuse, la hora y un hash corto del mensaje (12 dígitos hexadecimales). **Nunca** el texto del mensaje de Instinct ni datos del teléfono (contactos, número, ubicación, notificaciones). La URL, el token y la bandeja de salida viven en `noBackupFilesDir`. Desde 1.20.0 la URL y el token viajan en la copia `.insto` completa (cifrada); la «copia sin secretos» no lleva el token. La bandeja nunca. La bitácora queda en tu planilla de Google, con los permisos que le des.
 - **Estado del teléfono (1.16.0):** con la bitácora configurada, sale hacia tu Apps Script un resumen con campos fijos (modo de sonido, No molestar, hora de la próxima alarma, título y horario del evento en curso y del próximo, si hay auriculares o Bluetooth, si está bloqueado, el modo temporal y las programadas). Nunca volumen, batería, red, ubicación, contactos, notificaciones, uso de apps ni identificadores.
-- **Buzón (1.16.0, apagado por defecto):** Insto lee de tu Apps Script las órdenes firmadas y las marca como tomadas. La clave vive solo en `noBackupFilesDir` y en Instinct; nunca en la planilla, en el diagnóstico ni en WhatsApp. Los contadores de autonomía (`instinct-trust.json`) y los ids vistos del buzón son solo contadores e identificadores, sin texto.
+- **Buzón (1.16.0, apagado por defecto):** Insto lee de tu Apps Script las órdenes firmadas y las marca como tomadas. La clave vive en `noBackupFilesDir`, en Instinct y, desde 1.20.0, dentro de la copia `.insto` completa (cifrada con tu contraseña); nunca en la planilla, en el diagnóstico, en WhatsApp ni en la copia sin secretos. Los contadores de autonomía (`instinct-trust.json`) y los ids vistos del buzón son solo contadores e identificadores, sin texto.
 - **Timbre cifrado (1.19.0):** con el script de 1.19.0, ntfy solo ve un mensaje cifrado (RFC 8291). Con la orden en el timbre y el relé configurado, la orden la ve en claro solo tu relé mientras la cifra; sin relé, la orden no viaja en el timbre. Las claves públicas (`p256dh`, `auth`) van solo a tu Apps Script y, desde ahí, a tu relé; la privada nunca sale del Android Keystore.
 - **Orden directa en el timbre (1.18.0, apagada por defecto):** con un script anterior a 1.19.0 y la opción encendida, el push que reenvía ntfy lleva el id, la hora, las líneas `#insto` y la firma de cada orden nueva. ntfy (el servidor público `ntfy.sh` o el tuyo) **puede ver esas líneas, pero no cambiarlas ni inventar otras**: sin la clave no hay firma válida. Nunca viajan el token, la clave ni otra cosa del teléfono. Con tu propio servidor ntfy no las ve nadie más. El payload nunca se loguea ni se guarda.
 - **Catálogo vivo (1.18.0):** sale hacia tu Apps Script lo mismo que ya decía el catálogo de texto: las formas, los límites, los nombres de las rutinas habilitadas, la autonomía, las horas de silencio y qué canales están encendidos (sí/no). Nunca URL, token, clave ni endpoint.
@@ -782,7 +808,7 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 - **El nombre no prueba el número.** Android no expone el número del remitente de WhatsApp. Si otro contacto tuyo se llama exactamente igual que Instinct, sus `#insto` también se ejecutarían. Por eso el contacto de Instinct necesita un nombre único. Lo acotan la lista blanca, el freno y el aviso posterior.
 - **Abrir otra app desde segundo plano.** Desde Android 10, una app no puede abrir pantallas si no está en primer plano. La excepción es tener un servicio de Accesibilidad conectado. Sin la Accesibilidad de Insto, alarma, temporizador, abrir apps, búsquedas y eventos esperan tu toque. Volumen, linterna, silencio y música siempre se ejecutan solos.
 - La comparación usa el nombre que **muestra WhatsApp** (el de tu agenda). Si en Insto guardaste a Instinct con otro nombre, no se lee nada.
-- Si Android acaba de iniciar el proceso de Insto y todavía no cargó los ajustes, esa notificación se descarta.
+- Si Android acaba de iniciar el proceso de Insto y todavía no cargó los ajustes, una notificación de WhatsApp se descarta (lo dice el diagnóstico). Una orden del buzón o del timbre ya no: queda recibida en el diario y se reanuda (1.20.0).
 - Si tenés abierto el chat de Instinct en WhatsApp, WhatsApp no genera notificación y no llega nada.
 - **Acuses:** dependen de que WhatsApp ofrezca «Responder» en la notificación. Si no lo hace, no se responde (lo dice el diagnóstico). Un acuse de una diferida que se dispara después de 10 minutos no sale.
 - **Bitácora:** depende de la red y de que Apps Script responda. Sin red, los eventos esperan en la bandeja (hasta 200) y se reintentan solos; si Google cambia la redirección de Apps Script, el diagnóstico dirá «respuesta inválida». Las cuotas diarias de Apps Script (ejecuciones y URL Fetch) alcanzan de sobra para uso personal: cada lote de hasta 50 eventos es una sola ejecución. Las líneas en memoria se pierden si el proceso muere, salvo las de las diferidas: un seguimiento de una orden inmediata que estaba en espera durante un reinicio no se registra.

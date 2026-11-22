@@ -60,7 +60,7 @@ def main():
              "PhraseCanonicalizer", "LearnedPhraseIndex", "WeatherIntentParser", "SemanticCommandGuard", "InstinctProposals",
              "InstinctReplies", "InstinctRoutines", "InstinctProtocolCatalog",
              "InstinctSchedule", "InstinctUndo", "InstinctLog", "InstinctAutonomy", "InstinctState", "InstinctMailbox",
-             "InstinctDoorbell", "InstinctTriggers", "InstinctPushInbox"]
+             "InstinctDoorbell", "InstinctTriggers", "InstinctPushInbox", "InstinctExecution", "ActionOutcome"]
     sources = [str(source / (name + ".kt")) for name in names if (source / (name + ".kt")).exists()]
     # SMN weather clients: pure JVM (OkHttp, org.json, coroutines), no Android types.
     sources += [str(path) for path in sorted((source / "weather").glob("*.kt"))]
@@ -70,7 +70,7 @@ def main():
         "assist/AutoSendGuard.kt", "assist/ShareConfirmationPolicy.kt", "assist/ShareSendAttempt.kt",
         "assist/WhatsAppSelectors.kt", "assist/AutoSendMetrics.kt", "assist/AutoSendHealth.kt",
         "data/AssistantModels.kt", "backup/BackupCrypto.kt", "backup/BackupFormat.kt",
-        "backup/ConfigurationBackupManager.kt", "backup/BackupSections.kt",
+        "backup/ConfigurationBackupManager.kt", "backup/BackupSections.kt", "backup/InstinctBackupSection.kt", "backup/BackupInventory.kt",
         "whatsapp/PhoneNumberUtils.kt", "speech/AudioTranscriber.kt",
         "speech/GroqTranscriber.kt", "speech/VocabularyHints.kt",
         "session/SessionLifecycle.kt", "session/ActionExecutionLedger.kt")]

@@ -11,8 +11,9 @@ open class InstoApplication:Application() {
  override fun onCreate() {
   super.onCreate()
   preferencesCache // Starts loading now, before any screen, tile or widget asks for it.
-  // A gap between processes may contain manual changes that no observer could see.
-  runCatching {TemporaryModeManager(this).loseOwnership()}
+  // A gap between processes may contain manual changes that no observer could see: a value that differs from the one
+  // Insto applied is one, and is kept; an unchanged value is still Insto's to restore (1.20.0).
+  runCatching {TemporaryModeManager(this).markUnobserved()}
   // The first start after an update publishes the catalog if its hash changed (1.18.0); the job decides, off this thread.
   runCatching {com.example.phone.InstinctCatalogPublisher.changed(this)}
  }

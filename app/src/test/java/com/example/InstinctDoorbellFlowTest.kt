@@ -813,7 +813,7 @@ class InstinctDoorbellFlowTest {
 
   // 1.19.0: the same policies whatever the transport
 
-  @Test fun `with the screen locked a direct order is received and verified, and the existing lock rule makes it wait`() {
+  @Test fun `with the screen locked a direct order is received, verified and, being a setting, runs (1_20_0)`() {
     val token = register()
     InstinctDoorbell.setWithOrder(app, true)
     InstinctProposalCenter.keyguardLocked = { true }
@@ -821,8 +821,8 @@ class InstinctDoorbellFlowTest {
     ringWith(token, payload(order("#insto poner el volumen al 40 por ciento")))
     assertEquals("received and handed over", 1, bell.state().directOrders)
     assertEquals(0, gets)
-    assertEquals("same rule as a polled order", listOf("espera"), acks("poner el volumen al 40 por ciento"))
-    assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+    assertEquals("same rule as a polled order", listOf("ok"), acks("poner el volumen al 40 por ciento"))
+    assertEquals(audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * 40 / 100, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
   }
 
   @Test fun `a direct order that would open another app from the background waits instead of opening it`() {

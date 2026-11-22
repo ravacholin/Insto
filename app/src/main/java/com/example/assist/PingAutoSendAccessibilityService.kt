@@ -688,7 +688,7 @@ class PingAutoSendAccessibilityService : AccessibilityService() {
         val pad = (sizePx * 0.24f).toInt()
         setPadding(pad, pad, pad, pad)
         background = buildPillDrawable(isRecording = false)
-        contentDescription = "PingAssist Floating Trigger"
+        contentDescription = "Insto · botón flotante"
       }
 
     val params =

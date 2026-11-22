@@ -99,6 +99,11 @@ internal object InstinctCatalogCanonical {
 }
 
 object InstinctProtocolCatalog {
+  /** 1.20.0: the execution journal, as Instinct reads it. */
+  const val EXECUTIONS_LINE = "«ver ejecuciones» lista las últimas órdenes con un id de 9 caracteres (e y 8 dígitos hexadecimales), su estado (recibida, validada, espera, programada, lista, despachando, verificando, verificada, entregada, incierta, fallida, cancelada o vencida), la hora, de dónde llegó, la orden y el resultado; «estado de ejecución <id>» muestra una sola."
+  /** 1.20.0: what an «ok» says about the result. */
+  const val OUTCOMES_LINE = "Cómo leer un resultado: «Verificado: …» es que Insto leyó el teléfono y quedó como pediste; «Entregado; Insto no puede comprobar el resultado final.» es que otra app (el Reloj, el calendario, una búsqueda, la música) o Android lo aceptó, pero no se puede saber si lo hizo; «No se logró: …» llega como error; «(recuperada tras reiniciarse Insto)» es un resultado que Insto informa después de un reinicio. Una orden incierta nunca se repite sola."
+
   const val VERSION = 6
   const val TITLE = "Protocolo Insto v$VERSION"
   const val ROUTINE_FORM = "ejecutar la rutina"
@@ -182,6 +187,8 @@ object InstinctProtocolCatalog {
       }
       appendLine("Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega solo si la persona activó las respuestas). «ver programadas» muestra cada una con un id de ${InstinctTriggers.SHORT_ID_LENGTH} caracteres; con ese id, «cancelar programada <id>» cancela esa orden o la recurrente entera. «probar <orden>» valida la orden (también diferida, con disparador, recurrente o con clima) y dice qué pasaría ahora, sin ejecutar ni guardar nada: «válida · <categoría> · la haría sola», «válida · <categoría> · esperaría confirmación: <motivo>», «válida · programada: <cuándo>», «no válida: <motivo>» o «rechazada: la persona no permite esta acción»; como máximo ${InstinctProbe.PER_PERIOD} pruebas cada 10 minutos:")
       ProposalCheck.QueryKind.entries.forEach { appendLine(example(it.form)) }
+      appendLine(EXECUTIONS_LINE)
+      appendLine(OUTCOMES_LINE)
       appendLine()
       appendLine("Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.")
       appendLine()
