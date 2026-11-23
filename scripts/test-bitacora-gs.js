@@ -36,6 +36,7 @@ function fakeSheet() {
       };
     },
     appendRow(values) { rows.push(values.slice()); },
+    deleteRows(row, n) { rows.splice(row - 1, n); },
     getLastRow() { return rows.length; },
     setFrozenRows() {},
   };
@@ -203,6 +204,22 @@ test('tomadas y ordenes siguen igual', () => {
   const s = load();
   s.post(order('00000000-0000-4000-8000-00000000000d'));
   assert.deepStrictEqual(s.post({ token: T, action: 'tomadas', ids: ['00000000-0000-4000-8000-00000000000d'] }), { ok: true, tomadas: 1 });
+  assert.strictEqual(s.get({ token: T, action: 'ordenes' }).ordenes.length, 0);
+});
+
+test('el buzón borra las filas de más de un día y «tomadas» solo toca esa columna', () => {
+  const s = load();
+  s.post(order('00000000-0000-4000-8000-0000000000a1'));
+  s.post(order('00000000-0000-4000-8000-0000000000a2'));
+  s.env.now += 25 * 60 * 60 * 1000;
+  s.post(order('00000000-0000-4000-8000-0000000000a3'));
+  const rows = s.sheets['Buzón'].rows;
+  assert.strictEqual(rows.length, 2, 'encabezado y la orden reciente');
+  assert.strictEqual(rows[1][1], '00000000-0000-4000-8000-0000000000a3');
+  const firma = rows[1][4];
+  assert.deepStrictEqual(s.post({ token: T, action: 'tomadas', ids: ['00000000-0000-4000-8000-0000000000a3'] }), { ok: true, tomadas: 1 });
+  assert.strictEqual(rows[1][4], firma, 'las demás columnas quedan igual');
+  assert.ok(rows[1][5]);
   assert.strictEqual(s.get({ token: T, action: 'ordenes' }).ordenes.length, 0);
 });
 
