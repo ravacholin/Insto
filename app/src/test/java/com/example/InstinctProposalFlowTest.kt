@@ -162,7 +162,9 @@ class InstinctProposalFlowTest {
     assertEquals(InstinctProposalIntake.Diagnosis.CONFIRM, InstinctProposalIntake.lastDiagnosis)
     assertTrue(InstinctProposalIntake.lastDetail!!.contains("Accesibilidad"))
     // Logcat and the debug log get counters only.
-    val everything = logs + ShadowLog.getLogs().map { it.msg ?: "" }
+    // Android's own SQLite warnings (a connection another test leaked, collected at random) name that test's temporary
+    // database, which may contain «Instinct»: they are not Insto's logs.
+    val everything = logs + ShadowLog.getLogs().filterNot { it.tag.orEmpty().startsWith("SQLite") }.map { it.msg ?: "" }
     assertTrue(logs.isNotEmpty())
     for (secret in listOf("secreto123", "temporizador", "Ana", "Instinct", "#insto"))
       assertTrue("$secret leaked: $everything", everything.none { secret in it })
