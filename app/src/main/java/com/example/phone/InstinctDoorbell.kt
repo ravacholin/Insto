@@ -345,6 +345,31 @@ object InstinctDoorbellScript {
 
   private fun withOrder(o: JSONObject): Boolean? = (o.opt(WITH_ORDER) as? Boolean)
 
+  /**
+   * Why «Probar de punta a punta» could not publish its order (`{ok:true, id}` expected), in Spanish, without any content
+   * of the answer. Null: it was published.
+   */
+  fun publishFailure(raw: InstinctLogClient.Raw): String? = when (raw) {
+    is InstinctLogClient.Raw.Failed -> if (raw.failure == InstinctLogClient.Failure.NETWORK)
+      "el script no respondió a tiempo o no hubo red (${InstinctLogClient.TIMEOUT_SECONDS} s). Si se repite, la hoja «Buzón» " +
+        "puede estar muy cargada: pegá el instinct-bitacora.gs nuevo, que la limpia sola, e implementá una versión nueva"
+      else "no se pudo hablar con el script (motivo: ${raw.reason})"
+    is InstinctLogClient.Raw.Body -> {
+      val trimmed = raw.text?.trimStart().orEmpty()
+      val o = runCatching { JSONObject(trimmed) }.getOrNull()
+      when {
+        trimmed.isEmpty() -> "el script respondió vacío"
+        trimmed.startsWith("<") -> "el script devolvió una página de error en lugar de JSON (un error del script, " +
+          "por ejemplo la hoja ocupada, o una implementación vieja)"
+        o == null -> "respuesta inválida del script"
+        o.optBoolean("ok", false) -> null
+        o.optString("error") == "token" -> "token rechazado"
+        o.optString("error") == "orden" -> "el script rechazó la orden de prueba (¿una versión vieja del script?)"
+        else -> "el script no confirmó la orden"
+      }
+    }
+  }
+
   /** `{ok:true, timbre:true, codigo:N}` when the script rang; the reason in Spanish otherwise. Null: it rang. */
   fun testFailure(raw: InstinctLogClient.Raw): String? = when (raw) {
     is InstinctLogClient.Raw.Failed -> "no se pudo hablar con el script (motivo: ${raw.reason})"

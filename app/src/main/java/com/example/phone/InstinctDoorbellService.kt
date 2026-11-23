@@ -522,9 +522,10 @@ object InstinctDoorbell {
     val at = InstinctLogEvents.iso(InstinctMailbox.clock())
     val lines = listOf(END_TO_END_LINE)
     val order = MailboxOrder(id, at, lines, InstinctMailboxSignature.sign(key, InstinctMailboxSignature.canonical(id, at, lines)))
-    val published = runCatching { client().post(url, InstinctMailboxPoll.orderBody(token, order)) }.getOrNull()
-    if (published !is InstinctLogClient.Raw.Body || runCatching { org.json.JSONObject(published.text ?: "").optBoolean("ok") }.getOrDefault(false) != true) {
-      steps += Step("Entrega del push", false, "no se pudo publicar la orden de prueba en el buzón.")
+    val published = runCatching { client().post(url, InstinctMailboxPoll.orderBody(token, order)) }
+      .getOrElse { InstinctLogClient.Raw.Failed(InstinctLogClient.Failure.NETWORK) }
+    InstinctDoorbellScript.publishFailure(published)?.let {
+      steps += Step("Entrega del push", false, "no se pudo publicar la orden de prueba en el buzón: $it.")
       return steps
     }
     val seen = InstinctMailbox.seen(app)

@@ -58,6 +58,8 @@ const MAX_EVENTS = 50;
 const MAILBOX = 'Buzón';
 const MAILBOX_HEADERS = ['recibido', 'orden_id', 'at', 'lineas', 'firma', 'tomada'];
 const MAX_ORDERS = 10;
+/** Las órdenes vencen a los 15 minutos: pasado un día, una fila del buzón ya no sirve y solo hace lento al script. */
+const MAILBOX_KEEP_MS = 24 * 60 * 60 * 1000;
 const MAX_LINES = 3;
 const DOORBELL_ENDPOINT = 'insto_timbre_endpoint';
 const DOORBELL_LAST = 'insto_timbre_ultimo';
@@ -129,6 +131,7 @@ function postOrder_(body) {
   lock.waitLock(10000);
   try {
     const sheet = mailbox_();
+    pruneMailbox_(sheet);
     const last = sheet.getLastRow();
     const known = last > 1 ? sheet.getRange(2, 2, last - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
     if (known.indexOf(body.id) < 0) {
@@ -141,6 +144,27 @@ function postOrder_(body) {
   // Solo una orden nueva toca el timbre; una repetida no. Un fallo nunca cambia la respuesta.
   if (isNew) { try { ring_(false, withOrder_() ? orderPayload_(body) : null); } catch (_) { } }
   return json_({ ok: true, id: body.id });
+}
+
+/**
+ * Borra del buzón las filas de más de un día (las primeras: se anotan en orden). Insto las rechazaría igual por vencidas,
+ * y una hoja que crece sin límite hace que cada pedido tarde más, hasta pasar el tiempo de espera del teléfono.
+ * Se llama con el lock tomado.
+ */
+function pruneMailbox_(sheet) {
+  const last = sheet.getLastRow();
+  if (last < 2) return 0;
+  const limit = Date.now() - MAILBOX_KEEP_MS;
+  const received = sheet.getRange(2, 1, last - 1, 1).getValues();
+  let n = 0;
+  while (n < received.length) {
+    const v = received[n][0];
+    const t = v instanceof Date ? v.getTime() : Date.parse(String(v).replace(/^'/, ''));
+    if (isNaN(t) || t >= limit) break;
+    n++;
+  }
+  if (n) sheet.deleteRows(2, n);
+  return n;
 }
 
 /** Las propiedades del script: el endpoint del timbre no va a la planilla. */
@@ -388,14 +412,18 @@ function postTaken_(body) {
   lock.waitLock(10000);
   try {
     const sheet = mailbox_();
+    pruneMailbox_(sheet);
     const last = sheet.getLastRow();
     let n = 0;
     if (last > 1 && ids.length) {
-      const range = sheet.getRange(2, 1, last - 1, MAILBOX_HEADERS.length);
-      const rows = range.getValues();
+      // Solo las columnas orden_id y tomada; se reescribe solo «tomada», no la hoja entera.
+      const rows = sheet.getRange(2, 2, last - 1, 5).getValues();
       const now = new Date().toISOString();
-      rows.forEach(function (r) { if (!r[5] && ids.indexOf(String(r[1])) >= 0) { r[5] = now; n++; } });
-      if (n) range.setValues(rows.map(function (r) { return r.map(cell_); }));
+      const taken = rows.map(function (r) {
+        if (!r[4] && ids.indexOf(String(r[0])) >= 0) { n++; return [now]; }
+        return [r[4]];
+      });
+      if (n) sheet.getRange(2, 6, last - 1, 1).setValues(taken);
     }
     return json_({ ok: true, tomadas: n });
   } finally {

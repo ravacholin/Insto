@@ -132,6 +132,13 @@ class InstinctDoorbellTest {
     assertTrue(denied.contains("autorizarTimbre"))
     assertEquals("el script no conoce «probar-timbre»: actualizalo", InstinctDoorbellScript.testFailure(body("""{"ok":true,"accepted":[]}""")))
     assertEquals("el script no tiene el endpoint guardado", InstinctDoorbellScript.testFailure(body("""{"ok":false,"error":"sin-endpoint"}""")))
+    // «Probar de punta a punta» says why the order could not be published.
+    assertNull(InstinctDoorbellScript.publishFailure(body("""{"ok":true,"id":"x"}""")))
+    assertEquals("token rechazado", InstinctDoorbellScript.publishFailure(body("""{"ok":false,"error":"token"}""")))
+    assertTrue(InstinctDoorbellScript.publishFailure(body("<!DOCTYPE html><p>Lock timeout</p>"))!!.contains("página de error"))
+    assertTrue(InstinctDoorbellScript.publishFailure(InstinctLogClient.Raw.Failed(InstinctLogClient.Failure.NETWORK))!!.contains("a tiempo"))
+    assertEquals("no se pudo hablar con el script (motivo: HTTP 500)",
+      InstinctDoorbellScript.publishFailure(InstinctLogClient.Raw.Failed(InstinctLogClient.Failure.HTTP, 500)))
     assertTrue(InstinctDoorbellScript.informBody("t0ken-largo", endpoint).contains("\"action\":\"timbre\""))
     // 1.18.0: conOrden always goes; a deletion never asks for the order.
     assertEquals(true, org.json.JSONObject(InstinctDoorbellScript.informBody("t0ken-largo", endpoint, withOrder = true)).get("conOrden"))
