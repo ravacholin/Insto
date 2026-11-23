@@ -237,6 +237,8 @@ test('probarRele dice qué falta y, con todo listo, toca el timbre por el relé'
   assert.strictEqual(s.fetches.pop().url, RELAY);
   s.env.relayAnswer = { ok: false, error: 'secreto' };
   assert.ok(s.context.probarRele().includes('RELAY_SECRET no es igual'));
+  assert.ok(s.get({ token: T, action: 'rele' }).rele.includes('RELAY_SECRET no es igual'));
+  assert.deepStrictEqual(s.get({ token: 'malo', action: 'rele' }), { ok: false, error: 'token' });
 });
 
 // Orden directa en el timbre (1.18.0)

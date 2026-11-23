@@ -540,6 +540,8 @@ function doGet(e) {
   if (p.action === 'estado') return json_({ ok: true, estado: lastState_() });
   if (p.action === 'ordenes') return getOrders_(p);
   if (p.action === 'catalogo') return getCatalog_();
+  // Abrir en el navegador: URL?token=…&action=rele dice si el relé anda (y, si está todo, toca el timbre una vez).
+  if (p.action === 'rele') return json_({ ok: true, rele: releDiagnosis_() });
   // Sin «action»: los eventos desde «since», exactamente como en 1.15.0.
   const since = p.since ? new Date(p.since).getTime() : 0;
   if (isNaN(since)) return json_({ ok: false, error: 'since' });
