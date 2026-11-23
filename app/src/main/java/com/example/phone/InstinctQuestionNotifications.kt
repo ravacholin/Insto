@@ -22,6 +22,7 @@ internal object InstinctQuestionNotifications {
   const val ACTION = "com.example.phone.INSTINCT_QUESTION_ACTION"
   const val TICK = "com.example.phone.INSTINCT_QUESTION_TICK"
   private const val NOTIFICATION_ID = 7_318
+  private const val PUBLIC_CONTENT = "question-public-content"
   private const val PREVIEW = "question-preview"
   private const val ID = "insto.question.execution"
   private const val CHOICE = "insto.question.choice"
@@ -99,17 +100,25 @@ internal object InstinctQuestionNotifications {
     }
     if (quietUntil != null || live.isEmpty() || !InstinctProposalCenter.canNotify(app, CHANNEL)) return
     if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) return
+    val showOnLockScreen = InstinctAutonomySettings(app).showQuestionsOnLockScreen()
     for (row in live) {
       val preview = row.state == ExecutionState.QUESTION_CONFIRM
-      if (active[row.executionId]?.notification?.extras?.getBoolean(PREVIEW) == preview) continue
+      val publicContent = !preview && showOnLockScreen
+      val shown = active[row.executionId]?.notification
+      if (shown?.extras?.getBoolean(PREVIEW) == preview && shown.extras.containsKey(PUBLIC_CONTENT) &&
+        shown.extras.getBoolean(PUBLIC_CONTENT) == publicContent) continue
       val question = InstinctQuestion.decode(row.command, row.deadline) ?: continue
       val notification = InstinctProposalCenter.builder(app, CHANNEL)
         .setSmallIcon(android.R.drawable.ic_dialog_info)
         .setContentTitle(if (preview) "Instinct quiere hacerte una pregunta" else "Insto te pregunta")
         .setContentText(question.text).setStyle(Notification.BigTextStyle().bigText(question.text))
-        .setVisibility(if (preview) Notification.VISIBILITY_PRIVATE else Notification.VISIBILITY_PUBLIC)
+        .setVisibility(if (publicContent) Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE)
+        .setPublicVersion(publicVersion(app))
         .setOnlyAlertOnce(true)
-        .setExtras(Bundle().apply { putBoolean(PREVIEW, preview) })
+        .setExtras(Bundle().apply {
+          putBoolean(PREVIEW, preview)
+          putBoolean(PUBLIC_CONTENT, publicContent)
+        })
         .setDeleteIntent(action(app, row.executionId, InstinctQuestion.DISCARD))
       if (preview) {
         val review = PendingIntent.getActivity(app, 0, Intent(app, InstinctQuestionPreviewActivity::class.java)
@@ -125,6 +134,13 @@ internal object InstinctQuestionNotifications {
       manager.notify(row.executionId, NOTIFICATION_ID, notification.build())
     }
   }
+
+  internal fun publicVersion(app: Context): Notification = InstinctProposalCenter.builder(app, CHANNEL)
+    .setSmallIcon(android.R.drawable.ic_dialog_info)
+    .setContentTitle("Insto")
+    .setContentText("Tenés una pregunta pendiente.")
+    .setVisibility(Notification.VISIBILITY_PUBLIC)
+    .build()
 
   private fun arm(app: Context, at: Long?) {
     val manager = app.getSystemService(AlarmManager::class.java) ?: return

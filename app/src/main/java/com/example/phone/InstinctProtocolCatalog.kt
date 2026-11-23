@@ -253,11 +253,11 @@ object InstinctProtocolCatalog {
 
   /** The fixed blockers that always wait, for the JSON catalog. Same facts as [InstinctAutonomyCatalog]. */
   val FIXED_BLOCKERS: List<String> = listOf(
-    "el teléfono está bloqueado",
+    "el teléfono está bloqueado o la pantalla está apagada y la acción abre una pantalla; las acciones sin interfaz pueden ejecutarse",
     "la orden abre otra app y el servicio de Accesibilidad de Insto no está activo",
     "más de 6 órdenes en 10 minutos",
     "una orden programada que se dispara con más de ${InstinctDeferral.LATE_MILLIS / 60_000} minutos de atraso",
-    "la acción necesita algo de la persona: un permiso, confirmar una hora que ya pasó, un modo temporal o elegir entre varias apps",
+    "la acción necesita algo de la persona: un permiso, confirmar una hora que ya pasó o elegir entre varias apps",
   )
 
   val FORBIDDEN: List<String> = listOf("llamadas", "mensajes de cualquier tipo", "enviar o compartir archivos", "guardar lugares",

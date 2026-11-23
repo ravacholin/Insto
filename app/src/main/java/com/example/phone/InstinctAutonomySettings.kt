@@ -74,7 +74,17 @@ class InstinctAutonomySettings(context: Context) {
     InstinctCatalogPublisher.changed(app)
   }
 
+  fun showQuestionsOnLockScreen(): Boolean =
+    runCatching { File(app.noBackupFilesDir, QUESTION_VISIBILITY).readText() == "true" }.getOrDefault(false)
+
+  fun setShowQuestionsOnLockScreen(show: Boolean) {
+    val preference = File(app.noBackupFilesDir, QUESTION_VISIBILITY)
+    writeAtomically(preference, show.toString(), "insto-question-")
+    InstinctQuestionNotifications.recoverSoon(app)
+  }
+
   companion object {
+    const val QUESTION_VISIBILITY = "instinct-question-lock-screen"
     const val FILE = "instinct-autonomy.json"
     const val LEGACY_FILE = "instinct-proposals-ask-first"
     private val LOCK = Any()

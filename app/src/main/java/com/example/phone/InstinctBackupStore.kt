@@ -46,10 +46,12 @@ class InstinctBackupStore(context: Context) : InstinctBackupAccess {
       doorbellWithOrder = InstinctDoorbell.settings(app).withOrder(),
       doorbellDistributor = InstinctDoorbell.settings(app).chosen(),
       recurrences = recurrences,
+      showQuestionsOnLockScreen = text(InstinctAutonomySettings.QUESTION_VISIBILITY)?.toBooleanStrictOrNull(),
     )
   }
 
   override fun write(data: InstinctBackupData) {
+    put(InstinctAutonomySettings.QUESTION_VISIBILITY, data.showQuestionsOnLockScreen?.toString())
     put(REPLY, data.replyMode?.takeIf { it != InstinctReplyMode.NEVER }?.name)
     put(CHANNEL, data.channel?.takeIf { it != InstinctAckChannel.WHATSAPP }?.name)
     if (data.autonomy != null) { put(InstinctAutonomySettings.FILE, data.autonomy); file(InstinctAutonomySettings.LEGACY_FILE).delete() }

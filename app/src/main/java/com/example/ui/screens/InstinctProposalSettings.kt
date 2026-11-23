@@ -247,8 +247,8 @@ private fun InstinctAutonomySection(revision: Int, onChange: () -> Unit) {
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_autonomy")) {
     Text("Autonomía", style = MaterialTheme.typography.bodyLarge)
     SettingsDescription("Qué puede hacer Instinct solo, por tipo de acción. «Solo»: lo hace y te avisa (con Deshacer cuando se puede). " +
-      "«Confirmar»: espera tu toque o un «dale». «Nunca»: lo rechaza. Con el teléfono bloqueado, sin la Accesibilidad para abrir otra " +
-      "app o con muchas órdenes seguidas, igual espera tu confirmación.")
+      "«Confirmar»: espera tu toque o un «dale». «Nunca»: lo rechaza. Las acciones sin interfaz pueden ejecutarse con la pantalla apagada. " +
+      "Abrir una pantalla requiere desbloquear el teléfono.")
     InstinctCategory.entries.forEach { category ->
       Text(category.label.replaceFirstChar { it.uppercaseChar() }, style = MaterialTheme.typography.bodyMedium)
       Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -262,6 +262,10 @@ private fun InstinctAutonomySection(revision: Int, onChange: () -> Unit) {
     }
     if (InstinctCategory.AVISOS.let { policy.level(it) } != InstinctAutonomy.NUNCA)
       SettingsDescription("«Avisos para vos» es «#insto avisarme …»: una notificación de Insto, solo desde el buzón firmado.")
+    SettingsSwitch("Mostrar preguntas en la pantalla bloqueada",
+      remember(revision) { autonomy.showQuestionsOnLockScreen() },
+      { autonomy.setShowQuestionsOnLockScreen(it); onChange() },
+      "Muestra el texto y las opciones si Android permite mostrar notificaciones en la pantalla bloqueada.")
     SettingsSwitch("Horas de silencio para Instinct", policy.quiet != null, { on ->
       if (!on) autonomy.setQuiet(null)
       else autonomy.setQuiet(QuietHours(QuietHours.parse(start) ?: 0, QuietHours.parse(end) ?: 7 * 60))

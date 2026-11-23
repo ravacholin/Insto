@@ -60,6 +60,7 @@ object BackupInventory {
     f("instinct-proposals-reply-mode", Class.CONFIG, BackupCategory.INSTINCT, "«Responderle a Instinct»"),
     f("instinct-proposals-ack-channel", Class.CONFIG, BackupCategory.INSTINCT, "canal de estados y acuses"),
     f("instinct-proposals-ask-first", Class.CONFIG, BackupCategory.INSTINCT, "ajuste de 1.15.0, migrado a la autonomía"),
+    f("instinct-question-lock-screen", Class.CONFIG, BackupCategory.INSTINCT, "visibilidad de preguntas en la pantalla bloqueada"),
     f("instinct-autonomy.json", Class.CONFIG, BackupCategory.INSTINCT, "autonomía por categoría (incluye Preguntas), horas de silencio y su excepción"),
     f("instinct-routines.json", Class.CONFIG, BackupCategory.INSTINCT, "rutinas que Instinct puede ejecutar"),
     f("instinct-log-url", Class.CONFIG, BackupCategory.INSTINCT, "URL completa del Apps Script"),

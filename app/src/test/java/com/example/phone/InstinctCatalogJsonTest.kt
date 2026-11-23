@@ -43,6 +43,17 @@ class InstinctCatalogJsonTest {
     assertEquals(text, all)
   }
 
+  @Test fun `catalog distinguishes mutations and scopes the lock screen blocker`() {
+    val catalog = JSONObject(json().canonical)
+    val queries = catalog.getJSONArray("consultas")
+    val mutations = (0 until queries.length()).map { queries.getJSONObject(it) }
+      .filter { !it.getBoolean("solo_lectura") }.map { it.getString("orden") }
+    assertTrue("cancelar programada <id>" in mutations)
+    assertTrue("cancelar programadas" in mutations)
+    assertFalse(InstinctProtocolCatalog.FIXED_BLOCKERS.contains("el teléfono está bloqueado"))
+    assertTrue(InstinctProtocolCatalog.FIXED_BLOCKERS.any { "abre una pantalla" in it })
+  }
+
   @Test fun `the hash is the SHA-256 of the canonical form, stable and without publicado`() {
     val a = json(); val b = json()
     assertEquals(a, b)

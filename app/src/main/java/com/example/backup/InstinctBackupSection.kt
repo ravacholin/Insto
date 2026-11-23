@@ -40,6 +40,7 @@ data class InstinctBackupData(
   val doorbellDistributor: String? = null,
   /** Recurring orders as Instinct wrote them («todos los días a las 7 …»), validated again when reactivated. */
   val recurrences: List<String> = emptyList(),
+  val showQuestionsOnLockScreen: Boolean? = null,
 ) {
   val secrets: Boolean get() = mailboxKey != null || logToken != null
   val anything: Boolean get() = this != InstinctBackupData()
@@ -112,6 +113,7 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
       doorbellWithOrder = if (mode == RestoreMode.REPLACE) incoming.doorbellWithOrder else current.doorbellWithOrder || incoming.doorbellWithOrder,
       doorbellDistributor = pick("el distribuidor del timbre", current.doorbellDistributor, incoming.doorbellDistributor),
       recurrences = current.recurrences,
+      showQuestionsOnLockScreen = pick("la visibilidad de preguntas", current.showQuestionsOnLockScreen, incoming.showQuestionsOnLockScreen),
     )
     // Recurrences this phone already has are never scheduled twice.
     val newRecurrences = incoming.recurrences.filter { it !in current.recurrences }
@@ -147,6 +149,7 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
     fun encode(d: InstinctBackupData): JSONObject = JSONObject()
       .put("proposals", JSONObject().put("wasEnabled", d.proposalsEnabled).apply {
         d.replyMode?.let { put("replyMode", it.name) }; d.channel?.let { put("channel", it.name) }
+        d.showQuestionsOnLockScreen?.let { put("showQuestionsOnLockScreen", it) }
       })
       .apply { d.autonomy?.let { put("autonomy", JSONObject(it)) }; d.routineGrants?.let { put("routineGrants", JSONObject(it)) } }
       .put("mailbox", JSONObject().put("wasEnabled", d.mailboxEnabled).apply {
@@ -196,6 +199,9 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
         mailboxInterval = interval, mailboxKey = key, logUrl = url, logToken = token,
         doorbellEnabled = doorbell?.optBoolean("wasEnabled") == true, doorbellWithOrder = doorbell?.optBoolean("withOrder") == true,
         doorbellDistributor = distributor, recurrences = recurrences,
+        showQuestionsOnLockScreen = proposals?.takeIf { it.has("showQuestionsOnLockScreen") }?.let {
+          it.get("showQuestionsOnLockScreen") as? Boolean ?: bad("La visibilidad de preguntas")
+        },
       )
     }
   }

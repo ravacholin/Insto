@@ -32,7 +32,7 @@ sealed interface ProposalCheck {
   /** With [deferred], [command] is the inner order, checked now and again when it fires. */
   data class Valid(override val order: String, val command: PhoneCommand, val deferred: Deferred? = null) : ProposalCheck
   data class Invalid(override val order: String, val reason: Reason) : ProposalCheck
-  /** A read-only question about the protocol itself: it never does anything on the phone. */
+  /** An administrative order or a query about the protocol. */
   data class Query(override val order: String, val kind: QueryKind, val argument: String? = null) : ProposalCheck
   /** «avisarme <texto>» (1.16.0): a local notice for the person, allowed only from the signed mailbox. */
   data class Notice(override val order: String, val text: String) : ProposalCheck
@@ -47,7 +47,7 @@ sealed interface ProposalCheck {
     /** Publishes the phone's state in the log now (1.16.0). Changes nothing on the phone. */
     STATE("ver estado"),
     /** One scheduled order, or a whole recurrence, by the short id of «ver programadas» (1.17.0). */
-    CANCEL_ONE("cancelar programada", form = "cancelar programada <id>"),
+    CANCEL_ONE("cancelar programada", readOnly = false, form = "cancelar programada <id>"),
     /**
      * «probar <orden>» (1.18.0): validates the order with the same validator and says what would happen now, without
      * running, saving, scheduling, telling the person or consuming the brake. [ProposalCheck.Query.argument] is the order.
