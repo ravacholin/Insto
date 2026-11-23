@@ -270,7 +270,8 @@ function relay_(endpoint, payload, props) {
     let answer = null;
     try { answer = JSON.parse(response.getContentText()); } catch (_) { }
     if (answer && answer.ok === true && typeof answer.codigo === 'number') return { code: answer.codigo, relay: true };
-    return { code: -2, relay: true };
+    const why = answer && typeof answer.error === 'string' ? answer.error : (answer && typeof answer.codigo === 'number' ? 'HTTP ' + answer.codigo : 'HTTP ' + response.getResponseCode());
+    return { code: -2, relay: true, error: why };
   } catch (e) {
     return { code: -2, relay: true, error: String((e && e.message) || e).slice(0, 200) };
   }
@@ -319,6 +320,40 @@ function saveSealed_(cifrado) {
  */
 function autorizarTimbre() {
   UrlFetchApp.fetch('https://ntfy.sh/v1/health', { muteHttpExceptions: true });
+}
+
+/**
+ * Ejecutala desde el editor (elegila en la lista de funciones y tocá «Ejecutar») para saber si el relé anda. Dice qué
+ * falta en el «Registro de ejecución» y, si todo está, toca el timbre una vez a través del relé (un timbre simple, sin
+ * orden: Insto solo revisa el buzón).
+ */
+function probarRele() {
+  const text = releDiagnosis_();
+  console.log(text);
+  return text;
+}
+
+function releDiagnosis_() {
+  const props = props_();
+  if (!/^https:\/\/[^\s]+$/.test(RELAY_URL)) return 'RELAY_URL está vacía o no empieza con https://. Pegá la dirección que dio «wrangler deploy».';
+  if (RELAY_SECRET.length < 32) return 'RELAY_SECRET tiene menos de 32 caracteres. Pegá la misma clave que guardaste con «wrangler secret put».';
+  const endpoint = props.getProperty(DOORBELL_ENDPOINT);
+  if (!endpoint) return 'El script no tiene el endpoint del timbre. En Insto, apagá y encendé el timbre.';
+  if (!props.getProperty(DOORBELL_P256DH) || !props.getProperty(DOORBELL_AUTH))
+    return 'Insto todavía no le pasó sus claves de cifrado al script. En Insto, apagá y encendé «Incluir la orden en el timbre».';
+  if (props.getProperty(DOORBELL_WITH_ORDER) !== '1')
+    return 'El relé está bien configurado, pero «Incluir la orden en el timbre» está apagado en Insto. Encendelo.';
+  const r = relay_(endpoint, DOORBELL_PAYLOAD, props);
+  if (r.code >= 200 && r.code < 300) return 'El relé anda: el timbre salió cifrado por el relé (HTTP ' + r.code + '). ' +
+    'Si Insto sigue diciendo «Sin relé», en Insto apagá y encendé «Incluir la orden en el timbre» para que el script se lo confirme.';
+  const why = {
+    secreto: 'el relé rechazó la clave: RELAY_SECRET no es igual a la que guardaste con «wrangler secret put». Copiá la misma en los dos lados',
+    'sin-configurar': 'al relé le falta la clave: ejecutá «npx wrangler secret put RELAY_SECRET» y después «npx wrangler deploy»',
+    endpoint: 'el relé no puede publicar en el servidor de tu timbre: agregá su host a ALLOWED_HOSTS en wrangler.toml y volvé a hacer «npx wrangler deploy»',
+    claves: 'las claves de Insto no son válidas: en Insto, apagá y encendé el timbre',
+    push: 'el relé no pudo llegar al servidor del timbre (ntfy)',
+  }[r.error] || ('el relé respondió con error' + (r.error ? ' (' + r.error + ')' : '') + (r.code > 0 ? ' (HTTP ' + r.code + ')' : ''));
+  return 'El relé no anda: ' + why + '. Después de cambiar el script, implementá una versión nueva.';
 }
 
 /**
