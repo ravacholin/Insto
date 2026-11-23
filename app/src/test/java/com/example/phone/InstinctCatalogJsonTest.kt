@@ -11,27 +11,30 @@ import org.junit.Test
 class InstinctCatalogJsonTest {
   private val parser = PhoneCommandParser()
   private fun json(routines: List<String> = emptyList(), autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(),
-    channels: InstinctCatalogChannels = InstinctCatalogChannels()) = InstinctProtocolCatalog.json(routines, autonomy, channels, "1.18.0")
+    channels: InstinctCatalogChannels = InstinctCatalogChannels()) = InstinctProtocolCatalog.json(routines, autonomy, channels, "1.21.0")
 
   /** Every «orden» in the catalog, in order. */
   private fun orders(o: JSONObject): List<String> {
     fun list(a: JSONArray) = (0 until a.length()).map { a.getJSONObject(it).getString("orden") }
     val forms = o.getJSONObject("formas")
     return list(o.getJSONArray("acciones")) + listOf("diferidas", "clima", "disparadores", "recurrentes").flatMap { list(forms.getJSONArray(it)) } +
-      list(o.getJSONArray("rutinas")) + list(o.getJSONArray("consultas"))
+      o.getJSONObject("preguntas").getString("orden") + list(o.getJSONArray("rutinas")) + list(o.getJSONArray("consultas"))
   }
 
   @Test fun `every example is a valid order, without the prefix, from the same source as the text`() {
     val o = JSONObject(json().canonical)
     val all = orders(o)
     val queries = ProposalCheck.QueryKind.entries.map { it.form }
-    assertEquals(InstinctProposalValidator.examples + queries, all)
+    assertEquals(InstinctProposalValidator.examples + InstinctProtocolCatalog.QUESTION_EXAMPLE + queries, all)
     for (order in InstinctProposalValidator.examples) {
       assertFalse(order, order.startsWith("#insto"))
       // Recurring examples end on 13/12 and 15/12: checked on 21/11/2026, like the text catalog.
       val now = if (order.contains(" hasta el ")) Calendar.getInstance().apply { set(2026, Calendar.NOVEMBER, 21, 10, 0, 0) } else Calendar.getInstance()
       assertTrue(order, InstinctProposalValidator.check(order, parser, now) is ProposalCheck.Valid)
     }
+    val question = o.getJSONObject("preguntas")
+    assertTrue(InstinctProposalValidator.check(question.getString("orden"), parser) is ProposalCheck.Question)
+    assertEquals("bitacora", question.getString("respuesta_por"))
     // Every immediate action says its category, the same as the autonomy uses.
     val acciones = o.getJSONArray("acciones")
     (0 until acciones.length()).forEach { assertTrue(acciones.getJSONObject(it).toString(), acciones.getJSONObject(it).optString("categoria") in InstinctCategory.entries.map { c -> c.label }) }
@@ -95,8 +98,8 @@ class InstinctCatalogJsonTest {
     assertFalse(c.getBoolean("whatsapp")); assertTrue(c.getBoolean("bitacora")); assertTrue(c.getBoolean("buzon"))
     assertTrue(c.getBoolean("timbre")); assertTrue(c.getBoolean("orden_en_timbre"))
     assertEquals("siempre", c.getString("acuses")); assertEquals("bitacora", c.getString("acuses_por"))
-    assertEquals("Protocolo Insto v6", o.getString("protocolo")); assertEquals(6, o.getInt("version_protocolo"))
-    assertEquals("1.18.0", o.getString("version_insto"))
+    assertEquals("Protocolo Insto v7", o.getString("protocolo")); assertEquals(7, o.getInt("version_protocolo"))
+    assertEquals("1.21.0", o.getString("version_insto"))
     assertTrue("well under the script's 45 000 characters", json(listOf("Estudio"), policy).published("2026-11-22T08:40:00-03:00").length < 20_000)
   }
 
@@ -110,8 +113,8 @@ class InstinctCatalogJsonTest {
 
   @Test fun `ver catálogo says the published hash`() {
     val hash = "a".repeat(64)
-    assertEquals("Protocolo Insto v6 · rutinas habilitadas: ninguna. Catálogo publicado: hash $hash.", InstinctProtocolCatalog.summary(emptyList(), hash))
-    assertEquals("Protocolo Insto v6 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
+    assertEquals("Protocolo Insto v7 · rutinas habilitadas: ninguna. Catálogo publicado: hash $hash.", InstinctProtocolCatalog.summary(emptyList(), hash))
+    assertEquals("Protocolo Insto v7 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
   }
 
   @Test fun `the text catalog points at the live one only with the log, without address in the chat copy`() {

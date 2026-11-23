@@ -90,6 +90,7 @@
     }
   ],
   "autonomia": {
+    "Preguntas": "solo",
     "abrir apps y búsquedas": "solo",
     "alarmas y temporizadores": "solo",
     "avisos para vos": "solo",
@@ -209,7 +210,7 @@
       }
     ]
   },
-  "hash": "6758b690311444653bfb93427ba1ef288566b0c36524860410ecf8864ac59b28",
+  "hash": "9a0c16952588dd0d16570efc94d441afbc8596973a83074bf607e42f2c20fb86",
   "horas_de_silencio": null,
   "limites": {
     "atraso_minutos_max": 15,
@@ -226,6 +227,14 @@
     "lluvia_por_ciento": 50,
     "orden_caracteres_en_acuse": 80,
     "ordenes_automaticas_cada_10_minutos": 6,
+    "pregunta_caracteres_max": 140,
+    "pregunta_horas": 2,
+    "pregunta_horas_max": 24,
+    "pregunta_opcion_caracteres_max": 24,
+    "pregunta_opciones_max": 3,
+    "pregunta_opciones_min": 2,
+    "preguntas_pendientes": 3,
+    "preguntas_por_hora": 5,
     "programadas": 10,
     "pruebas_cada_10_minutos": 20,
     "recurrente_dias_max": 30,
@@ -233,6 +242,22 @@
     "rutina_pasos_max": 6
   },
   "prefijo": "#insto ",
+  "preguntas": {
+    "categoria": "Preguntas",
+    "espera_en_horas_de_silencio": true,
+    "forma": "preguntar <texto> | <opción 1> | <opción 2> [| <opción 3>]",
+    "orden": "preguntar ¿Preferís café o té? | Café | Té en 2 horas",
+    "reglas": [
+      "Preguntá cuando no esté claro qué hacer o cuando la decisión sea personal. Si ya tenés permiso y la acción es clara, hacela directamente. Si una pregunta vence o la descartan, no la repitas ni insistas.",
+      "Requiere bitácora. Las respuestas se anotan solo ahí, incluso si la pregunta llegó por chat y los acuses están apagados. En las filas de tipo «respuesta», evento_id es el id de ejecución, orden es la pregunta completa, detalle es la opción elegida, «vencida» o «descartada», y ocurrido es la hora en UTC."
+    ],
+    "requiere_bitacora": true,
+    "respuesta_por": "bitacora",
+    "vencimiento": [
+      "hasta las HH:MM",
+      "en N horas"
+    ]
+  },
   "prohibido": [
     "llamadas",
     "mensajes de cualquier tipo",
@@ -242,12 +267,12 @@
     "rutinas que no están habilitadas",
     "varias acciones juntas"
   ],
-  "protocolo": "Protocolo Insto v6",
+  "protocolo": "Protocolo Insto v7",
   "reglas": [
     "Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después.",
     "Si no estás seguro de una forma o de si va a quedar esperando, probala antes con \"probar <orden>\"."
   ],
   "rutinas": [],
-  "version_insto": "1.18.0",
-  "version_protocolo": 6
+  "version_insto": "1.21.0",
+  "version_protocolo": 7
 }

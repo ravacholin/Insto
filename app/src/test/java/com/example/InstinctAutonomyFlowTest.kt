@@ -96,11 +96,11 @@ class InstinctAutonomyFlowTest {
   private fun titles() = posted().map { it.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "" }
   private fun volume() = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
 
-  @Test fun `askFirst on migrates to Confirmar everywhere and its file is deleted`() {
+  @Test fun `askFirst on keeps confirmation for existing categories and its file is deleted`() {
     File(app.noBackupFilesDir, InstinctAutonomySettings.FILE).delete()
     val legacy = File(app.noBackupFilesDir, InstinctAutonomySettings.LEGACY_FILE).apply { writeText("true") }
     val policy = autonomy.policy()
-    for (c in InstinctCategory.entries) assertEquals(InstinctAutonomy.CONFIRMAR, policy.level(c))
+    for (c in InstinctCategory.entries.filterNot { it == InstinctCategory.PREGUNTAS }) assertEquals(InstinctAutonomy.CONFIRMAR, policy.level(c))
     assertFalse(legacy.exists())
     assertTrue(File(app.noBackupFilesDir, InstinctAutonomySettings.FILE).exists())
   }

@@ -66,7 +66,22 @@ object InstinctLog {
   private val shared by lazy { InstinctLogClient() }
   private val drainLock = Any()
 
-  fun outbox(context: Context) = InstinctLogOutbox(File(context.applicationContext.noBackupFilesDir, InstinctLogOutbox.FILE))
+  private val outboxes = java.util.concurrent.ConcurrentHashMap<File, InstinctLogOutbox>()
+
+  fun outbox(context: Context): InstinctLogOutbox {
+    val file = File(context.applicationContext.noBackupFilesDir, InstinctLogOutbox.FILE)
+    return outboxes.computeIfAbsent(file, ::InstinctLogOutbox)
+  }
+
+  internal fun questionCompleted(context: Context) {
+    runCatching { schedule(context.applicationContext) }
+  }
+
+  internal fun recoverQuestionReplies(context: Context) {
+    val settings = InstinctLogSettings(context)
+    if (settings.configured() && InstinctExecutions.existingJournal(context)?.pendingQuestionReplies()?.isNotEmpty() == true &&
+      context.getSystemService(JobScheduler::class.java)?.getPendingJob(JOB_ID) == null) questionCompleted(context)
+  }
 
   /** Writes [entries] about message [message] to the outbox and arms the job. Never throws. */
   /** The message id of the last acknowledgements queued: only for «Probar de punta a punta» (1.19.0). Never content. */
@@ -102,7 +117,19 @@ object InstinctLog {
   private fun drainLocked(app: Context): Boolean {
     val box = outbox(app)
     val settings = InstinctLogSettings(app)
+    val journal = InstinctExecutions.existingJournal(app)
     while (true) {
+      // The existing outbox can evict old events. Keep each answer in its execution until Sheets confirms it.
+      synchronized(box) {
+        val queued = box.read().events
+        val available = InstinctLogOutbox.CAPACITY - queued.size
+        if (available > 0 && journal != null) {
+          val ids = queued.mapTo(HashSet()) { it.id }
+          val responses = runCatching { journal.pendingQuestionReplies(InstinctLogOutbox.CAPACITY) }.getOrDefault(emptyList())
+            .mapNotNull(InstinctLogEvents::questionResponse).filterNot { it.id in ids }
+          box.add(responses.take(available))
+        }
+      }
       val batch = box.batch()
       if (batch.isEmpty()) return false
       val url = settings.url()
@@ -113,6 +140,8 @@ object InstinctLog {
         is InstinctLogClient.Result.Accepted -> {
           // An answer that confirms nothing would loop forever: it is invalid.
           if (result.ids.isEmpty()) { status(app, InstinctLogClient.Result.Failed(InstinctLogClient.Failure.INVALID)); return true }
+          val responses = batch.filter { it.kind == InstinctLogEvents.RESPONSE_KIND && it.id in result.ids }.mapTo(HashSet()) { it.id }
+          if (responses.isNotEmpty()) journal?.markQuestionReplies(responses)
           box.remove(result.ids)
           status(app, result)
         }
@@ -173,7 +202,10 @@ object InstinctLog {
   }
 
   /** After a boot: the job again, only if something is pending. */
-  fun rearm(context: Context) { if (outbox(context).size() > 0) schedule(context.applicationContext) }
+  fun rearm(context: Context) {
+    if (outbox(context).size() > 0 || runCatching { InstinctExecutions.existingJournal(context)?.pendingQuestionReplies()?.isNotEmpty() == true }.getOrDefault(false))
+      schedule(context.applicationContext)
+  }
 
   private fun scheduleJob(context: Context) {
     val scheduler = context.getSystemService(JobScheduler::class.java) ?: return

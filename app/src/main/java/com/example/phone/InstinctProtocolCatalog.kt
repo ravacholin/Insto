@@ -100,11 +100,11 @@ internal object InstinctCatalogCanonical {
 
 object InstinctProtocolCatalog {
   /** 1.20.0: the execution journal, as Instinct reads it. */
-  const val EXECUTIONS_LINE = "«ver ejecuciones» lista las últimas órdenes con un id de 9 caracteres (e y 8 dígitos hexadecimales), su estado (recibida, validada, espera, programada, lista, despachando, verificando, verificada, entregada, incierta, fallida, cancelada o vencida), la hora, de dónde llegó, la orden y el resultado; «estado de ejecución <id>» muestra una sola."
+  const val EXECUTIONS_LINE = "«ver ejecuciones» lista las últimas órdenes con un id de 9 caracteres (e y 8 dígitos hexadecimales), su estado (recibida, validada, espera, programada, lista, despachando, verificando, verificada, entregada, incierta, fallida, cancelada, vencida, por confirmar, preguntando o respondida), la hora, de dónde llegó, la orden y el resultado; «estado de ejecución <id>» muestra una sola. El texto de las preguntas y sus resultados está disponible en Insto y por la bitácora."
   /** 1.20.0: what an «ok» says about the result. */
   const val OUTCOMES_LINE = "Cómo leer un resultado: «Verificado: …» es que Insto leyó el teléfono y quedó como pediste; «Entregado; Insto no puede comprobar el resultado final.» es que otra app (el Reloj, el calendario, una búsqueda, la música) o Android lo aceptó, pero no se puede saber si lo hizo; «No se logró: …» llega como error; «(recuperada tras reiniciarse Insto)» es un resultado que Insto informa después de un reinicio. Una orden incierta nunca se repite sola."
 
-  const val VERSION = 6
+  const val VERSION = 7
   const val TITLE = "Protocolo Insto v$VERSION"
   const val ROUTINE_FORM = "ejecutar la rutina"
   /** Marks example lines in a copy sent through WhatsApp, so that copy never reads as orders for Insto. */
@@ -146,7 +146,7 @@ object InstinctProtocolCatalog {
       appendLine("Reglas:")
       appendLine("- Cada orden va sola en su propia línea y la línea empieza con \"${InstinctProposalProtocol.PREFIX} \" (en minúsculas, seguido de un espacio). Nunca pongas \"${InstinctProposalProtocol.PREFIX}\" en medio de una oración ni lo uses como ejemplo en el texto.")
       appendLine("- Como máximo ${InstinctProposalProtocol.MAX_LINES} líneas de orden por mensaje. Insto ignora las demás. Más de 6 órdenes en 10 minutos quedan esperando confirmación.")
-      appendLine("- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin negaciones, sin preguntas, sin \"y\" para encadenar acciones y sin otras condiciones que las del clima de más abajo.")
+      appendLine("- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin negaciones, sin \"y\" para encadenar acciones y sin otras condiciones que las del clima de más abajo. Para hacer una pregunta usá solo la forma «preguntar».")
       appendLine("- Horas en formato de 24 horas (07:00, 17:30). Duraciones con número y unidad (25 minutos, una hora). Volumen en porcentaje (30 por ciento).")
       appendLine("- Insto solo lee esas líneas: el resto de tu mensaje no se interpreta. Si una línea no se entiende o no está permitida, se descarta.")
       appendLine("- Para más tarde, envolvé la orden: \"a las HH:MM: <orden>\" (24 horas; si esa hora ya pasó hoy, es mañana) o \"en N minutos: <orden>\" / \"en N horas: <orden>\" (de 1 minuto a 24 horas). Los dos puntos después del tiempo son obligatorios. Como máximo ${InstinctDeferral.MAX_SCHEDULED} órdenes programadas.")
@@ -159,6 +159,15 @@ object InstinctProtocolCatalog {
       appendLine()
       appendLine("Acciones permitidas (usá estas formas):")
       InstinctProposalValidator.examples.forEach { appendLine(example(it)) }
+      appendLine()
+      appendLine("Preguntas con opciones:")
+      appendLine("Formato: «${InstinctProposalProtocol.PREFIX} ${InstinctQuestion.FORM}».")
+      appendLine(example(QUESTION_EXAMPLE))
+      appendLine(QUESTION_USE)
+      appendLine("Una pregunta por línea, de hasta ${InstinctQuestion.MAX_TEXT} caracteres y con 2 o 3 opciones de hasta ${InstinctQuestion.MAX_OPTION} caracteres cada una. Sin respuesta libre. Vence en ${InstinctQuestion.DEFAULT_HOURS} horas salvo que agregues «hasta las HH:MM» o «en N horas» al final (máximo ${InstinctQuestion.MAX_HOURS} horas). No la programes ni la envuelvas en un disparador.")
+      appendLine("Hasta ${InstinctQuestion.MAX_PENDING} pendientes y ${InstinctQuestion.PER_HOUR} en una hora. Durante las horas de silencio espera y, si vence antes, se anota como vencida. La categoría Preguntas puede pedir una vista previa o rechazarla.")
+      appendLine(QUESTION_RESULT)
+      appendLine("Leé las respuestas en la bitácora con GET <URL>?token=<token>&since=<ISO>&limit=50. «probar preguntar …» valida la forma sin mostrar una notificación.")
       appendLine()
       appendLine("Rutinas que la persona te habilitó (usá el nombre exacto; se ejecutan paso por paso, se detienen en el primer paso que falla y cuentan como una sola orden):")
       if (routines.isEmpty()) appendLine("(ninguna por ahora)")
@@ -217,9 +226,10 @@ object InstinctProtocolCatalog {
         appendLine("${AckKind.ERROR.code}: no se ejecutó (no se entendió, no está permitida o falló).")
         appendLine("${AckKind.UNCERTAIN.code}: pudo haberse hecho; Insto no la repite.")
         appendLine("${AckKind.SCHEDULED.code}: quedó programada; detalle dice cuándo (la hora, el disparador o la recurrencia).")
+        appendLine("${InstinctLogEvents.RESPONSE_KIND}: respuesta a una pregunta (ver «Preguntas con opciones»).")
         appendLine("${InstinctState.KIND}: el estado del teléfono (ver «Estado del teléfono»); no es el resultado de una orden.")
         appendLine("Después de una espera o de una orden programada puede llegar otro evento de la misma orden: ${AckKind.OK.code}, ${AckKind.ERROR.code}, ${AckKind.DISCARDED.code} o ${AckKind.EXPIRED.code}, aunque haya pasado mucho tiempo. Si la persona deshace lo que hiciste, llega ${AckKind.UNDONE.code}.")
-        appendLine("orden es tu orden (recortada a ${InstinctAck.MAX_ORDER_CHARS} caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).")
+        appendLine("En los acuses, orden es tu orden (recortada a ${InstinctAck.MAX_ORDER_CHARS} caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).")
         append("Los eventos son informativos: no los respondas con nuevas órdenes, salvo una sola orden corregida después de un ${AckKind.ERROR.code}. Nunca repitas una orden después de ${AckKind.UNCERTAIN.code} ni de ${AckKind.WAITING.code}. Antes de repetir o corregir una orden, consultá la bitácora.")
       }
     }
@@ -232,6 +242,10 @@ object InstinctProtocolCatalog {
   fun summary(routines: List<String>, publishedHash: String? = null): String =
     "$TITLE · rutinas habilitadas: " + (if (routines.isEmpty()) "ninguna." else routines.joinToString(", ") + ".") +
       (publishedHash?.let { " Catálogo publicado: hash $it." } ?: "")
+
+  internal const val QUESTION_EXAMPLE = "preguntar ¿Preferís café o té? | Café | Té en 2 horas"
+  private const val QUESTION_USE = "Preguntá cuando no esté claro qué hacer o cuando la decisión sea personal. Si ya tenés permiso y la acción es clara, hacela directamente. Si una pregunta vence o la descartan, no la repitas ni insistas."
+  private const val QUESTION_RESULT = "Requiere bitácora. Las respuestas se anotan solo ahí, incluso si la pregunta llegó por chat y los acuses están apagados. En las filas de tipo «respuesta», evento_id es el id de ejecución, orden es la pregunta completa, detalle es la opción elegida, «vencida» o «descartada», y ocurrido es la hora en UTC."
 
   const val TRIGGER_RULE = "Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después."
 
@@ -275,6 +289,16 @@ object InstinctProtocolCatalog {
         "disparadores" to InstinctProposalValidator.triggerExamples.map { mapOf("orden" to it) },
         "recurrentes" to InstinctProposalValidator.recurringExamples.map { mapOf("orden" to it) },
       ),
+      "preguntas" to mapOf(
+        "forma" to InstinctQuestion.FORM,
+        "orden" to QUESTION_EXAMPLE,
+        "categoria" to InstinctCategory.PREGUNTAS.label,
+        "vencimiento" to listOf("hasta las HH:MM", "en N horas"),
+        "respuesta_por" to "bitacora",
+        "requiere_bitacora" to true,
+        "espera_en_horas_de_silencio" to true,
+        "reglas" to listOf(QUESTION_USE, QUESTION_RESULT),
+      ),
       "consultas" to ProposalCheck.QueryKind.entries.map { mapOf("orden" to it.form, "solo_lectura" to it.readOnly) },
       "rutinas" to routines.map { mapOf("nombre" to it, "orden" to "$ROUTINE_FORM $it") },
       "limites" to mapOf(
@@ -294,6 +318,14 @@ object InstinctProtocolCatalog {
         "buzon_ordenes_por_sondeo" to InstinctMailboxPoll.MAX_ORDERS,
         "buzon_antiguedad_minutos_max" to (InstinctMailboxSignature.MAX_AGE_MILLIS / 60_000).toInt(),
         "buzon_futuro_minutos_max" to (InstinctMailboxSignature.MAX_FUTURE_MILLIS / 60_000).toInt(),
+        "preguntas_pendientes" to InstinctQuestion.MAX_PENDING,
+        "preguntas_por_hora" to InstinctQuestion.PER_HOUR,
+        "pregunta_caracteres_max" to InstinctQuestion.MAX_TEXT,
+        "pregunta_opcion_caracteres_max" to InstinctQuestion.MAX_OPTION,
+        "pregunta_opciones_min" to 2,
+        "pregunta_opciones_max" to 3,
+        "pregunta_horas" to InstinctQuestion.DEFAULT_HOURS,
+        "pregunta_horas_max" to InstinctQuestion.MAX_HOURS,
         "avisos_por_hora" to InstinctNotice.PER_HOUR,
         "aviso_caracteres_max" to InstinctNotice.MAX_CHARS,
         "pruebas_cada_10_minutos" to InstinctProbe.PER_PERIOD,

@@ -13,6 +13,11 @@ enum class ExecutionState(val code: String) {
   VALIDATED("validada"),
   /** Waits for the person: Confirmar, the quiet hours, a choice or a permission. */
   WAITING("espera"),
+  /** A question awaiting approval of its preview in Insto. */
+  QUESTION_CONFIRM("por confirmar"),
+  /** A question awaiting an option, possibly held by quiet hours. */
+  ASKING("preguntando"),
+  ANSWERED("respondida"),
   /** A deferred order or a recurrence, stored to fire later. */
   SCHEDULED("programada"),
   /** Offered to the gate in this process; nothing touched yet. */
@@ -38,7 +43,7 @@ enum class ExecutionState(val code: String) {
   val terminal: Boolean get() = this in TERMINAL
 
   companion object {
-    val TERMINAL = setOf(VERIFIED, HANDED_OFF, UNCERTAIN, FAILED, CANCELLED, EXPIRED)
+    val TERMINAL = setOf(VERIFIED, HANDED_OFF, UNCERTAIN, FAILED, CANCELLED, EXPIRED, ANSWERED)
     fun of(name: String?): ExecutionState? = entries.firstOrNull { it.name == name }
   }
 }
@@ -169,6 +174,9 @@ object ExecutionIds {
   /** WhatsApp has no message id: Insto's own, unique per accepted notification. */
   fun whatsapp(messageHash: String, receivedAt: Long, nonce: String): String = "wa:$messageHash:$receivedAt:$nonce"
 
+  /** A notification containing a question keeps its claim across process death and notification reposts. */
+  fun whatsappQuestion(messageHash: String, sentAt: Long?): String = whatsapp(messageHash, sentAt ?: 0L, "")
+
   /** One occurrence of a scheduled order: its store id is unique per occurrence. */
   fun occurrence(scheduledId: String): String = "sched:$scheduledId"
 }
@@ -183,6 +191,10 @@ object ExecutionTransitions {
 
   fun allowed(from: ExecutionState, to: ExecutionState): Boolean = when {
     from.terminal -> false
+    from == ExecutionState.QUESTION_CONFIRM -> to == ExecutionState.ASKING || to == ExecutionState.CANCELLED || to == ExecutionState.EXPIRED
+    from == ExecutionState.ASKING -> to == ExecutionState.ANSWERED || to == ExecutionState.CANCELLED || to == ExecutionState.EXPIRED
+    to == ExecutionState.ANSWERED -> false
+    to in InstinctQuestion.PENDING -> from == ExecutionState.VALIDATED
     from == to -> to != ExecutionState.DISPATCHING
     to == ExecutionState.DISPATCHING -> from in NOT_DISPATCHED
     from == ExecutionState.DISPATCHING -> to == ExecutionState.VERIFYING || to.terminal || to == ExecutionState.WAITING
@@ -209,20 +221,24 @@ object ExecutionJournalPolicy {
 
 /** «ver ejecuciones» and «estado de ejecución <id>»: one line per execution, without data of the phone. */
 object ExecutionText {
-  fun line(record: ExecutionRecord, now: Long, clock: (Long) -> String): String {
+  fun line(record: ExecutionRecord, now: Long, clock: (Long) -> String): String = line(record, now, true, clock)
+
+  internal fun line(record: ExecutionRecord, now: Long, showQuestion: Boolean, clock: (Long) -> String): String {
+    val age = if (now >= record.updatedAt) clock(record.updatedAt) else "?"
+    val status = "${record.shortId} ${record.state.code} ($age, ${record.transport.code})"
+    if (!showQuestion && InstinctQuestion.isRelated(record.line)) return "$status · detalle en la bitácora"
     val what = InstinctAck.flat(record.line.removePrefix(InstinctProposalProtocol.PREFIX).trim()).take(60)
     val why = (record.reason ?: record.result)?.let { " · " + InstinctAck.flat(it).trimEnd('.').take(90) }.orEmpty()
     val attribution = record.attribution?.takeIf { record.state == ExecutionState.VERIFIED }?.let { " · ${it.label}" }.orEmpty()
-    val age = if (now >= record.updatedAt) clock(record.updatedAt) else "?"
-    return "${record.shortId} ${record.state.code} ($age, ${record.transport.code}): $what$why$attribution"
+    return "$status: $what$why$attribution"
   }
 
   fun list(records: List<ExecutionRecord>, now: Long, clock: (Long) -> String): String =
     if (records.isEmpty()) "No hay ejecuciones registradas en los últimos 7 días."
-    else records.joinToString(" | ") { line(it, now, clock) }
+    else records.joinToString(" | ") { line(it, now, clock = clock) }
 
   fun status(record: ExecutionRecord?, shortId: String, now: Long, clock: (Long) -> String): String =
-    record?.let { line(it, now, clock) } ?: "No hay ninguna ejecución $shortId en los últimos 7 días."
+    record?.let { line(it, now, clock = clock) } ?: "No hay ninguna ejecución $shortId en los últimos 7 días."
 }
 
 /** The recovery's decisions, pure. */
@@ -234,6 +250,7 @@ object ExecutionRecoveryPolicy {
     data object Verify : Action
     /** A confirmation still in its time: offered again, still waiting for the person. */
     data object RestoreWaiting : Action
+    data object RefreshQuestion : Action
     /** A scheduled row: compared with what the scheduler still holds. */
     data object Reconcile : Action
     data class Settle(val state: ExecutionState, val reason: String) : Action
@@ -251,7 +268,7 @@ object ExecutionRecoveryPolicy {
   /** [effect] is the effect of the row's command, when it is known (it is stored when the dispatch begins). */
   fun decide(row: ExecutionRecord, now: Long, effect: ActionEffect? = null): Action = when (row.state) {
     ExecutionState.RECEIVED, ExecutionState.VALIDATED, ExecutionState.READY ->
-      if (inTime(row, now)) Action.Resume else Action.Settle(ExecutionState.EXPIRED, LAPSED)
+      if (InstinctQuestion.isOrder(row.line) || inTime(row, now)) Action.Resume else Action.Settle(ExecutionState.EXPIRED, LAPSED)
     // Maybe it touched the phone: never again. A set can be read back; anything else stays uncertain.
     ExecutionState.DISPATCHING -> when (effect) {
       ActionEffect.IDEMPOTENT_SET -> Action.Verify
@@ -263,6 +280,7 @@ object ExecutionRecoveryPolicy {
     ExecutionState.WAITING ->
       if (now - row.updatedAt in 0 until ExecutionJournalPolicy.WAITING_TTL_MILLIS) Action.RestoreWaiting
       else Action.Settle(ExecutionState.EXPIRED, WAIT_LAPSED)
+    ExecutionState.QUESTION_CONFIRM, ExecutionState.ASKING -> Action.RefreshQuestion
     ExecutionState.SCHEDULED -> Action.Reconcile
     else -> Action.Leave
   }

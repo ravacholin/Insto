@@ -61,8 +61,9 @@ internal fun proposalReadingExplanation(contactName: String): String =
     "mensaje usa únicamente las líneas que empiezan con «#insto»; el resto no se interpreta. Las notificaciones de " +
     "otras apps, de grupos y de otros contactos se descartan sin leer su contenido. Las acciones permitidas (alarmas, " +
     "temporizadores, volumen, linterna, silencio, música, abrir apps, buscar en Spotify o YouTube, eventos) se ejecutan " +
-    "sin preguntarte y después te llega un aviso. Nunca llamadas, mensajes ni archivos. El texto no se guarda, no se " +
-    "registra y no sale del teléfono."
+    "según la autonomía que elijas. Instinct también puede hacerte preguntas con opciones si configuraste la bitácora. " +
+    "La pregunta y tu respuesta quedan en el diario de Insto y se comparten con Instinct por la bitácora. " +
+    "Instinct no puede pedir llamadas, mensajes ni archivos."
 
 /** Configuración → Propuestas de Instinct. A separate opt-in, off by default. */
 @Composable

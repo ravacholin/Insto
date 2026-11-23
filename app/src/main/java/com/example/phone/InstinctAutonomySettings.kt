@@ -23,7 +23,7 @@ class InstinctAutonomySettings(context: Context) {
       val stored = runCatching { InstinctAutonomyPolicy.decode(file.readText()) }.getOrNull()
       if (legacy.exists()) legacy.delete()
       // An unreadable file fails safe: everything waits for Confirmar until the person chooses again.
-      return stored ?: InstinctAutonomyPolicy.migrated(askFirst = true)
+      return stored ?: InstinctAutonomyPolicy.migrated(askFirst = true).with(InstinctCategory.PREGUNTAS, InstinctAutonomy.CONFIRMAR)
     }
     val migrated = InstinctAutonomyPolicy.migrated(runCatching { legacy.readText() == "true" }.getOrDefault(false))
     runCatching { write(migrated) }
@@ -39,17 +39,38 @@ class InstinctAutonomySettings(context: Context) {
     if (level == InstinctAutonomy.SOLO && before.level(category) != InstinctAutonomy.SOLO) InstinctTrust.reset(app, category)
     // «Nunca» cancels whole every recurrence it now refuses (1.17.0).
     if (level == InstinctAutonomy.NUNCA) runCatching { InstinctScheduler.cancelRefused(app) }
+    if (category == InstinctCategory.PREGUNTAS) InstinctQuestionNotifications.recoverSoon(app)
     InstinctCatalogPublisher.changed(app)
   }
 
   fun setAll(level: InstinctAutonomy) = InstinctCategory.entries.forEach { set(it, level) }
 
-  fun setQuiet(value: QuietHours?) { synchronized(LOCK) { write(policy().copy(quiet = value)) }; InstinctCatalogPublisher.changed(app) }
+  fun setQuiet(value: QuietHours?) {
+    synchronized(LOCK) { write(policy().copy(quiet = value)) }
+    InstinctQuestionNotifications.recoverSoon(app)
+    InstinctCatalogPublisher.changed(app)
+  }
   fun setSilenceInQuiet(value: Boolean) { synchronized(LOCK) { write(policy().copy(silenceInQuiet = value)) }; InstinctCatalogPublisher.changed(app) }
 
   /** The ledger lowered [category]: Confirmar, marked «Ajustada automáticamente». */
-  internal fun lower(category: InstinctCategory, at: Long) {
-    synchronized(LOCK) { write(policy().with(category, InstinctAutonomy.CONFIRMAR, adjustedAt = at)) }
+  internal fun lower(category: InstinctCategory, at: Long): Boolean {
+    synchronized(LOCK) {
+      val current = policy()
+      if (current.level(category) != InstinctAutonomy.SOLO) return false
+      write(current.with(category, InstinctAutonomy.CONFIRMAR, adjustedAt = at))
+    }
+    InstinctCatalogPublisher.changed(app)
+    return true
+  }
+
+  internal fun restoreQuestionSolo() {
+    synchronized(LOCK) {
+      val current = policy()
+      if (current.level(InstinctCategory.PREGUNTAS) != InstinctAutonomy.CONFIRMAR ||
+        InstinctCategory.PREGUNTAS !in current.adjusted) return
+      write(current.with(InstinctCategory.PREGUNTAS, InstinctAutonomy.SOLO))
+    }
+    InstinctTrust.reset(app, InstinctCategory.PREGUNTAS)
     InstinctCatalogPublisher.changed(app)
   }
 
@@ -106,7 +127,8 @@ object InstinctTrust {
       data class After(val lowering: InstinctTrustLedger.Lowering?, val token: String?, val suggest: Boolean)
       val after = update(app) { ledger ->
         ledger.record(category, event)
-        val lowering = if (event == TrustEvent.EJECUTADA || event == TrustEvent.DESHECHA) ledger.lowering(category, level) else null
+        val lowering = if (event == TrustEvent.EJECUTADA || event == TrustEvent.DESHECHA || category == InstinctCategory.PREGUNTAS)
+          ledger.lowering(category, level) else null
         when {
           lowering != null -> After(lowering, ledger.issue(InstinctTrustLedger.Action.RESTORE, category), false)
           event == TrustEvent.CONFIRMADA && ledger.suggestsRaise(category, level) -> {
@@ -117,8 +139,11 @@ object InstinctTrust {
         }
       }
       if (after.lowering != null && after.token != null) {
-        settings.lower(category, now)
-        notify(app, category, "Instinct va a pedirte confirmación para ${category.label}: deshiciste ${after.lowering.undone} de ${after.lowering.executed}",
+        if (!settings.lower(category, now)) return@runCatching
+        val title = if (category == InstinctCategory.PREGUNTAS)
+          "Instinct va a pedirte confirmación: quedaron ${after.lowering.undone} preguntas sin responder"
+        else "Instinct va a pedirte confirmación para ${category.label}: deshiciste ${after.lowering.undone} de ${after.lowering.executed}"
+        notify(app, category, title,
           "Podés volver a dejarlo en automático acá o en Ajustes → Propuestas de Instinct → Autonomía.",
           listOf("Volver a automático" to Intent(ACTION_RESTORE)), after.token)
       } else if (after.suggest && after.token != null) {
@@ -138,7 +163,11 @@ object InstinctTrust {
     val kind = if (action == ACTION_RESTORE) InstinctTrustLedger.Action.RESTORE else InstinctTrustLedger.Action.SUGGEST
     val pending = runCatching { update(app) { it.redeem(token, kind) } }.getOrNull() ?: return false
     when (action) {
-      ACTION_RESTORE, ACTION_RAISE_YES -> InstinctAutonomySettings(app).set(pending.category, InstinctAutonomy.SOLO)
+      ACTION_RESTORE, ACTION_RAISE_YES -> {
+        val settings = InstinctAutonomySettings(app)
+        if (pending.category == InstinctCategory.PREGUNTAS) settings.restoreQuestionSolo()
+        else settings.set(pending.category, InstinctAutonomy.SOLO)
+      }
       ACTION_RAISE_NO -> runCatching { update(app) { it.snooze(pending.category) } }
       else -> return false
     }

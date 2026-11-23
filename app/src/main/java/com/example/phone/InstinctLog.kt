@@ -53,6 +53,15 @@ data class InstinctLogEvent(
 
 object InstinctLogEvents {
   const val TEST_KIND = "prueba"
+  const val RESPONSE_KIND = "respuesta"
+
+  /** The journal's id doubles as the event id, including after a lost HTTP response. */
+  fun questionResponse(record: ExecutionRecord): InstinctLogEvent? {
+    val question = InstinctQuestion.decode(record.command, record.deadline) ?: return null
+    val answer = record.result ?: return null
+    return InstinctLogEvent(record.executionId, iso(record.updatedAt, TimeZone.getTimeZone("UTC")),
+      RESPONSE_KIND, question.text, answer, "", "").takeIf(::safe)
+  }
   /** Length of the message id: the first hex digits of the SHA-256 the dedupe already computes. */
   const val MESSAGE_ID_CHARS = 12
 

@@ -36,7 +36,8 @@ sealed interface ProposalCheck {
   data class Query(override val order: String, val kind: QueryKind, val argument: String? = null) : ProposalCheck
   /** «avisarme <texto>» (1.16.0): a local notice for the person, allowed only from the signed mailbox. */
   data class Notice(override val order: String, val text: String) : ProposalCheck
-  enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN }
+  data class Question(override val order: String, val question: InstinctQuestion) : ProposalCheck
+  enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN, QUESTION }
   /**
    * [readOnly] queries change nothing on the phone; «cancelar programadas» and «cancelar programada <id>» only
    * cancel Insto's own pending orders. None consumes the brake. [form] is how the catalog shows it.
@@ -88,6 +89,10 @@ object InstinctProposalValidator {
     // «probar <orden>»: the order is kept as written and checked by whoever answers, with this same validator.
     probe(order)?.let { inner ->
       return if (inner.isBlank()) ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY) else ProposalCheck.Query(order, ProposalCheck.QueryKind.PROBE, inner)
+    }
+    if (InstinctQuestion.isOrder(order)) {
+      val question = InstinctQuestion.parse(order, now) ?: return ProposalCheck.Invalid(order, ProposalCheck.Reason.QUESTION)
+      return ProposalCheck.Question(order, question)
     }
     cancelOne.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.CANCEL_ONE, it.groupValues[1]) }
     // A notice for the person: fixed form, plain text. Where it may come from is decided by the caller.
@@ -228,7 +233,7 @@ interface ProposalNotification {
   /** The text of the newest message, or the notification text without MessagingStyle. Content: read last. */
   fun text(): String?
 
-  data class LatestMessage(val sender: String?)
+  data class LatestMessage(val sender: String?, val sentAt: Long? = null)
 }
 
 data class ProposalFilterConfig(

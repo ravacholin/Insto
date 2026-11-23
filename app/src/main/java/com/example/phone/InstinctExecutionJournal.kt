@@ -35,6 +35,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
         opened.beginTransaction()
         try {
           create(opened)
+          opened.execSQL("ALTER TABLE executions ADD COLUMN question_at INTEGER")
           opened.version = VERSION
           opened.setTransactionSuccessful()
         } finally { opened.endTransaction() }
@@ -191,6 +192,61 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     return database().rawQuery("SELECT * FROM executions WHERE state IN ($names) ORDER BY received_at", null).use(::records)
   }
 
+  sealed interface QuestionAdmission {
+    data object Accepted : QuestionAdmission
+    data object Unavailable : QuestionAdmission
+    data class Refused(val reason: String) : QuestionAdmission
+  }
+
+  /** Reserves one of the question slots in the same journal row, under the transition lock. */
+  fun startQuestion(id: String, question: InstinctQuestion, needsPreview: Boolean): QuestionAdmission = transaction { db ->
+    val current = getIn(db, id) ?: return@transaction QuestionAdmission.Unavailable
+    val state = if (needsPreview) ExecutionState.QUESTION_CONFIRM else ExecutionState.ASKING
+    if (current.state != ExecutionState.VALIDATED || !ExecutionTransitions.allowed(current.state, state))
+      return@transaction QuestionAdmission.Unavailable
+    val now = clock()
+    questionLimit(db, now)?.let { return@transaction QuestionAdmission.Refused(it) }
+    db.update("executions", ContentValues().apply {
+      put("state", state.name); put("updated_at", now); put("owner", owner)
+      put("question_at", now); put("deadline", question.expiresAt); put("command", question.encode())
+    }, "execution_id = ?", arrayOf(id))
+    QuestionAdmission.Accepted
+  }
+
+  fun questionLimit(): String? = questionLimit(database(), clock())
+
+  private fun questionLimit(db: SQLiteDatabase, now: Long): String? {
+    val states = InstinctQuestion.PENDING.joinToString(",") { "'${it.name}'" }
+    return db.rawQuery(
+      "SELECT COUNT(CASE WHEN state IN ($states) AND deadline > ? THEN 1 END), " +
+        "COUNT(CASE WHEN question_at > ? THEN 1 END) FROM executions WHERE question_at IS NOT NULL",
+      arrayOf(now.toString(), (now - InstinctQuestion.HOUR).toString())
+    ).use { it.moveToFirst(); InstinctQuestion.limit(it.getInt(0), it.getInt(1)) }
+  }
+
+  /** Resolves against the current row and deadline, before any notification or network side effect. */
+  internal fun finishQuestion(id: String, choice: Int?): QuestionOutcome? = transaction { db ->
+    val current = getIn(db, id) ?: return@transaction null
+    val question = InstinctQuestion.decode(current.command, current.deadline) ?: return@transaction null
+    val now = clock()
+    val outcome = question.outcome(current.state, now, choice) ?: return@transaction null
+    if (!ExecutionTransitions.allowed(current.state, outcome.state)) return@transaction null
+    db.update("executions", ContentValues().apply {
+      put("state", outcome.state.name); put("updated_at", now); put("owner", owner); put("result", outcome.response)
+    }, "execution_id = ?", arrayOf(id))
+    outcome
+  }
+
+  fun pendingQuestionReplies(limit: Int = 1): List<ExecutionRecord> = database().rawQuery(
+    "SELECT * FROM executions WHERE question_at IS NOT NULL AND reported IS NULL " +
+      "AND state IN ('ANSWERED','EXPIRED','CANCELLED') ORDER BY updated_at, execution_id LIMIT ?", arrayOf(limit.toString())
+  ).use(::records)
+
+  fun markQuestionReplies(ids: Set<String>) = transaction { db ->
+    for (id in ids) db.update("executions", ContentValues().apply { put("reported", InstinctLogEvents.RESPONSE_KIND) },
+      "execution_id = ? AND question_at IS NOT NULL", arrayOf(id))
+  }
+
   /**
    * Moves [executionId] to [to] if [ExecutionTransitions] allows it (and, with [from], only from those states). False
    * when not allowed or not found; throws when it cannot write.
@@ -237,9 +293,10 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     runCatching {
       transaction { db ->
         val terminal = ExecutionState.TERMINAL.joinToString(",") { "'${it.name}'" }
-        db.delete("executions", "state IN ($terminal) AND updated_at < ?", arrayOf((clock() - ExecutionJournalPolicy.RETENTION_MILLIS).toString()))
+        val prunable = "state IN ($terminal) AND (question_at IS NULL OR (reported IS NOT NULL AND question_at <= ${clock() - InstinctQuestion.HOUR}))"
+        db.delete("executions", "$prunable AND updated_at < ?", arrayOf((clock() - ExecutionJournalPolicy.RETENTION_MILLIS).toString()))
         db.delete("claims", "at < ?", arrayOf((clock() - ExecutionJournalPolicy.CLAIM_RETENTION_MILLIS).toString()))
-        db.execSQL("DELETE FROM executions WHERE state IN ($terminal) AND execution_id NOT IN " +
+        db.execSQL("DELETE FROM executions WHERE $prunable AND execution_id NOT IN " +
           "(SELECT execution_id FROM executions ORDER BY updated_at DESC LIMIT ${ExecutionJournalPolicy.MAX_ROWS})")
       }
     }
@@ -286,7 +343,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
 
   companion object {
     const val FILE = "instinct-executions.db"
-    private const val VERSION = 1
+    private const val VERSION = 2
     private const val MAX_TEXT = 600
     private const val META_SEEN = "legacy_seen_imported"
     private const val META_LEGACY_CORRUPT = "legacy_seen_unreadable"
