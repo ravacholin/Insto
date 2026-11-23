@@ -129,6 +129,7 @@ object InstinctScheduler {
   fun onPhoneEvent(context: Context, event: PhoneEvent) {
     val app = context.applicationContext
     if (!InstinctProposalSettings(app).isEnabled()) return
+    if (event == PhoneEvent.UNLOCK) InstinctContextScheduler.signal(app, unlock = true)
     val matching = runCatching { store(app).pending() }.getOrDefault(emptyList()).filter { InstinctTriggers.fires(it.trigger, event) }
     matching.forEach { order -> launch { fire(app, order.id, order.token, Cause.STATE) } }
   }
@@ -195,6 +196,7 @@ object InstinctScheduler {
     // A recurrence is a local time: after a time zone change its next occurrence is the same hour in the new zone.
     if (zoneChanged) runCatching { relocate(app) }
     store(app).pending().forEach { alarms(app, it, true) }
+    InstinctContextScheduler.evaluate(app)
   }
 
   private fun relocate(app: Context) {
@@ -414,9 +416,21 @@ class InstinctScheduleReceiver : BroadcastReceiver() {
           try { runCatching { InstinctScheduler.fire(context, id, token) } } finally { pending.finish() }
         }
       }
-      Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED ->
-        runCatching { InstinctScheduler.rearm(context) }
-      Intent.ACTION_TIMEZONE_CHANGED -> runCatching { InstinctScheduler.rearm(context, zoneChanged = true) }
+      InstinctContextScheduler.ACTION_TICK, Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
+      Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED, AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
+        val pending = goAsync()
+        InstinctStatePublisher.background(Runnable {
+          try {
+            runCatching {
+              if (intent.action == InstinctContextScheduler.ACTION_TICK) InstinctContextScheduler.evaluate(context.applicationContext)
+              else {
+                val clockChanged = intent.action == Intent.ACTION_TIME_CHANGED || intent.action == Intent.ACTION_TIMEZONE_CHANGED
+                InstinctScheduler.rearm(context, zoneChanged = clockChanged)
+              }
+            }
+          } finally { pending.finish() }
+        })
+      }
     }
   }
 }

@@ -35,7 +35,10 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
         opened.beginTransaction()
         try {
           create(opened)
-          opened.execSQL("ALTER TABLE executions ADD COLUMN question_at INTEGER")
+          if (opened.version < 2) opened.execSQL("ALTER TABLE executions ADD COLUMN question_at INTEGER")
+          opened.execSQL("""CREATE TABLE IF NOT EXISTS context_rules (
+            id TEXT PRIMARY KEY, line TEXT NOT NULL, expires_at INTEGER NOT NULL, enabled INTEGER NOT NULL,
+            matched INTEGER NOT NULL, candidate_at INTEGER, last_at INTEGER, status TEXT NOT NULL)""")
           opened.version = VERSION
           opened.setTransactionSuccessful()
         } finally { opened.endTransaction() }
@@ -246,12 +249,96 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
 
   fun pendingQuestionReplies(limit: Int = 1): List<ExecutionRecord> = database().rawQuery(
     "SELECT * FROM executions WHERE reported IS NULL AND ((question_at IS NOT NULL AND state IN ('ANSWERED','EXPIRED','CANCELLED')) OR " +
-      "(transport = 'DECISION' AND state IN ('VERIFIED','HANDED_OFF','FAILED','CANCELLED','UNCERTAIN','EXPIRED'))) ORDER BY updated_at, execution_id LIMIT ?", arrayOf(limit.toString())
+      "(transport IN ('DECISION','CONTEXT') AND state IN ('VERIFIED','HANDED_OFF','FAILED','CANCELLED','UNCERTAIN','EXPIRED'))) ORDER BY updated_at, execution_id LIMIT ?", arrayOf(limit.toString())
   ).use(::records)
 
   fun markQuestionReplies(ids: Set<String>) = transaction { db ->
     for (id in ids) db.update("executions", ContentValues().apply { put("reported", InstinctLogEvents.RESPONSE_KIND) },
-      "execution_id = ? AND (question_at IS NOT NULL OR transport = 'DECISION')", arrayOf(id))
+      "execution_id = ? AND (question_at IS NOT NULL OR transport IN ('DECISION','CONTEXT'))", arrayOf(id))
+  }
+
+  internal fun contextRules(): List<ContextRule> = contextRules(database())
+
+  private fun contextRules(db: SQLiteDatabase): List<ContextRule> =
+    db.rawQuery("SELECT line, expires_at, enabled, matched, candidate_at, last_at, status FROM context_rules ORDER BY id", null).use { rows ->
+      buildList {
+        while (rows.moveToNext()) {
+          val spec = ContextRuleSpec.parse(rows.getString(0)) ?: continue
+          add(ContextRule(spec, rows.getLong(1), rows.getInt(2) != 0, rows.getInt(3) != 0,
+            if (rows.isNull(4)) null else rows.getLong(4), if (rows.isNull(5)) null else rows.getLong(5), rows.getString(6)))
+        }
+      }
+    }
+
+  internal fun saveContextRule(rule: ContextRule): Boolean = transaction { db ->
+    val now = clock()
+    db.delete("context_rules", "expires_at <= ?", arrayOf(now.toString()))
+    if (rule.expiresAt <= now) return@transaction false
+    val rules = contextRules(db)
+    if (rules.any { it.id == rule.id }) return@transaction true
+    if (rules.size >= ContextRuleSpec.MAX_RULES) return@transaction false
+    writeContextRule(db, rule)
+    true
+  }
+
+  internal fun changeContextRule(id: String, enabled: Boolean?): Boolean = transaction { db ->
+    val rule = contextRules(db).singleOrNull { it.shortId == id || it.id == id } ?: return@transaction false
+    if (enabled != true) cancelContextExecutions(db, rule.id)
+    if (enabled == null) return@transaction db.delete("context_rules", "id = ?", arrayOf(rule.id)) == 1
+    if (rule.expiresAt <= clock()) return@transaction false
+    if (rule.enabled != enabled) writeContextRule(db, rule.copy(enabled = enabled, matched = false, candidateAt = null,
+      status = if (enabled) "esperando condiciones" else "desactivada"))
+    true
+  }
+
+  internal fun pauseContextRules() = transaction { db ->
+    cancelContextExecutions(db, null)
+    contextRules(db).filter { it.matched || it.candidateAt != null }.forEach {
+      writeContextRule(db, it.copy(matched = false, candidateAt = null, status = "esperando condiciones"))
+    }
+  }
+
+  private fun cancelContextExecutions(db: SQLiteDatabase, id: String?) {
+    val selector = "transport = 'CONTEXT' AND state IN ('RECEIVED','READY','VALIDATED','WAITING')"
+    db.update("executions", ContentValues().apply {
+      put("state", ExecutionState.CANCELLED.name); put("updated_at", clock()); put("reason", "regla desactivada")
+    }, if (id == null) selector else "$selector AND occurrence = ?", id?.let { arrayOf(it) })
+  }
+
+  private fun writeContextRule(db: SQLiteDatabase, rule: ContextRule) {
+    db.insertWithOnConflict("context_rules", null, ContentValues().apply {
+      put("id", rule.id); put("line", rule.spec.line); put("expires_at", rule.expiresAt)
+      put("enabled", if (rule.enabled) 1 else 0); put("matched", if (rule.matched) 1 else 0)
+      put("candidate_at", rule.candidateAt); put("last_at", rule.lastAt); put("status", rule.status)
+    }, SQLiteDatabase.CONFLICT_REPLACE).also { check(it != -1L) }
+  }
+
+  /** One transaction owns the edge, its persistent brake and the dispatch row. */
+  internal fun evaluateContextRules(snapshot: ContextSnapshot, now: Long): List<ExecutionRecord> = transaction { db ->
+    var recent = db.rawQuery("SELECT COUNT(*) FROM executions WHERE transport = 'CONTEXT' AND received_at > ?",
+      arrayOf((now - ContextRuleSpec.WINDOW).toString())).use { it.moveToFirst(); it.getInt(0) }
+    buildList {
+      for (rule in contextRules(db)) {
+        val evaluation = rule.evaluate(snapshot, now, recent < ContextRuleSpec.MAX_FIRINGS)
+        if (evaluation.rule != rule) writeContextRule(db, evaluation.rule)
+        if (!evaluation.fire) continue
+        val message = "context:${rule.id}:$now"
+        val row = ExecutionRecord(ExecutionIds.of(message, 0), message, 0, ExecutionTransport.CONTEXT, rule.spec.action,
+          now, now, ExecutionState.RECEIVED, owner = owner, occurrence = rule.id,
+          deadline = minOf(rule.expiresAt, now + ExecutionJournalPolicy.WAITING_TTL_MILLIS))
+        db.insertOrThrow("executions", null, values(row))
+        add(row)
+        recent++
+      }
+    }
+  }
+
+  internal fun contextEnabled(row: ExecutionRecord): Boolean = contextEnabled(database(), row, clock())
+
+  private fun contextEnabled(db: SQLiteDatabase, row: ExecutionRecord, now: Long): Boolean {
+    if (now >= (row.deadline ?: 0)) return false
+    return db.rawQuery("SELECT 1 FROM context_rules WHERE id = ? AND enabled = 1 AND expires_at > ?",
+      arrayOf(row.occurrence.orEmpty(), now.toString())).use { it.moveToFirst() }
   }
 
   /**
@@ -266,6 +353,8 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     if (!ExecutionTransitions.allowed(current.state, to)) return@transaction false
     if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.DECISION &&
       clock() >= (current.deadline ?: 0)) return@transaction false
+    if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.CONTEXT &&
+      !contextEnabled(db, current, clock())) return@transaction false
     db.update("executions", ContentValues().apply {
       put("state", to.name); put("updated_at", clock()); put("owner", owner)
       result?.let { put("result", it.take(MAX_TEXT)) }
@@ -274,7 +363,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
       attribution?.let { put("attribution", it.name) }
       proposalId?.let { put("proposal_id", it) }
       occurrence?.let { put("occurrence", it) }
-      if (current.transport != ExecutionTransport.DECISION) reported?.let { put("reported", it.name) }
+      if (current.transport !in LOCAL) reported?.let { put("reported", it.name) }
       if (to == ExecutionState.DISPATCHING) put("attempts", current.attempts + 1)
     }, "execution_id = ?", arrayOf(executionId)) == 1
   }
@@ -288,7 +377,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
 
   /** Marks the acknowledgement sent for [executionId]. */
   fun markReported(executionId: String, kind: AckKind) {
-    runCatching { database().update("executions", ContentValues().apply { put("reported", kind.name) }, "execution_id = ? AND transport != 'DECISION'", arrayOf(executionId)) }
+    runCatching { database().update("executions", ContentValues().apply { put("reported", kind.name) }, "execution_id = ? AND transport NOT IN ('DECISION','CONTEXT')", arrayOf(executionId)) }
   }
 
   /** Takes over a row another process left, so two recoveries never act on it. True for the one that wins. */
@@ -302,7 +391,8 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     runCatching {
       transaction { db ->
         val terminal = ExecutionState.TERMINAL.joinToString(",") { "'${it.name}'" }
-        val prunable = "state IN ($terminal) AND ((question_at IS NULL AND transport != 'DECISION') OR (reported IS NOT NULL AND (question_at IS NULL OR question_at <= ${clock() - InstinctQuestion.HOUR})))"
+        val contextWindow = clock() - ContextRuleSpec.WINDOW
+        val prunable = "state IN ($terminal) AND (transport != 'CONTEXT' OR received_at <= $contextWindow) AND ((question_at IS NULL AND transport != 'DECISION') OR (reported IS NOT NULL AND (question_at IS NULL OR question_at <= ${clock() - InstinctQuestion.HOUR})))"
         db.delete("executions", "$prunable AND updated_at < ?", arrayOf((clock() - ExecutionJournalPolicy.RETENTION_MILLIS).toString()))
         db.delete("claims", "at < ?", arrayOf((clock() - ExecutionJournalPolicy.CLAIM_RETENTION_MILLIS).toString()))
         db.execSQL("DELETE FROM executions WHERE $prunable AND execution_id NOT IN " +
@@ -352,7 +442,8 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
 
   companion object {
     const val FILE = "instinct-executions.db"
-    private const val VERSION = 2
+    private val LOCAL = setOf(ExecutionTransport.DECISION, ExecutionTransport.CONTEXT)
+    private const val VERSION = 3
     private const val MAX_TEXT = 600
     private const val META_SEEN = "legacy_seen_imported"
     private const val META_LEGACY_CORRUPT = "legacy_seen_unreadable"

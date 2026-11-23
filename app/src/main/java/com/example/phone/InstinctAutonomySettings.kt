@@ -40,6 +40,7 @@ class InstinctAutonomySettings(context: Context) {
     // «Nunca» cancels whole every recurrence it now refuses (1.17.0).
     if (level == InstinctAutonomy.NUNCA) runCatching { InstinctScheduler.cancelRefused(app) }
     if (category == InstinctCategory.PREGUNTAS) InstinctQuestionNotifications.recoverSoon(app)
+    InstinctContextScheduler.signal(app)
     InstinctCatalogPublisher.changed(app)
   }
 

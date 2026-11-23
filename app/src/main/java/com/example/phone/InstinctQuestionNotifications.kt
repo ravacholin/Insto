@@ -81,7 +81,7 @@ internal object InstinctQuestionNotifications {
   fun recoverSoon(context: Context) {
     val app = context.applicationContext
     if (InstinctExecutions.existingJournal(app) == null) return
-    InstinctMailbox.background(Runnable { runCatching { InstinctExecutionRecoveryManager.recover(app, questionsOnly = true) } })
+    InstinctMailbox.background(Runnable { runCatching { InstinctExecutionRecoveryManager.recover(app, localOnly = true) } })
   }
 
   fun refresh(context: Context) = synchronized(lock) { runCatching { refreshLocked(context.applicationContext) } }
