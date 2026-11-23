@@ -95,7 +95,7 @@ function load(options) {
       constructor(...a) { if (a.length) super(...a); else super(env.now); }
       static now() { return env.now; }
     },
-    JSON, Math, String, Array, Set, parseInt, isNaN,
+    JSON, Math, String, Array, Set, parseInt, isNaN, console: { log() {} },
   };
   vm.createContext(context);
   let source = SOURCE.replace("const TOKEN = 'CAMBIÁ-ESTE-TOKEN';", "const TOKEN = 'token-de-prueba';");
@@ -104,7 +104,7 @@ function load(options) {
   vm.runInContext(source, context);
   const post = (body) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(body) } }).text);
   const get = (parameter) => JSON.parse(context.doGet({ parameter }).text);
-  return { post, get, props, fetches, sheets, env };
+  return { post, get, props, fetches, sheets, env, context };
 }
 
 const RELAY = 'https://insto-webpush-relay.ejemplo.workers.dev/';
@@ -221,6 +221,22 @@ test('el buzón borra las filas de más de un día y «tomadas» solo toca esa c
   assert.strictEqual(rows[1][4], firma, 'las demás columnas quedan igual');
   assert.ok(rows[1][5]);
   assert.strictEqual(s.get({ token: T, action: 'ordenes' }).ordenes.length, 0);
+});
+
+test('probarRele dice qué falta y, con todo listo, toca el timbre por el relé', () => {
+  const plain = load();
+  assert.ok(plain.context.probarRele().includes('RELAY_URL'));
+  const s = load({ relay: true });
+  assert.ok(s.context.probarRele().includes('endpoint del timbre'));
+  s.props.insto_timbre_endpoint = ENDPOINT;
+  assert.ok(s.context.probarRele().includes('claves de cifrado'));
+  s.props.insto_timbre_p256dh = 'p'; s.props.insto_timbre_auth = 'a';
+  assert.ok(s.context.probarRele().includes('está apagado'));
+  s.props.insto_timbre_con_orden = '1';
+  assert.ok(s.context.probarRele().startsWith('El relé anda'));
+  assert.strictEqual(s.fetches.pop().url, RELAY);
+  s.env.relayAnswer = { ok: false, error: 'secreto' };
+  assert.ok(s.context.probarRele().includes('RELAY_SECRET no es igual'));
 });
 
 // Orden directa en el timbre (1.18.0)
