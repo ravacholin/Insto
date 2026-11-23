@@ -129,6 +129,7 @@ object InstinctScheduler {
   fun onPhoneEvent(context: Context, event: PhoneEvent) {
     val app = context.applicationContext
     if (!InstinctProposalSettings(app).isEnabled()) return
+    if (event == PhoneEvent.UNLOCK) InstinctContextScheduler.signal(app, unlock = true)
     val matching = runCatching { store(app).pending() }.getOrDefault(emptyList()).filter { InstinctTriggers.fires(it.trigger, event) }
     matching.forEach { order -> launch { fire(app, order.id, order.token, Cause.STATE) } }
   }
@@ -414,9 +415,20 @@ class InstinctScheduleReceiver : BroadcastReceiver() {
           try { runCatching { InstinctScheduler.fire(context, id, token) } } finally { pending.finish() }
         }
       }
-      Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED ->
-        runCatching { InstinctScheduler.rearm(context) }
-      Intent.ACTION_TIMEZONE_CHANGED -> runCatching { InstinctScheduler.rearm(context, zoneChanged = true) }
+      InstinctContextScheduler.ACTION_TICK -> contextRules(context)
+      Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_TIME_CHANGED,
+      Intent.ACTION_TIMEZONE_CHANGED, AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
+        runCatching { InstinctScheduler.rearm(context, zoneChanged = intent.action == Intent.ACTION_TIMEZONE_CHANGED) }
+        if (InstinctExecutions.existingJournal(context) != null) contextRules(context)
+      }
     }
+  }
+
+  private fun contextRules(context: Context) {
+    val pending = goAsync()
+    InstinctStatePublisher.background(Runnable {
+      try { runCatching { InstinctContextScheduler.evaluate(context.applicationContext) } }
+      finally { pending?.finish() }
+    })
   }
 }

@@ -31,7 +31,7 @@ object InstinctExecutionRecoveryManager {
   }.getOrDefault(false)
 
   /** Every row left unfinished, once. Off the main thread. Returns how many it ended, resumed or restored. */
-  fun recover(context: Context, questionsOnly: Boolean = false): Int = synchronized(lock) {
+  fun recover(context: Context, localOnly: Boolean = false): Int = synchronized(lock) {
     val app = context.applicationContext
     val journal = InstinctExecutions.journal(app)
     val rows = runCatching { journal.unfinished() }.getOrNull() ?: return@synchronized 0
@@ -40,7 +40,8 @@ object InstinctExecutionRecoveryManager {
     val resume = ArrayList<Pair<ExecutionRecord, Boolean>>()
     val scheduledSeries by lazy { runCatching { InstinctScheduler.pending(app).map { it.series }.toSet() }.getOrNull() }
     for (row in rows) {
-      if (questionsOnly && !InstinctQuestion.isRelated(row.line)) continue
+      if (localOnly && !InstinctQuestion.isRelated(row.line) &&
+        row.transport != ExecutionTransport.DECISION && row.transport != ExecutionTransport.CONTEXT) continue
       val mine = row.owner == InstinctExecutionJournal.owner
       val action = ExecutionRecoveryPolicy.decide(row, now, effect(row))
       if (action == ExecutionRecoveryPolicy.Action.RefreshQuestion) continue
@@ -52,7 +53,11 @@ object InstinctExecutionRecoveryManager {
       if (!mine && !journal.adopt(row)) continue
       touched++
       when (action) {
-        ExecutionRecoveryPolicy.Action.Resume -> resume += row to !mine
+        ExecutionRecoveryPolicy.Action.Resume -> if (row.transport == ExecutionTransport.DECISION) {
+          runCatching { InstinctProposalCenter.dispatchDecision(app, row, resumeReady = !mine && row.state == ExecutionState.READY) }
+        } else if (row.transport == ExecutionTransport.CONTEXT) {
+          runCatching { InstinctProposalCenter.dispatchContext(app, row, resumeReady = !mine && row.state == ExecutionState.READY) }
+        } else resume += row to !mine
         ExecutionRecoveryPolicy.Action.Verify -> verify(app, row)
         ExecutionRecoveryPolicy.Action.RestoreWaiting -> {
           val until = row.updatedAt + ExecutionJournalPolicy.WAITING_TTL_MILLIS
@@ -72,7 +77,7 @@ object InstinctExecutionRecoveryManager {
     }
     InstinctQuestionNotifications.refresh(app)
     runCatching { InstinctLog.recoverQuestionReplies(app) }
-    if (!questionsOnly) runCatching { journal.prune() }
+    if (!localOnly) runCatching { journal.prune() }
     touched
   }
 
@@ -119,6 +124,7 @@ object InstinctExecutionRecoveryManager {
     val ok = state == ExecutionState.VERIFIED || state == ExecutionState.HANDED_OFF
     val moved = InstinctExecutions.move(app, row.executionId, state, result = reason.takeIf { ok }, reason = reason.takeUnless { ok },
       reported = kind, attribution = attribution)
+    if (row.transport == ExecutionTransport.DECISION || row.transport == ExecutionTransport.CONTEXT) return
     if (!moved || kind == null || row.reported != null) return
     if (InstinctProposalSettings(app).replyMode() == InstinctReplyMode.NEVER || row.logMessage.isEmpty()) return
     InstinctLog.enqueue(app, listOf(AckEntry(kind, row.line, "$reason ${ExecutionRecoveryPolicy.RECOVERED}")), row.logMessage)

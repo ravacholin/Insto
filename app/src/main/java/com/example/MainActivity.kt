@@ -45,6 +45,8 @@ class MainActivity : ComponentActivity() {
     // Insto opened: the signed mailbox is read at once (off the main thread, at most every 20 seconds).
     runCatching { com.example.phone.InstinctMailbox.pollSoon(this) }
     com.example.phone.InstinctQuestionNotifications.recoverSoon(this)
+    com.example.phone.NotificationAccessService.connected?.calendarPermissionChanged()
+    com.example.phone.InstinctContextScheduler.signal(this)
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {

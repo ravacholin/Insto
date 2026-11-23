@@ -115,6 +115,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       InstinctCatalogSection(revision) { revision++ }
       InstinctMailboxSection(replyMode, revision) { revision++ }
       InstinctScheduledList(revision) { revision++ }
+      InstinctContextRulesList(revision) { revision++ }
       InstinctRoutineSwitches(revision) { revision++ }
       InstinctCatalogActions(replyMode, channel, revision) { revision++ }
       ProposalDiagnostics(contact, revision) { revision++ }
@@ -195,11 +196,12 @@ private fun InstinctReactivationCard(revision: Int, onChange: () -> Unit) {
   if (request == null) return
   Text("Reactivar Instinct en este teléfono", style = MaterialTheme.typography.bodyLarge)
   val parts = listOfNotNull("recibir órdenes".takeIf { request.proposals }, "buzón".takeIf { request.mailbox },
-    "timbre".takeIf { request.doorbell }, "${request.recurrences.size} órdenes recurrentes".takeIf { request.recurrences.isNotEmpty() })
+    "timbre".takeIf { request.doorbell }, "${request.recurrences.size} órdenes recurrentes".takeIf { request.recurrences.isNotEmpty() },
+    "${request.contextRules.size} reglas contextuales".takeIf { request.contextRules.isNotEmpty() })
   SettingsDescription("La copia restaurada tenía encendido: ${parts.joinToString(", ")}. En este teléfono quedó apagado hasta que " +
     "lo autorices. Al reactivar, Insto revisa los permisos, enciende lo que estaba encendido, registra el timbre de nuevo " +
     "(claves y dirección propias de este teléfono, que se le avisan al Apps Script), prueba la bitácora y el buzón, vuelve " +
-    "a programar las recurrentes y publica el catálogo. No ejecuta ninguna orden.")
+    "a programar las recurrentes, restaura las reglas y publica el catálogo. Las reglas activas pueden dispararse cuando se cumplan sus condiciones.")
   Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
     OutlinedButton(enabled = !busy, onClick = {
       busy = true
@@ -247,8 +249,8 @@ private fun InstinctAutonomySection(revision: Int, onChange: () -> Unit) {
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_autonomy")) {
     Text("Autonomía", style = MaterialTheme.typography.bodyLarge)
     SettingsDescription("Qué puede hacer Instinct solo, por tipo de acción. «Solo»: lo hace y te avisa (con Deshacer cuando se puede). " +
-      "«Confirmar»: espera tu toque o un «dale». «Nunca»: lo rechaza. Con el teléfono bloqueado, sin la Accesibilidad para abrir otra " +
-      "app o con muchas órdenes seguidas, igual espera tu confirmación.")
+      "«Confirmar»: espera tu toque o un «dale». «Nunca»: lo rechaza. Las acciones sin interfaz pueden ejecutarse con la pantalla apagada. " +
+      "Abrir una pantalla requiere desbloquear el teléfono.")
     InstinctCategory.entries.forEach { category ->
       Text(category.label.replaceFirstChar { it.uppercaseChar() }, style = MaterialTheme.typography.bodyMedium)
       Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -262,6 +264,10 @@ private fun InstinctAutonomySection(revision: Int, onChange: () -> Unit) {
     }
     if (InstinctCategory.AVISOS.let { policy.level(it) } != InstinctAutonomy.NUNCA)
       SettingsDescription("«Avisos para vos» es «#insto avisarme …»: una notificación de Insto, solo desde el buzón firmado.")
+    SettingsSwitch("Mostrar preguntas en la pantalla bloqueada",
+      remember(revision) { autonomy.showQuestionsOnLockScreen() },
+      { autonomy.setShowQuestionsOnLockScreen(it); onChange() },
+      "Muestra el texto y las opciones si Android permite mostrar notificaciones en la pantalla bloqueada.")
     SettingsSwitch("Horas de silencio para Instinct", policy.quiet != null, { on ->
       if (!on) autonomy.setQuiet(null)
       else autonomy.setQuiet(QuietHours(QuietHours.parse(start) ?: 0, QuietHours.parse(end) ?: 7 * 60))
@@ -300,6 +306,39 @@ private fun InstinctScheduledList(revision: Int, onChange: () -> Unit) {
       TextButton(onClick = { com.example.phone.InstinctScheduler.cancelShort(context, order.shortId); onChange() },
         modifier = Modifier.testTag("instinct_scheduled_cancel")) { Text(if (order.recurring) "Cancelar la recurrente" else "Cancelar esta orden") }
     }
+  }
+}
+
+@Composable
+private fun InstinctContextRulesList(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val scheduler = com.example.phone.InstinctContextScheduler
+  val scope = rememberCoroutineScope()
+  var rules by remember { mutableStateOf(emptyList<com.example.phone.ContextRule>()) }
+  var feedback by remember { mutableStateOf<String?>(null) }
+  val now = com.example.phone.InstinctExecutionJournal.clock()
+  LaunchedEffect(revision) { rules = withContext(Dispatchers.IO) { scheduler.rules(context) } }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_context_rules")) {
+    Text("Reglas contextuales", style = MaterialTheme.typography.bodyLarge)
+    if (rules.isEmpty()) SettingsDescription("No hay reglas contextuales. Instinct puede crearlas desde el buzón firmado.")
+    else {
+      TextButton(onClick = onChange) { Text("Actualizar reglas") }
+      rules.forEach { rule ->
+        SettingsDescription(scheduler.status(context, rule, now))
+        SettingsSwitch("Activar regla ${rule.shortId}", rule.enabled && rule.expiresAt > now, { active ->
+          scope.launch {
+            feedback = withContext(Dispatchers.IO) { scheduler.change(context, rule.shortId, active).detail }
+            onChange()
+          }
+        }, enabled = rule.expiresAt > now)
+        TextButton(onClick = {
+          scope.launch {
+            feedback = withContext(Dispatchers.IO) { scheduler.describe(context, rule.shortId) }
+          }
+        }) { Text("Diagnóstico de ${rule.shortId}") }
+      }
+    }
+    feedback?.let { SettingsDescription(it) }
   }
 }
 
@@ -412,7 +451,11 @@ private fun InstinctStateSection(revision: Int, onChange: () -> Unit) {
   val line = remember(revision) { com.example.phone.InstinctStatePublisher.diagnosis(context) }
   val configured = remember(revision) { InstinctLogSettings(context).configured() }
   val calendar = remember(revision) { context.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED }
-  val askCalendar = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onChange() }
+  val askCalendar = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+    com.example.phone.NotificationAccessService.connected?.calendarPermissionChanged()
+    com.example.phone.InstinctContextScheduler.signal(context)
+    onChange()
+  }
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_state")) {
     Text("Estado para Instinct", style = MaterialTheme.typography.bodyLarge)
     SettingsDescription("Con la bitácora configurada, Insto publica ahí un resumen del teléfono para que Instinct decida con contexto: " +

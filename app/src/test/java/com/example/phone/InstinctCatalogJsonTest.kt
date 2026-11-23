@@ -11,21 +11,21 @@ import org.junit.Test
 class InstinctCatalogJsonTest {
   private val parser = PhoneCommandParser()
   private fun json(routines: List<String> = emptyList(), autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(),
-    channels: InstinctCatalogChannels = InstinctCatalogChannels()) = InstinctProtocolCatalog.json(routines, autonomy, channels, "1.21.0")
+    channels: InstinctCatalogChannels = InstinctCatalogChannels()) = InstinctProtocolCatalog.json(routines, autonomy, channels, "1.22.0")
 
   /** Every «orden» in the catalog, in order. */
   private fun orders(o: JSONObject): List<String> {
     fun list(a: JSONArray) = (0 until a.length()).map { a.getJSONObject(it).getString("orden") }
     val forms = o.getJSONObject("formas")
     return list(o.getJSONArray("acciones")) + listOf("diferidas", "clima", "disparadores", "recurrentes").flatMap { list(forms.getJSONArray(it)) } +
-      o.getJSONObject("preguntas").getString("orden") + list(o.getJSONArray("rutinas")) + list(o.getJSONArray("consultas"))
+      listOf("preguntas", "decisiones", "reglas_contextuales").map { o.getJSONObject(it).getString("orden") } + list(o.getJSONArray("rutinas")) + list(o.getJSONArray("consultas"))
   }
 
   @Test fun `every example is a valid order, without the prefix, from the same source as the text`() {
     val o = JSONObject(json().canonical)
     val all = orders(o)
     val queries = ProposalCheck.QueryKind.entries.map { it.form }
-    assertEquals(InstinctProposalValidator.examples + InstinctProtocolCatalog.QUESTION_EXAMPLE + queries, all)
+    assertEquals(InstinctProposalValidator.examples + listOf(InstinctProtocolCatalog.QUESTION_EXAMPLE, InstinctProtocolCatalog.DECISION_EXAMPLE, ContextRuleSpec.EXAMPLE) + queries, all)
     for (order in InstinctProposalValidator.examples) {
       assertFalse(order, order.startsWith("#insto"))
       // Recurring examples end on 13/12 and 15/12: checked on 21/11/2026, like the text catalog.
@@ -41,6 +41,17 @@ class InstinctCatalogJsonTest {
     // The text catalog lists the very same orders.
     val text = InstinctProtocolCatalog.text(emptyList()).lines().filter { it.startsWith("#insto ") && it != "#insto <orden>" }.map { it.removePrefix("#insto ") }
     assertEquals(text, all)
+  }
+
+  @Test fun `catalog distinguishes mutations and scopes the lock screen blocker`() {
+    val catalog = JSONObject(json().canonical)
+    val queries = catalog.getJSONArray("consultas")
+    val mutations = (0 until queries.length()).map { queries.getJSONObject(it) }
+      .filter { !it.getBoolean("solo_lectura") }.map { it.getString("orden") }
+    assertEquals(setOf("cancelar programada <id>", "cancelar programadas", "activar regla <id>",
+      "desactivar regla <id>", "eliminar regla <id>"), mutations.toSet())
+    assertFalse(InstinctProtocolCatalog.FIXED_BLOCKERS.contains("el teléfono está bloqueado"))
+    assertTrue(InstinctProtocolCatalog.FIXED_BLOCKERS.any { "abre una pantalla" in it })
   }
 
   @Test fun `the hash is the SHA-256 of the canonical form, stable and without publicado`() {
@@ -98,8 +109,8 @@ class InstinctCatalogJsonTest {
     assertFalse(c.getBoolean("whatsapp")); assertTrue(c.getBoolean("bitacora")); assertTrue(c.getBoolean("buzon"))
     assertTrue(c.getBoolean("timbre")); assertTrue(c.getBoolean("orden_en_timbre"))
     assertEquals("siempre", c.getString("acuses")); assertEquals("bitacora", c.getString("acuses_por"))
-    assertEquals("Protocolo Insto v7", o.getString("protocolo")); assertEquals(7, o.getInt("version_protocolo"))
-    assertEquals("1.21.0", o.getString("version_insto"))
+    assertEquals("Protocolo Insto v8", o.getString("protocolo")); assertEquals(8, o.getInt("version_protocolo"))
+    assertEquals("1.22.0", o.getString("version_insto"))
     assertTrue("well under the script's 45 000 characters", json(listOf("Estudio"), policy).published("2026-11-22T08:40:00-03:00").length < 20_000)
   }
 
@@ -113,8 +124,8 @@ class InstinctCatalogJsonTest {
 
   @Test fun `ver catálogo says the published hash`() {
     val hash = "a".repeat(64)
-    assertEquals("Protocolo Insto v7 · rutinas habilitadas: ninguna. Catálogo publicado: hash $hash.", InstinctProtocolCatalog.summary(emptyList(), hash))
-    assertEquals("Protocolo Insto v7 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
+    assertEquals("Protocolo Insto v8 · rutinas habilitadas: ninguna. Catálogo publicado: hash $hash.", InstinctProtocolCatalog.summary(emptyList(), hash))
+    assertEquals("Protocolo Insto v8 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
   }
 
   @Test fun `the text catalog points at the live one only with the log, without address in the chat copy`() {

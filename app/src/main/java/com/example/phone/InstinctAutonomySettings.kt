@@ -40,6 +40,7 @@ class InstinctAutonomySettings(context: Context) {
     // «Nunca» cancels whole every recurrence it now refuses (1.17.0).
     if (level == InstinctAutonomy.NUNCA) runCatching { InstinctScheduler.cancelRefused(app) }
     if (category == InstinctCategory.PREGUNTAS) InstinctQuestionNotifications.recoverSoon(app)
+    InstinctContextScheduler.signal(app)
     InstinctCatalogPublisher.changed(app)
   }
 
@@ -74,7 +75,18 @@ class InstinctAutonomySettings(context: Context) {
     InstinctCatalogPublisher.changed(app)
   }
 
+  fun showQuestionsOnLockScreen(): Boolean =
+    runCatching { File(app.noBackupFilesDir, QUESTION_VISIBILITY).readText() == "true" }.getOrDefault(false)
+
+  fun setShowQuestionsOnLockScreen(show: Boolean) {
+    val preference = File(app.noBackupFilesDir, QUESTION_VISIBILITY)
+    writeAtomically(preference, show.toString(), "insto-question-")
+    InstinctQuestionNotifications.privacyChanged(app)
+    InstinctCatalogPublisher.changed(app)
+  }
+
   companion object {
+    const val QUESTION_VISIBILITY = "instinct-question-lock-screen"
     const val FILE = "instinct-autonomy.json"
     const val LEGACY_FILE = "instinct-proposals-ask-first"
     private val LOCK = Any()

@@ -37,7 +37,7 @@ class InstinctProposalSettings(context: Context) {
   fun isEnabled(): Boolean = Build.VERSION.SDK_INT >= MIN_SDK && runCatching { enabled.readText() == "true" }.getOrDefault(false)
 
   fun setEnabled(value: Boolean) {
-    if (value) { enabled.writeText("true"); InstinctStatePublisher.rearm(app); InstinctMailbox.rearm(app); InstinctCatalogPublisher.changed(app) }
+    if (value) { enabled.writeText("true"); InstinctContextScheduler.signal(app); InstinctStatePublisher.rearm(app); InstinctMailbox.rearm(app); InstinctCatalogPublisher.changed(app) }
     else {
       if (enabled.exists()) enabled.delete()
       // The state's heartbeat and the mailbox's polling stop with the switch.
@@ -48,6 +48,7 @@ class InstinctProposalSettings(context: Context) {
       // Turning it off discards every pending proposal and scheduled order: nothing can run after this.
       InstinctProposalCenter.discardAll(app)
       InstinctScheduler.cancelAll(app)
+      InstinctContextScheduler.stop(app)
       InstinctProposalCenter.undos.clear()
       InstinctQuestionNotifications.recoverSoon(app)
     }
@@ -305,15 +306,16 @@ object InstinctProposalIntake {
       return
     }
     val records = if (source == ProposalSource.BUZON) {
-      val (questions, others) = admitted.partition { InstinctQuestion.isRelated(it.line) }
-      if (questions.isNotEmpty()) {
+      val (local, others) = admitted.partition { InstinctQuestion.isRelated(it.line) || InstinctProposalValidator.isContextOrder(it.line) }
+      if (local.isNotEmpty()) {
         val parser = PhoneCommandParser()
-        val checks = questions.map {
+        val checks = local.map {
           val received = java.util.Calendar.getInstance().apply { timeInMillis = it.receivedAt }
           InstinctProposalValidator.check(it.line, parser, received)
         }
-        questions.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.VALIDATED) }
-        InstinctProposalCenter.deliver(app, checks, "", message = message, source = source, records = questions)
+        local.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.VALIDATED) }
+        val ticket = InstinctProposalCenter.openReply(app, checks.count { !InstinctQuestion.isRelated(it.order) }, { null }, message, logOnly = true)
+        InstinctProposalCenter.deliver(app, checks, "", ticket, message, source, records = local)
       }
       others
     } else admitted
@@ -439,10 +441,27 @@ object InstinctProposalCenter {
       when (check) {
         is ProposalCheck.Question -> Unit // Handled above, outside the acknowledgement ledger.
         is ProposalCheck.Invalid -> answered(InstinctAck.invalid(check))
-        // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
-        is ProposalCheck.Query -> answered(when (check.kind) {
-          ProposalCheck.QueryKind.STATE -> stateAnswer(app, check.order)
-          ProposalCheck.QueryKind.PROBE -> probe(app, check.order, check.argument.orEmpty(), source)
+        is ContextualCheck -> {
+          val failure = when {
+            source != ProposalSource.BUZON -> InstinctContextScheduler.ONLY_SIGNED
+            !InstinctExecutions.begin(app, execution, null) -> NOT_RECORDED
+            else -> InstinctContextScheduler.create(app, check.spec)
+          }
+          answered(if (failure == null) AckEntry(AckKind.OK, check.order,
+            "Regla ${check.spec.id.take(InstinctTriggers.SHORT_ID_LENGTH)} guardada.", informative = true)
+          else AckEntry(AckKind.ERROR, check.order, failure))
+        }
+        is ProposalCheck.Query -> answered(when {
+          check.kind in InstinctProposalValidator.ruleQueries && source != ProposalSource.BUZON ->
+            AckEntry(AckKind.ERROR, check.order, InstinctContextScheduler.ONLY_SIGNED)
+          !check.kind.readOnly && !InstinctExecutions.begin(app, execution, null) ->
+            AckEntry(AckKind.ERROR, check.order, NOT_RECORDED)
+          check.kind == ProposalCheck.QueryKind.STATE -> stateAnswer(app, check.order)
+          check.kind == ProposalCheck.QueryKind.PROBE -> probe(app, check.order, check.argument.orEmpty(), source)
+          check.kind in InstinctProposalValidator.ruleQueries && !check.kind.readOnly -> {
+            val changed = InstinctContextScheduler.change(app, check.argument.orEmpty(), ruleEnabled(check.kind))
+            AckEntry(if (changed.ok) AckKind.OK else AckKind.ERROR, check.order, changed.detail, informative = true)
+          }
           else -> AckEntry(AckKind.OK, check.order, answer(app, check.kind, check.argument,
             showQuestions = source != ProposalSource.WHATSAPP), informative = true)
         })
@@ -620,6 +639,12 @@ object InstinctProposalCenter {
   const val STATE_ONLY_LOG = "el estado solo se publica en la bitácora"
   const val JOURNAL_UNREADABLE = "no se pudo leer el diario de ejecución."
 
+  private fun ruleEnabled(kind: ProposalCheck.QueryKind): Boolean? = when (kind) {
+    ProposalCheck.QueryKind.RULE_ENABLE -> true
+    ProposalCheck.QueryKind.RULE_DISABLE -> false
+    else -> null
+  }
+
   /** The answer to a query. Names of enabled routines only, never their steps. */
   internal fun answer(context: Context, kind: ProposalCheck.QueryKind, argument: String? = null,
     showQuestions: Boolean = true): String = when (kind) {
@@ -635,6 +660,11 @@ object InstinctProposalCenter {
     ProposalCheck.QueryKind.CANCEL_ONE -> InstinctScheduler.cancelShortAnswer(context, argument.orEmpty())
     ProposalCheck.QueryKind.PROBE -> probe(context, "${ProposalCheck.QueryKind.PROBE.phrase} ${argument.orEmpty()}", argument.orEmpty(),
       ProposalSource.BUZON).message
+    ProposalCheck.QueryKind.RULES -> InstinctContextScheduler.describe(context)
+    ProposalCheck.QueryKind.RULE_STATUS -> InstinctContextScheduler.describe(context, argument)
+    ProposalCheck.QueryKind.RULE_ENABLE -> InstinctContextScheduler.change(context, argument.orEmpty(), true).detail
+    ProposalCheck.QueryKind.RULE_DISABLE -> InstinctContextScheduler.change(context, argument.orEmpty(), false).detail
+    ProposalCheck.QueryKind.RULE_DELETE -> InstinctContextScheduler.change(context, argument.orEmpty(), null).detail
     ProposalCheck.QueryKind.EXECUTIONS -> runCatching { InstinctExecutionQueries.list(context, showQuestions) }.getOrDefault(JOURNAL_UNREADABLE)
     ProposalCheck.QueryKind.EXECUTION_STATUS -> runCatching { InstinctExecutionQueries.status(context, argument.orEmpty(), showQuestions) }.getOrDefault(JOURNAL_UNREADABLE)
   }
@@ -654,10 +684,16 @@ object InstinctProposalCenter {
     val check = InstinctProposalValidator.check(inner, PhoneCommandParser(), now, InstinctRoutineGrants(app).access())
     val minute = InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock())
     val verdict = when (check) {
-      is ProposalCheck.Question -> InstinctQuestionNotifications.probe(app, source)
+      is ProposalCheck.Question -> InstinctQuestionNotifications.probe(app, source, check.question)
+      is ContextualCheck -> when {
+        source != ProposalSource.BUZON -> InstinctProbe.Verdict.Invalid(InstinctContextScheduler.ONLY_SIGNED)
+        else -> InstinctContextScheduler.blocker(app, check.spec)?.let { InstinctProbe.Verdict.Invalid(it) }
+          ?: InstinctProbe.Verdict.Scheduled("regla contextual por ${check.spec.days} días")
+      }
       is ProposalCheck.Invalid -> InstinctProbe.Verdict.Invalid(InstinctAck.reason(check.reason))
       is ProposalCheck.Query -> if (check.kind == ProposalCheck.QueryKind.PROBE) InstinctProbe.Verdict.Invalid("no se puede probar una prueba")
-        else InstinctProbe.Verdict.Alone("consulta")
+        else if (check.kind in InstinctProposalValidator.ruleQueries && source != ProposalSource.BUZON) InstinctProbe.Verdict.Invalid(InstinctContextScheduler.ONLY_SIGNED)
+        else InstinctProbe.Verdict.Alone(if (check.kind.readOnly) "consulta" else "cambio de programación")
       is ProposalCheck.Notice -> when {
         source != ProposalSource.BUZON -> InstinctProbe.Verdict.Invalid(InstinctNotice.ONLY_MAILBOX)
         InstinctAutonomySettings(app).policy().level(InstinctCategory.AVISOS) == InstinctAutonomy.NUNCA -> InstinctProbe.Verdict.Refused
@@ -789,7 +825,8 @@ object InstinctProposalCenter {
 
   /** The photo the gate decides on: read once, no effects. */
   internal fun snapshot(context: Context, foreground: Boolean, source: ProposalSource = ProposalSource.WHATSAPP): GateSnapshot =
-    GateSnapshot(locked = !foreground && keyguardLocked(context), accessibility = accessibilityConnected(), foreground = foreground,
+    GateSnapshot(locked = !foreground && (keyguardLocked(context) ||
+      context.getSystemService(android.os.PowerManager::class.java)?.isInteractive == false), accessibility = accessibilityConnected(), foreground = foreground,
       budgetAvailable = budget.available(), policy = InstinctAutonomySettings(context).policy(),
       minuteOfDay = InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock()), source = source,
       whatsappCap = InstinctMailboxSettings(context).whatsappCap())
@@ -822,8 +859,79 @@ object InstinctProposalCenter {
       }
       InstinctAutonomyGate.Gate.Run -> Unit
     }
-    val claim = book.claim(proposal.id, fingerprint(context))
+    val claim = book.claim(proposal.id, proposalFingerprint(context, proposal))
     if (claim !is ProposalBook.Claim.Granted) { reportUnavailable(context, proposal, claim); return }
+    executeBackground(context, proposal, canReoffer = proposal.fingerprint != InstinctContextScheduler.FINGERPRINT)
+  }
+
+  private fun proposalFingerprint(context: Context, proposal: ProposalBook.Proposal?): String? =
+    if (proposal?.fingerprint == InstinctContextScheduler.FINGERPRINT)
+      InstinctContextScheduler.FINGERPRINT.takeIf { InstinctProposalSettings(context).isEnabled() }
+    else fingerprint(context)
+
+  internal fun dispatchContext(context: Context, row: ExecutionRecord, resumeReady: Boolean = false) {
+    val journal = InstinctExecutions.journal(context)
+    if (!InstinctProposalSettings(context).isEnabled() || !journal.contextEnabled(row)) {
+      InstinctExecutionRecoveryManager.settle(context, row, ExecutionState.CANCELLED, "regla desactivada o vencida")
+      return
+    }
+    val calendar = java.util.Calendar.getInstance().apply { timeInMillis = InstinctExecutionJournal.clock() }
+    val rule = InstinctContextScheduler.rules(context).firstOrNull { it.id == row.occurrence }
+    if (rule == null || !InstinctContextScheduler.hasPermissions(context, rule.spec) ||
+      (row.owner != InstinctExecutionJournal.owner || resumeReady) && !InstinctContextScheduler.stillMatches(context, rule)) {
+      InstinctExecutionRecoveryManager.settle(context, row, ExecutionState.CANCELLED, "las condiciones ya no se cumplen o falta un permiso")
+      return
+    }
+    val check = InstinctProposalValidator.check(row.line, PhoneCommandParser(), calendar)
+    if (check is ProposalCheck.Notice) {
+      if (!InstinctExecutions.begin(context, row.executionId, null)) return
+      val entry = notice(context, check, ProposalSource.BUZON)
+      InstinctExecutions.move(context, row.executionId, if (entry.kind == AckKind.OK) ExecutionState.VERIFIED else ExecutionState.FAILED,
+        result = entry.message)
+      return
+    }
+    val command = (check as? ProposalCheck.Valid)?.takeIf { it.deferred == null }?.command?.takeIf(LockScreenPolicy::runsLocked)
+    if (command == null) {
+      InstinctExecutionRecoveryManager.settle(context, row, ExecutionState.FAILED, ContextRuleSpec.INVALID)
+      return
+    }
+    if (!resumeReady && !InstinctExecutions.move(context, row.executionId, ExecutionState.READY, from = setOf(ExecutionState.RECEIVED))) return
+    val proposal = book.offer(row.line, command, InstinctContextScheduler.FINGERPRINT, ProposalSource.BUZON, row.executionId) ?: return
+    InstinctExecutions.link(proposal.id, row.executionId)
+    runInBackground(context, proposal)
+  }
+
+  /** A notification option is the person's confirmation; the journal still owns dispatch and verification. */
+  internal fun dispatchDecision(context: Context, row: ExecutionRecord, resumeReady: Boolean = false) {
+    val now = InstinctExecutionJournal.clock()
+    val calendar = java.util.Calendar.getInstance().apply { timeInMillis = now }
+    val command = InstinctProposalValidator.backgroundAction(row.line, PhoneCommandParser(), calendar)
+    val reason = when {
+      now >= (row.deadline ?: 0) -> ExecutionRecoveryPolicy.LAPSED
+      !InstinctProposalSettings(context).isEnabled() ||
+        InstinctAutonomySettings(context).policy().level(InstinctCategory.PREGUNTAS) == InstinctAutonomy.NUNCA ->
+        InstinctAutonomyPolicy.REFUSED
+      command == null -> InstinctQuestion.INVALID
+      refusedByPolicy(context, command) -> InstinctAutonomyPolicy.REFUSED
+      else -> blocker(context, command, foreground = false)
+    }
+    if (reason != null || command == null) {
+      InstinctExecutions.move(context, row.executionId,
+        if (reason == ExecutionRecoveryPolicy.LAPSED) ExecutionState.EXPIRED else ExecutionState.FAILED,
+        reason = reason, from = setOf(ExecutionState.RECEIVED, ExecutionState.READY))
+      return
+    }
+    if (!resumeReady && !InstinctExecutions.move(context, row.executionId, ExecutionState.READY, from = setOf(ExecutionState.RECEIVED))) return
+    val fingerprint = row.parent.orEmpty()
+    val proposal = book.offer(row.line, command, fingerprint, ProposalSource.BUZON, row.executionId) ?: return
+    InstinctExecutions.link(proposal.id, row.executionId)
+    if (book.claim(proposal.id, fingerprint) !is ProposalBook.Claim.Granted) return
+    executeBackground(context, proposal, canReoffer = false, successTrust = TrustEvent.CONFIRMADA)
+  }
+
+  private fun executeBackground(context: Context, proposal: ProposalBook.Proposal, canReoffer: Boolean,
+    successTrust: TrustEvent = TrustEvent.EJECUTADA) {
+    val execution = proposal.executionId
     // 1.20.0: «despachando» is on disk before anything touches the phone; without it nothing runs.
     if (!InstinctExecutions.begin(context, execution, proposal.command)) {
       report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, NOT_RECORDED)); return
@@ -847,6 +955,11 @@ object InstinctProposalCenter {
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.FAILED, result.message)
         notifyResult(context, proposal, "Instinct pidió: ${proposal.summary}", "No se pudo: ${result.message}")
         report(context, proposal, result)
+      }
+      !canReoffer && InstinctAck.needsUser(result) -> {
+        InstinctReadiness.noteMissing(context, result)
+        notifyResult(context, proposal, "Insto no pudo ejecutar la acción", result.message)
+        report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, result.message))
       }
       InstinctAck.needsUser(result) -> {
         // It did not happen: it goes back for a touch, which can open the panel, ask a permission or choose. A missing
@@ -875,7 +988,7 @@ object InstinctProposalCenter {
           report(context, proposal.id, entry); return
         }
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.EXECUTED)
-        InstinctTrust.record(context, proposal.command, TrustEvent.EJECUTADA)
+        InstinctTrust.record(context, proposal.command, successTrust)
         val undo = capture?.let { InstinctUndoActions.complete(context, it) }
           ?.let { undos.offer(proposal.id, proposal.order, listOf(it), category = InstinctTrust.category(proposal.command)) }
         notifyResult(context, proposal, "Instinct hizo: ${proposal.summary}", result.message, undo)
@@ -897,7 +1010,10 @@ object InstinctProposalCenter {
    */
   internal fun restoreWaiting(context: Context, row: ExecutionRecord, until: Long): Boolean {
     val app = context.applicationContext
-    val fingerprint = awaitFingerprint(app) ?: return false
+    val fingerprint = if (row.transport == ExecutionTransport.CONTEXT) {
+      if (!InstinctProposalSettings(app).isEnabled() || !InstinctExecutions.journal(app).contextEnabled(row)) return false
+      InstinctContextScheduler.FINGERPRINT
+    } else awaitFingerprint(app) ?: return false
     val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
     val check = InstinctProposalValidator.check(row.line, PhoneCommandParser(), now, InstinctRoutineGrants(app).access())
     if (check !is ProposalCheck.Valid || check.deferred != null || refusedByPolicy(app, check.command)) return false
@@ -1007,7 +1123,12 @@ object InstinctProposalCenter {
    */
   fun claim(context: Context, id: Long, token: String? = null, fromNotification: Boolean = false, auto: Boolean = false): ProposalBook.Claim {
     val proposal = book.find(id)
-    var claim = book.claim(id, fingerprint(context), token, requireToken = fromNotification)
+    var claim = book.claim(id, proposalFingerprint(context, proposal), token, requireToken = fromNotification)
+    if (claim is ProposalBook.Claim.Granted && claim.proposal.fingerprint == InstinctContextScheduler.FINGERPRINT &&
+      refusedByPolicy(context, claim.proposal.command)) {
+      report(context, claim.proposal.id, AckEntry(AckKind.ERROR, claim.proposal.order, InstinctAutonomyPolicy.REFUSED))
+      claim = ProposalBook.Claim.Used
+    }
     // The panel and the notification run it right after this: «despachando» first, or it does not run (1.20.0).
     if (claim is ProposalBook.Claim.Granted && !InstinctExecutions.begin(context, claim.proposal.executionId, claim.proposal.command)) {
       report(context, claim.proposal.id, AckEntry(AckKind.ERROR, claim.proposal.order, NOT_RECORDED))
@@ -1028,6 +1149,17 @@ object InstinctProposalCenter {
       report(context, id, AckEntry(AckKind.DISCARDED, proposal.order, "la persona la descartó; no se ejecutó."))
     }
     cancelNotification(context, id)
+  }
+
+  internal fun removeCancelledContextNotifications(context: Context) {
+    val journal = InstinctExecutions.existingJournal(context) ?: return
+    book.pending().filter { it.fingerprint == InstinctContextScheduler.FINGERPRINT }.forEach { proposal ->
+      val id = proposal.executionId ?: return@forEach
+      if (journal.get(id)?.state != ExecutionState.CANCELLED) return@forEach
+      book.discard(proposal.id)
+      InstinctExecutions.unlink(proposal.id)
+      cancelNotification(context, proposal.id)
+    }
   }
 
   fun discardAll(context: Context) {
@@ -1191,7 +1323,8 @@ object InstinctProposalCenter {
 class InstinctProposalReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
     if (intent.action == InstinctQuestionNotifications.ACTION || intent.action == InstinctQuestionNotifications.TICK ||
-      intent.action == Intent.ACTION_TIME_CHANGED || intent.action == Intent.ACTION_TIMEZONE_CHANGED) {
+      intent.action == Intent.ACTION_TIME_CHANGED || intent.action == Intent.ACTION_TIMEZONE_CHANGED ||
+      intent.action == Intent.ACTION_MY_PACKAGE_REPLACED || intent.action == android.app.AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED) {
       val pending = goAsync()
       Thread({
         try { runCatching { InstinctQuestionNotifications.handle(context.applicationContext, intent) } }

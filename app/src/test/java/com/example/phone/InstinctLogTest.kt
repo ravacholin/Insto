@@ -36,7 +36,7 @@ class InstinctLogTest {
     assertEquals("subir el volumen", e.order)
     assertEquals("Volumen multimedia ajustado.", e.detail)
     assertEquals(hash.take(12), e.message)
-    assertEquals("Protocolo Insto v7", e.protocol)
+    assertEquals("Protocolo Insto v8", e.protocol)
     assertEquals(setOf("id", "at", "kind", "order", "detail", "message", "protocol"), e.json().keys().asSequence().toSet())
     assertEquals(e, InstinctLogEvent.from(e.json()))
   }
@@ -338,7 +338,7 @@ class InstinctLogTest {
 
   @Test fun `the log catalog says how to read it and the chat copy never carries the address nor the token`() {
     val copy = InstinctProtocolCatalog.text(emptyList(), log = InstinctCatalogLog(url, token))
-    assertTrue(copy.contains("Protocolo Insto v7"))
+    assertTrue(copy.contains("Protocolo Insto v8"))
     assertTrue(copy.contains("GET $url?token=$token&since=<ISO>&limit=50"))
     assertTrue(copy.contains("{ok, events:[{recibido, evento_id, ocurrido, tipo, orden, detalle, mensaje_id, protocolo}]}"))
     assertTrue(copy.contains("Antes de repetir o corregir una orden, consultá la bitácora."))
@@ -351,7 +351,7 @@ class InstinctLogTest {
     assertTrue(InstinctAck.safe(chat))
     assertTrue(InstinctProposalProtocol.orders(chat).isEmpty())
     val whatsapp = InstinctProtocolCatalog.text(emptyList())
-    assertTrue(whatsapp.contains("Requiere bitácora. Las respuestas se anotan solo ahí"))
+    assertTrue(whatsapp.contains("Requiere bitácora. Las respuestas se anotan ahí aunque hayan llegado por chat"))
     assertFalse(whatsapp.contains("action=estado"))
     assertNotNull(whatsapp.lines().firstOrNull { it.startsWith("#insto-ok ") })
   }

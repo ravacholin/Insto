@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.AtomicFile
 import com.example.backup.InstinctBackupAccess
 import com.example.backup.InstinctBackupData
+import com.example.backup.InstinctBackupRule
+import com.example.backup.InstinctSection
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -46,10 +48,17 @@ class InstinctBackupStore(context: Context) : InstinctBackupAccess {
       doorbellWithOrder = InstinctDoorbell.settings(app).withOrder(),
       doorbellDistributor = InstinctDoorbell.settings(app).chosen(),
       recurrences = recurrences,
+      contextRules = InstinctContextScheduler.rules(app).filter { it.expiresAt > InstinctExecutionJournal.clock() }
+        .map { InstinctBackupRule(it.spec.line, it.expiresAt, it.enabled) },
+      showQuestionsOnLockScreen = text(InstinctAutonomySettings.QUESTION_VISIBILITY)?.toBooleanStrictOrNull(),
     )
   }
 
   override fun write(data: InstinctBackupData) {
+    val visibility = InstinctAutonomySettings(app)
+    val before = visibility.showQuestionsOnLockScreen()
+    put(InstinctAutonomySettings.QUESTION_VISIBILITY, data.showQuestionsOnLockScreen?.toString())
+    if (before != visibility.showQuestionsOnLockScreen()) InstinctQuestionNotifications.privacyChanged(app)
     put(REPLY, data.replyMode?.takeIf { it != InstinctReplyMode.NEVER }?.name)
     put(CHANNEL, data.channel?.takeIf { it != InstinctAckChannel.WHATSAPP }?.name)
     if (data.autonomy != null) { put(InstinctAutonomySettings.FILE, data.autonomy); file(InstinctAutonomySettings.LEGACY_FILE).delete() }
@@ -69,7 +78,8 @@ class InstinctBackupStore(context: Context) : InstinctBackupAccess {
 
   override fun requestReactivation(data: InstinctBackupData) {
     val o = JSONObject().put("proposals", data.proposalsEnabled).put("mailbox", data.mailboxEnabled).put("doorbell", data.doorbellEnabled)
-      .put("recurrences", JSONArray(data.recurrences)).put("at", InstinctScheduler.wallClock())
+      .put("recurrences", JSONArray(data.recurrences)).put("contextRules", InstinctSection.encodeRules(data.contextRules))
+      .put("at", InstinctScheduler.wallClock())
     writeAtomically(file(InstinctReactivation.FILE), o.toString(), "insto-reactivation-")
   }
 
@@ -100,13 +110,15 @@ class InstinctBackupStore(context: Context) : InstinctBackupAccess {
 object InstinctReactivation {
   const val FILE = "instinct-reactivation.json"
 
-  data class Request(val proposals: Boolean, val mailbox: Boolean, val doorbell: Boolean, val recurrences: List<String>, val at: Long)
+  data class Request(val proposals: Boolean, val mailbox: Boolean, val doorbell: Boolean, val recurrences: List<String>,
+    val at: Long, val contextRules: List<InstinctBackupRule> = emptyList())
   data class Step(val name: String, val ok: Boolean, val detail: String)
 
   fun pending(context: Context): Request? = runCatching {
     val o = JSONObject(File(context.applicationContext.noBackupFilesDir, FILE).readText())
     val lines = o.optJSONArray("recurrences") ?: JSONArray()
-    Request(o.optBoolean("proposals"), o.optBoolean("mailbox"), o.optBoolean("doorbell"), (0 until lines.length()).map { lines.getString(it) }, o.optLong("at"))
+    Request(o.optBoolean("proposals"), o.optBoolean("mailbox"), o.optBoolean("doorbell"), (0 until lines.length()).map { lines.getString(it) },
+      o.optLong("at"), InstinctSection.decodeRules(o.optJSONArray("contextRules") ?: JSONArray()))
   }.getOrNull()
 
   fun dismiss(context: Context) { File(context.applicationContext.noBackupFilesDir, FILE).delete() }
@@ -123,6 +135,7 @@ object InstinctReactivation {
     steps += Step("Permisos de Android", missing.isEmpty(), if (missing.isEmpty()) "todo concedido."
       else "faltan: ${missing.joinToString { it.capability.label }}. Concedelos en «Funcionar con el teléfono bloqueado».")
     var leftRecurrences = request.recurrences
+    var leftRules = request.contextRules.filter { it.expiresAt > InstinctExecutionJournal.clock() }
     var proposals = false
     if (request.proposals || request.mailbox || request.doorbell || request.recurrences.isNotEmpty()) {
       val settings = InstinctProposalSettings(app)
@@ -173,6 +186,14 @@ object InstinctReactivation {
       steps += Step("Órdenes recurrentes", failed.isEmpty(), "programadas $scheduled de ${request.recurrences.size}" +
         if (failed.isEmpty()) "." else "; no se pudieron programar: ${failed.joinToString(" | ") { it.take(60) }}.")
     }
+    if (leftRules.isNotEmpty()) {
+      val total = leftRules.size
+      leftRules = leftRules.filter { rule ->
+        val spec = ContextRuleSpec.parse(rule.line) ?: return@filter true
+        InstinctContextScheduler.create(app, spec, rule.expiresAt, rule.enabled) != null
+      }
+      steps += Step("Reglas contextuales", leftRules.isEmpty(), "restauradas ${total - leftRules.size} de $total.")
+    }
     runCatching { InstinctScheduler.rearm(app) }
     runCatching { InstinctMailbox.rearm(app) }
     runCatching { InstinctStatePublisher.rearm(app) }
@@ -180,10 +201,11 @@ object InstinctReactivation {
     steps += Step("Programación y catálogo", true, "jobs rearmados; el catálogo vivo se publica de nuevo.")
     // Only what could not be done stays pending; recurrences already scheduled never are scheduled twice.
     val left = request.copy(proposals = request.proposals && !proposals, mailbox = request.mailbox && !InstinctMailboxSettings(app).enabled(),
-      doorbell = request.doorbell && !InstinctDoorbell.settings(app).enabled(), recurrences = leftRecurrences)
-    if (!left.proposals && !left.mailbox && !left.doorbell && left.recurrences.isEmpty()) dismiss(app)
+      doorbell = request.doorbell && !InstinctDoorbell.settings(app).enabled(), recurrences = leftRecurrences, contextRules = leftRules)
+    if (!left.proposals && !left.mailbox && !left.doorbell && left.recurrences.isEmpty() && left.contextRules.isEmpty()) dismiss(app)
     else writeAtomically(File(app.noBackupFilesDir, FILE), JSONObject().put("proposals", left.proposals).put("mailbox", left.mailbox)
-      .put("doorbell", left.doorbell).put("recurrences", JSONArray(left.recurrences)).put("at", left.at).toString(), "insto-reactivation-")
+      .put("doorbell", left.doorbell).put("recurrences", JSONArray(left.recurrences))
+      .put("contextRules", InstinctSection.encodeRules(left.contextRules)).put("at", left.at).toString(), "insto-reactivation-")
     return steps
   }
 }

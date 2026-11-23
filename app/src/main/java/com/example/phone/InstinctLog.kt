@@ -57,6 +57,12 @@ object InstinctLogEvents {
 
   /** The journal's id doubles as the event id, including after a lost HTTP response. */
   fun questionResponse(record: ExecutionRecord): InstinctLogEvent? {
+    if (record.transport == ExecutionTransport.DECISION || record.transport == ExecutionTransport.CONTEXT) {
+      val kind = ExecutionRecoveryPolicy.ack(record.state) ?: return null
+      val detail = listOfNotNull(record.parent ?: record.occurrence?.take(InstinctTriggers.SHORT_ID_LENGTH), record.reason ?: record.result ?: record.state.code).joinToString(" · ")
+      return InstinctLogEvent(record.executionId, iso(record.updatedAt, TimeZone.getTimeZone("UTC")),
+        RESPONSE_KIND, record.line, "${kind.code} · $detail", "", "").takeIf(::safe)
+    }
     val question = InstinctQuestion.decode(record.command, record.deadline) ?: return null
     val answer = record.result ?: return null
     return InstinctLogEvent(record.executionId, iso(record.updatedAt, TimeZone.getTimeZone("UTC")),

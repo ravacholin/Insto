@@ -74,7 +74,7 @@ object InstinctLog {
   }
 
   internal fun questionCompleted(context: Context) {
-    runCatching { schedule(context.applicationContext) }
+    if (InstinctLogSettings(context).configured()) runCatching { schedule(context.applicationContext) }
   }
 
   internal fun recoverQuestionReplies(context: Context) {

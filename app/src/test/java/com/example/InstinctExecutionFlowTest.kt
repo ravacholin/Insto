@@ -87,6 +87,7 @@ class InstinctExecutionFlowTest {
     File(app.noBackupFilesDir, InstinctExecutionJournal.FILE).delete()
     File(app.noBackupFilesDir, InstinctPushInbox.FILE).delete()
     shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    shadowOf(app.getSystemService(android.os.PowerManager::class.java)).setIsInteractive(true)
     shadowOf(app.packageManager).installPackage(PackageInfo().apply {
       packageName = "com.whatsapp"; applicationInfo = ApplicationInfo().apply { packageName = "com.whatsapp" }
     })
@@ -136,6 +137,137 @@ class InstinctExecutionFlowTest {
     InstinctExecutionJournal.owner = "proceso-muerto"
     assertEquals(setOf(order.id.lowercase()), InstinctMailbox.seen(app).claimOrders(listOf(order), transport))
     InstinctExecutionJournal.owner = live
+  }
+
+  @Test fun `a decision runs the selected action once while locked and asks no second confirmation`() {
+    InstinctProposalCenter.keyguardLocked = { true }
+    InstinctAutonomySettings(app).set(InstinctCategory.VOLUMEN, InstinctAutonomy.CONFIRMAR)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 8, 0)
+    val incoming = order("#insto decidir ¿Qué volumen? | Más => subir el volumen | Menos => bajar el volumen")
+    push(incoming)
+    val parent = journal.forMessage(incoming.id).single()
+    assertEquals(ExecutionState.ASKING, parent.state)
+    val manager = app.getSystemService(android.app.NotificationManager::class.java)
+    val question = manager.activeNotifications.single { it.tag == parent.executionId }.notification
+    assertEquals(android.app.Notification.VISIBILITY_SECRET, question.visibility)
+    assertNotNull(question.publicVersion)
+    assertFalse(question.publicVersion.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString().contains("volumen"))
+    assertTrue(question.publicVersion.actions.isNullOrEmpty())
+
+    val button = shadowOf(question.actions[1].actionIntent).savedIntent
+    InstinctQuestionNotifications.handle(app, button)
+    InstinctQuestionNotifications.handle(app, button)
+    assertEquals(7, volume())
+    assertEquals(ExecutionState.ANSWERED, journal.get(parent.executionId)?.state)
+    val child = journal.forMessage("decision:${parent.executionId}").single()
+    assertEquals(1, child.attempts)
+    assertTrue(child.state.terminal)
+    assertNotEquals(ExecutionState.FAILED, child.state)
+    assertEquals(setOf(parent.executionId, child.executionId), journal.pendingQuestionReplies(10).map { it.executionId }.toSet())
+  }
+
+  @Test fun `decision recovery resumes a recorded choice and respects a revoked category`() {
+    val incoming = order("#insto decidir ¿Qué volumen? | Más => subir el volumen | Menos => bajar el volumen")
+    push(incoming)
+    val parent = journal.forMessage(incoming.id).single()
+    InstinctExecutionJournal.owner = "proceso anterior"
+    val choice = requireNotNull(journal.finishQuestion(parent.executionId, 0)?.action)
+    InstinctExecutionJournal.owner = live
+    assertNotNull(journal.get(choice.executionId))
+    InstinctAutonomySettings(app).set(InstinctCategory.VOLUMEN, InstinctAutonomy.NUNCA)
+    assertEquals(0, volume())
+    assertTrue(InstinctExecutionRecoveryManager.recover(app) >= 1)
+    assertEquals(ExecutionState.FAILED, journal.get(choice.executionId)?.state)
+    assertEquals(0, journal.get(choice.executionId)?.attempts)
+    assertEquals(0, volume())
+  }
+
+  @Test fun `an expired decision creates no dispatch row and lockscreen visibility can be opted in`() {
+    InstinctAutonomySettings(app).setShowQuestionsOnLockScreen(true)
+    shadowOf(app.getSystemService(android.app.KeyguardManager::class.java)).setKeyguardLocked(true)
+    val incoming = order("#insto decidir ¿Qué volumen? | Más => subir el volumen | Menos => bajar el volumen en 1 hora")
+    push(incoming)
+    val manager = app.getSystemService(android.app.NotificationManager::class.java)
+    val parent = journal.forMessage(incoming.id).single()
+    assertEquals(android.app.Notification.VISIBILITY_PUBLIC, manager.activeNotifications.single { it.tag == parent.executionId }.notification.visibility)
+    InstinctAutonomySettings(app).setShowQuestionsOnLockScreen(false)
+    val redacted = manager.activeNotifications.single { it.tag == parent.executionId }.notification
+    assertEquals("Tenés una pregunta pendiente.", redacted.extras.getCharSequence(android.app.Notification.EXTRA_TEXT))
+    assertTrue(redacted.actions.isNullOrEmpty())
+    shadowOf(app.getSystemService(android.app.KeyguardManager::class.java)).setKeyguardLocked(false)
+    InstinctQuestionNotifications.refresh(app)
+    assertEquals(android.app.Notification.VISIBILITY_SECRET, manager.activeNotifications.single { it.tag == parent.executionId }.notification.visibility)
+    wall += 3_600_000
+    assertEquals(ExecutionState.EXPIRED, journal.finishQuestion(parent.executionId, 0)?.state)
+    assertTrue(journal.forMessage("decision:${parent.executionId}").isEmpty())
+  }
+
+  @Test fun `a decision fails without reoffering when Android permission is revoked`() {
+    val manager = app.getSystemService(android.app.NotificationManager::class.java)
+    shadowOf(manager).setNotificationPolicyAccessGranted(true)
+    val incoming = order("#insto decidir ¿Qué modo? | Silencio => silenciar el teléfono | No molestar => activar no molestar")
+    push(incoming)
+    val parent = journal.forMessage(incoming.id).single()
+    val notification = manager.activeNotifications.single { it.tag == parent.executionId }.notification
+    shadowOf(manager).setNotificationPolicyAccessGranted(false)
+    InstinctQuestionNotifications.handle(app, shadowOf(notification.actions[1].actionIntent).savedIntent)
+    val child = journal.forMessage("decision:${parent.executionId}").single()
+    assertEquals(ExecutionState.FAILED, child.state)
+    assertFalse(InstinctProposalCenter.book.pending().any { it.executionId == child.executionId })
+  }
+
+  @Test fun `signed rules can be managed without a WhatsApp package`() {
+    shadowOf(app.packageManager).removePackage("com.whatsapp")
+    val definition = "cuando al desbloquear: bajar el volumen"
+    val incoming = order("#insto $definition", "#insto desactivar regla ffffff")
+    push(incoming)
+    assertEquals(listOf(definition), journal.contextRules().map { it.spec.line })
+    val rows = journal.forMessage(incoming.id)
+    assertEquals(ExecutionState.VERIFIED, rows[0].state)
+    assertEquals(ExecutionState.FAILED, rows[1].state)
+  }
+
+  @Test fun `local rule edge survives reopening SQLite and dispatches offline with the screen off`() {
+    shadowOf(app.getSystemService(android.os.PowerManager::class.java)).setIsInteractive(false)
+    audio.setStreamVolume(AudioManager.STREAM_MUSIC, 8, 0)
+    val spec = requireNotNull(ContextRuleSpec.parse("cuando al desbloquear: bajar el volumen"))
+    assertTrue(journal.saveContextRule(ContextRule(spec, wall + 300_000)))
+    val snapshot = ContextSnapshot(unlock = true)
+    InstinctExecutionJournal.owner = "proceso anterior"
+    val child = journal.evaluateContextRules(snapshot, wall).single()
+    InstinctExecutionJournal.resetAll()
+    InstinctExecutionJournal.owner = live
+    box.setEnabled(false)
+    assertTrue(InstinctExecutionRecoveryManager.recover(app) >= 1)
+    assertEquals(7, volume())
+    assertEquals(1, journal.get(child.executionId)?.attempts)
+    assertTrue(journal.evaluateContextRules(snapshot, wall).isEmpty())
+    assertEquals(1, journal.byOccurrence(spec.id).size)
+  }
+
+  @Test fun `pausing a rule cancels a pending occurrence even if enabled again before dispatch`() {
+    val spec = requireNotNull(ContextRuleSpec.parse("cuando al desbloquear: subir el volumen"))
+    assertTrue(journal.saveContextRule(ContextRule(spec, wall + 300_000)))
+    val occurrence = journal.evaluateContextRules(ContextSnapshot(unlock = true), wall).single()
+    assertTrue(journal.changeContextRule(spec.id, false))
+    assertTrue(journal.changeContextRule(spec.id, true))
+    InstinctProposalCenter.dispatchContext(app, occurrence)
+    assertEquals(ExecutionState.CANCELLED, journal.get(occurrence.executionId)?.state)
+    assertEquals(0, volume())
+  }
+
+  @Test fun `schema two migrates without dropping saved questions`() {
+    val incoming = order("#insto preguntar ¿Café? | Sí | No")
+    push(incoming)
+    val saved = journal.forMessage(incoming.id).single()
+    InstinctExecutionJournal.resetAll()
+    android.database.sqlite.SQLiteDatabase.openDatabase(File(app.noBackupFilesDir, InstinctExecutionJournal.FILE).path,
+      null, android.database.sqlite.SQLiteDatabase.OPEN_READWRITE).use { db ->
+      db.execSQL("DROP TABLE context_rules")
+      db.version = 2
+    }
+    assertTrue(journal.contextRules().isEmpty())
+    assertEquals(saved, journal.get(saved.executionId))
   }
 
   // ---------------------------------------------------------------------------------------------------------------

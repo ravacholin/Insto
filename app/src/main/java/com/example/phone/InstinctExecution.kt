@@ -70,7 +70,7 @@ interface InstinctOrderClaims {
 /** Where an execution came from. The same allowlist, validator and policies apply to all of them. */
 enum class ExecutionTransport(val code: String) {
   PUSH("timbre"), POLL("buzón"), WHATSAPP("whatsapp"), SCHEDULE("programada"), TRIGGER("disparador"),
-  RECURRENCE("recurrente"), RESTORE("restauración"), LEGACY("1.19.0");
+  RECURRENCE("recurrente"), DECISION("decisión"), CONTEXT("regla local"), RESTORE("restauración"), LEGACY("1.19.0");
 
   companion object { fun of(name: String?): ExecutionTransport? = entries.firstOrNull { it.name == name } }
 }
@@ -226,7 +226,7 @@ object ExecutionText {
   internal fun line(record: ExecutionRecord, now: Long, showQuestion: Boolean, clock: (Long) -> String): String {
     val age = if (now >= record.updatedAt) clock(record.updatedAt) else "?"
     val status = "${record.shortId} ${record.state.code} ($age, ${record.transport.code})"
-    if (!showQuestion && InstinctQuestion.isRelated(record.line)) return "$status · detalle en la bitácora"
+    if (!showQuestion && (InstinctQuestion.isRelated(record.line) || record.transport == ExecutionTransport.DECISION)) return "$status · detalle en la bitácora"
     val what = InstinctAck.flat(record.line.removePrefix(InstinctProposalProtocol.PREFIX).trim()).take(60)
     val why = (record.reason ?: record.result)?.let { " · " + InstinctAck.flat(it).trimEnd('.').take(90) }.orEmpty()
     val attribution = record.attribution?.takeIf { record.state == ExecutionState.VERIFIED }?.let { " · ${it.label}" }.orEmpty()

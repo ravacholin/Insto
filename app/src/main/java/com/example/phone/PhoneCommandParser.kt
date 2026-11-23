@@ -311,7 +311,7 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
       return verb + request.substring(head.value.length)
     }
     fun normalize(text: String): String = normalize(text, punctuation)
-    private fun normalizeForClock(text: String): String = normalize(text, clockPunctuation)
+    internal fun normalizeForClock(text: String): String = normalize(text, clockPunctuation)
     private fun normalize(text: String, punctuation: Regex): String =
       Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFD)
         .replace(Regex("\\p{M}+"), "").replace(punctuation, " ").replace(Regex("\\s+"), " ").trim()

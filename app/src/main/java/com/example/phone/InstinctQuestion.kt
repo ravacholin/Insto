@@ -4,10 +4,15 @@ import java.util.Calendar
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal data class QuestionOutcome(val state: ExecutionState, val response: String)
+internal data class QuestionOutcome(val state: ExecutionState, val response: String, val action: ExecutionRecord? = null)
 
-data class InstinctQuestion(val text: String, val options: List<String>, val expiresAt: Long) {
-  internal fun encode(): String = JSONObject().put("text", text).put("options", JSONArray(options)).toString()
+data class InstinctQuestion(val text: String, val options: List<String>, val expiresAt: Long, val actions: List<String> = emptyList()) {
+  internal fun encode(): String = JSONObject().put("text", text).put("options", JSONArray(options)).apply {
+    if (actions.isNotEmpty()) put("actions", JSONArray(actions))
+  }.toString()
+
+  internal fun notificationText(): String = if (actions.isEmpty()) text else
+    text + "\n" + options.zip(actions).joinToString("\n") { (label, action) -> "$label → $action" }
 
   internal fun outcome(state: ExecutionState, now: Long, choice: Int?): QuestionOutcome? {
     if (state !in PENDING) return null
@@ -20,7 +25,8 @@ data class InstinctQuestion(val text: String, val options: List<String>, val exp
 
   companion object {
     const val FORM = "preguntar <texto> | <opción 1> | <opción 2> [| <opción 3>]"
-    const val INVALID = "separá la pregunta y 2 o 3 opciones con «|» y revisá el plazo."
+    const val DECISION_FORM = "decidir <texto> | <opción> => <acción> | <opción> => <acción> [| <opción> => <acción>]"
+    const val INVALID = "separá 2 o 3 opciones con «|» y revisá las acciones o el plazo."
     const val NEEDS_LOG = "necesita bitácora"
     const val MAX_TEXT = 140
     const val MAX_OPTION = 24
@@ -31,7 +37,7 @@ data class InstinctQuestion(val text: String, val options: List<String>, val exp
     internal const val HOUR = 3_600_000L
     internal const val DISCARD = -1
     internal val PENDING = setOf(ExecutionState.QUESTION_CONFIRM, ExecutionState.ASKING)
-    private val head = Regex("^preguntar(?=\\s|$)", RegexOption.IGNORE_CASE)
+    private val head = Regex("^(?:preguntar|decidir)(?=\\s|$)", RegexOption.IGNORE_CASE)
     private val suffix = Regex("""\s+(?:hasta las(?:\s+(.*))?|en\s+([+-]?\d+)\s+horas?)$""", RegexOption.IGNORE_CASE)
 
     internal fun isOrder(line: String): Boolean = head.containsMatchIn(line.trimStart())
@@ -64,9 +70,14 @@ data class InstinctQuestion(val text: String, val options: List<String>, val exp
       }
       if (expiry - now.timeInMillis !in 1..MAX_HOURS * HOUR) return null
       val text = fields.first()
-      val options = fields.drop(1)
+      val choices = fields.drop(1)
+      val decision = verb.value.equals("decidir", ignoreCase = true)
+      val parts = if (decision) choices.map { it.split("=>").map(String::trim) } else choices.map { listOf(it) }
+      if (decision && parts.any { it.size != 2 || !validField(it[1], 200) }) return null
+      val options = parts.map { it.first() }
       if (!validField(text, MAX_TEXT) || options.any { !validField(it, MAX_OPTION) }) return null
-      return InstinctQuestion(text, options, expiry)
+      if (decision && options.map(PhoneCommandParser::normalize).distinct().size != options.size) return null
+      return InstinctQuestion(text, options, expiry, if (decision) parts.map { it[1] } else emptyList())
     }
 
     private fun validField(value: String, max: Int): Boolean = value.length in 1..max && InstinctAck.safe(value)
@@ -76,7 +87,10 @@ data class InstinctQuestion(val text: String, val options: List<String>, val exp
       return runCatching {
         val data = JSONObject(encoded)
         val options = data.getJSONArray("options")
-        InstinctQuestion(data.getString("text"), List(options.length()) { options.getString(it) }, deadline)
+        val actions = data.optJSONArray("actions")
+        require(actions == null || options.length() == actions.length())
+        InstinctQuestion(data.getString("text"), List(options.length()) { options.getString(it) }, deadline,
+          actions?.let { List(it.length()) { index -> it.getString(index) } }.orEmpty())
       }.getOrNull()
     }
 

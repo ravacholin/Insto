@@ -18,6 +18,8 @@ object InstinctExecutions {
   internal fun existingJournal(context: Context): InstinctExecutionJournal? =
     if (File(context.applicationContext.noBackupFilesDir, InstinctExecutionJournal.FILE).isFile) journal(context) else null
 
+  internal fun unlink(key: Long) { byKey.remove(key) }
+
   internal fun link(key: Long, executionId: String?) { if (executionId != null) byKey[key] = executionId }
   internal fun relink(old: Long, new: Long) { byKey.remove(old)?.let { byKey[new] = it } }
   fun executionOf(key: Long): String? = byKey[key]
@@ -37,7 +39,11 @@ object InstinctExecutions {
       journal(context).transition(executionId, state, result, reason, from = from, attribution = attribution,
         proposalId = proposalId, occurrence = occurrence, reported = reported)
     }.getOrDefault(false)
-    if (moved && state.terminal) runCatching { closeParent(context, executionId, state) }
+    if (moved && state.terminal) runCatching {
+      closeParent(context, executionId, state)
+      if (journal(context).get(executionId)?.transport in setOf(ExecutionTransport.DECISION, ExecutionTransport.CONTEXT))
+        InstinctLog.questionCompleted(context)
+    }
     return moved
   }
 

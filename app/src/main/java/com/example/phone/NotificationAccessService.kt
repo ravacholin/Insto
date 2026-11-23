@@ -18,6 +18,8 @@ class NotificationAccessService : NotificationListenerService() {
   override fun onListenerDisconnected() { if(connected===this) connected=null; runCatching { state.stop() } }
   override fun onDestroy() { if(connected===this) connected=null; runCatching { state.stop() }; super.onDestroy() }
 
+  internal fun calendarPermissionChanged() { state.watchCalendar() }
+
   override fun onNotificationPosted(sbn: StatusBarNotification?) {
     // Checked before touching the notification: with the switch off nothing of it is read.
     if (sbn == null || !InstinctProposalSettings(this).isEnabled()) return

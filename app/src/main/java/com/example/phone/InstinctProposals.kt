@@ -32,12 +32,12 @@ sealed interface ProposalCheck {
   /** With [deferred], [command] is the inner order, checked now and again when it fires. */
   data class Valid(override val order: String, val command: PhoneCommand, val deferred: Deferred? = null) : ProposalCheck
   data class Invalid(override val order: String, val reason: Reason) : ProposalCheck
-  /** A read-only question about the protocol itself: it never does anything on the phone. */
+  /** An administrative order or a query about the protocol. */
   data class Query(override val order: String, val kind: QueryKind, val argument: String? = null) : ProposalCheck
   /** «avisarme <texto>» (1.16.0): a local notice for the person, allowed only from the signed mailbox. */
   data class Notice(override val order: String, val text: String) : ProposalCheck
   data class Question(override val order: String, val question: InstinctQuestion) : ProposalCheck
-  enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN, QUESTION }
+  enum class Reason { EMPTY, UNSAFE, NOT_LOCAL, SEMANTIC, FORBIDDEN, QUESTION, CONTEXT_RULE }
   /**
    * [readOnly] queries change nothing on the phone; «cancelar programadas» and «cancelar programada <id>» only
    * cancel Insto's own pending orders. None consumes the brake. [form] is how the catalog shows it.
@@ -47,7 +47,7 @@ sealed interface ProposalCheck {
     /** Publishes the phone's state in the log now (1.16.0). Changes nothing on the phone. */
     STATE("ver estado"),
     /** One scheduled order, or a whole recurrence, by the short id of «ver programadas» (1.17.0). */
-    CANCEL_ONE("cancelar programada", form = "cancelar programada <id>"),
+    CANCEL_ONE("cancelar programada", readOnly = false, form = "cancelar programada <id>"),
     /**
      * «probar <orden>» (1.18.0): validates the order with the same validator and says what would happen now, without
      * running, saving, scheduling, telling the person or consuming the brake. [ProposalCheck.Query.argument] is the order.
@@ -55,10 +55,17 @@ sealed interface ProposalCheck {
     PROBE("probar", form = "probar <orden>"),
     /** The journal's last executions (1.20.0): id, state, when, transport, order and result. Read-only. */
     EXECUTIONS("ver ejecuciones"),
+    RULES("ver reglas"),
+    RULE_STATUS("diagnóstico de regla", form = "diagnóstico de regla <id>"),
+    RULE_ENABLE("activar regla", readOnly = false, form = "activar regla <id>"),
+    RULE_DISABLE("desactivar regla", readOnly = false, form = "desactivar regla <id>"),
+    RULE_DELETE("eliminar regla", readOnly = false, form = "eliminar regla <id>"),
     /** One execution by the short id «ver ejecuciones» gives (1.20.0). Read-only. */
     EXECUTION_STATUS("estado de ejecución", form = "estado de ejecución <id>"),
   }
 }
+
+internal data class ContextualCheck(override val order: String, val spec: ContextRuleSpec) : ProposalCheck
 
 /**
  * The same checks as any order, with the explicit grammar only: [RequestSafetyPolicy], [PhoneCommandParser] (which
@@ -68,6 +75,19 @@ sealed interface ProposalCheck {
  */
 object InstinctProposalValidator {
   private val cancelOne = Regex("^cancelar programada ([0-9a-f]{${InstinctTriggers.SHORT_ID_LENGTH}})$")
+  private val ruleId = Regex("^(diagnostico de regla|activar regla|desactivar regla|eliminar regla) ([0-9a-f]{6})$")
+  internal val ruleQueries = setOf(ProposalCheck.QueryKind.RULES, ProposalCheck.QueryKind.RULE_STATUS,
+    ProposalCheck.QueryKind.RULE_ENABLE, ProposalCheck.QueryKind.RULE_DISABLE, ProposalCheck.QueryKind.RULE_DELETE)
+
+  internal fun isContextOrder(line: String): Boolean {
+    val order = probe(line) ?: line
+    val normalized = PhoneCommandParser.normalize(order)
+    return ContextRuleSpec.isOrder(order) || ruleQueries.any {
+      val name = PhoneCommandParser.normalize(it.phrase)
+      normalized == name || normalized.startsWith("$name ")
+    }
+  }
+
   private val executionStatus = Regex("^estado de ejecucion (e?[0-9a-f]{${ExecutionIds.SHORT}})$")
   private val silenceActions = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
     PlatformAction.DND_ON, PlatformAction.DND_OFF)
@@ -84,14 +104,27 @@ object InstinctProposalValidator {
     // Read-only questions about the protocol: exact phrases, before the grammar.
     val folded = PhoneCommandParser.normalize(order).trimEnd('.', '!')
     ProposalCheck.QueryKind.entries.firstOrNull { it != ProposalCheck.QueryKind.CANCEL_ONE && it != ProposalCheck.QueryKind.PROBE &&
-      it != ProposalCheck.QueryKind.EXECUTION_STATUS && PhoneCommandParser.normalize(it.phrase) == folded }?.let { return ProposalCheck.Query(order, it) }
+      it.form == it.phrase && PhoneCommandParser.normalize(it.phrase) == folded }?.let { return ProposalCheck.Query(order, it) }
     executionStatus.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.EXECUTION_STATUS, it.groupValues[1]) }
+    ruleId.matchEntire(folded)?.let { match ->
+      val kind = ProposalCheck.QueryKind.entries.first { PhoneCommandParser.normalize(it.phrase) == match.groupValues[1] }
+      return ProposalCheck.Query(order, kind, match.groupValues[2])
+    }
     // «probar <orden>»: the order is kept as written and checked by whoever answers, with this same validator.
     probe(order)?.let { inner ->
       return if (inner.isBlank()) ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY) else ProposalCheck.Query(order, ProposalCheck.QueryKind.PROBE, inner)
     }
+    if (ContextRuleSpec.isOrder(order)) {
+      val spec = ContextRuleSpec.parse(order) ?: return ProposalCheck.Invalid(order, ProposalCheck.Reason.CONTEXT_RULE)
+      val notice = InstinctNotice.text(spec.action)?.let(InstinctNotice::valid) == true
+      if (!notice && backgroundAction(spec.action, parse, now, routines) == null)
+        return ProposalCheck.Invalid(order, ProposalCheck.Reason.CONTEXT_RULE)
+      return ContextualCheck(order, spec)
+    }
     if (InstinctQuestion.isOrder(order)) {
       val question = InstinctQuestion.parse(order, now) ?: return ProposalCheck.Invalid(order, ProposalCheck.Reason.QUESTION)
+      if (question.actions.any { backgroundAction(it, parse, now, routines) == null })
+        return ProposalCheck.Invalid(order, ProposalCheck.Reason.QUESTION)
       return ProposalCheck.Question(order, question)
     }
     cancelOne.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.CANCEL_ONE, it.groupValues[1]) }
@@ -122,6 +155,18 @@ object InstinctProposalValidator {
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.SEMANTIC)
     if (!allowed(command) && !allowedRoutine(command, routines)) return ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
     return ProposalCheck.Valid(order, command)
+  }
+
+  internal fun backgroundAction(order: String, parser: PhoneCommandParser, now: Calendar,
+    routines: InstinctRoutineAccess = InstinctRoutineAccess.NONE): PhoneCommand? =
+    backgroundAction(order, parser::parse, now, routines)
+
+  private fun backgroundAction(order: String, parse: (String) -> PhoneRoute, now: Calendar,
+    routines: InstinctRoutineAccess): PhoneCommand? {
+    if (InstinctQuestion.isRelated(order) || ContextRuleSpec.isOrder(order) || '|' in order || order.length > 200) return null
+    val command = (check(order, parse, now, routines) as? ProposalCheck.Valid)
+      ?.takeIf { it.deferred == null }?.command ?: return null
+    return command.takeIf(LockScreenPolicy::runsLocked)
   }
 
   /** The order after «probar», as written (maybe empty); null when the line is not a probe. */
