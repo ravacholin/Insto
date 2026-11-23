@@ -54,6 +54,7 @@ object InstinctAck {
 
   /** A short Spanish sentence for each validation failure. */
   fun reason(reason: ProposalCheck.Reason): String = when (reason) {
+    ProposalCheck.Reason.QUESTION -> InstinctQuestion.INVALID
     ProposalCheck.Reason.EMPTY -> "la línea no tenía ninguna orden."
     ProposalCheck.Reason.UNSAFE -> "no se aceptan preguntas ni pedidos con condiciones o datos sensibles."
     ProposalCheck.Reason.NOT_LOCAL -> "no la entendí: usá una de las formas del catálogo."

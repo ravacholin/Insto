@@ -23,6 +23,7 @@ enum class InstinctCategory(val label: String) {
   RUTINAS("rutinas"),
   /** «#insto avisarme …» (fase 3): a local notice for the person, only from the signed mailbox. */
   AVISOS("avisos para vos"),
+  PREGUNTAS("Preguntas"),
   ;
 
   companion object {
@@ -144,7 +145,8 @@ data class InstinctAutonomyPolicy(
     /** Migration from 1.15.0: «Pedirme confirmación antes de ejecutar» on means every category starts at Confirmar. */
     fun migrated(askFirst: Boolean): InstinctAutonomyPolicy =
       if (!askFirst) InstinctAutonomyPolicy()
-      else InstinctAutonomyPolicy(InstinctCategory.entries.associateWith { InstinctAutonomy.CONFIRMAR })
+      else InstinctAutonomyPolicy(InstinctCategory.entries.filterNot { it == InstinctCategory.PREGUNTAS }
+        .associateWith { InstinctAutonomy.CONFIRMAR })
 
     fun encode(policy: InstinctAutonomyPolicy): String = JSONObject()
       .put("levels", JSONObject().apply { policy.levels.toSortedMap().forEach { (k, v) -> put(k.name, v.name) } })
@@ -386,8 +388,10 @@ class InstinctTrustLedger(private val clock: () -> Long, private val zone: () ->
    */
   @Synchronized fun lowering(category: InstinctCategory, level: InstinctAutonomy): Lowering? {
     if (level != InstinctAutonomy.SOLO) return null
-    val undone = count(category, TrustEvent.DESHECHA, LOWER_WINDOW_DAYS)
-    val executed = count(category, TrustEvent.EJECUTADA, LOWER_WINDOW_DAYS)
+    val questions = category == InstinctCategory.PREGUNTAS
+    val undone = if (questions) count(category, TrustEvent.DESCARTADA, LOWER_WINDOW_DAYS) +
+      count(category, TrustEvent.VENCIDA, LOWER_WINDOW_DAYS) else count(category, TrustEvent.DESHECHA, LOWER_WINDOW_DAYS)
+    val executed = count(category, TrustEvent.EJECUTADA, LOWER_WINDOW_DAYS) + if (questions) undone else 0
     val lower = undone >= LOWER_UNDONE || (executed >= LOWER_MIN_EXECUTED && undone * 100 >= LOWER_PERCENT * executed)
     return if (lower) Lowering(undone, executed) else null
   }

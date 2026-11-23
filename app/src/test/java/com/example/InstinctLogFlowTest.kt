@@ -111,7 +111,7 @@ class InstinctLogFlowTest {
     assertEquals("poner el volumen al 30 por ciento", events[0].order)
     assertEquals("esa acción no está permitida para Instinct.", events[1].detail)
     assertTrue(events.all { it.message.matches(Regex("[0-9a-f]{12}")) && it.message == events[0].message })
-    assertTrue(events.all { it.protocol == "Protocolo Insto v6" })
+    assertTrue(events.all { it.protocol == "Protocolo Insto v7" })
     assertTrue(scheduled > 0)
     assertFalse(InstinctProposalCenter.sendCatalog(app))
     assertTrue(sent.isEmpty())

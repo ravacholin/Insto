@@ -31,7 +31,7 @@ object InstinctExecutionRecoveryManager {
   }.getOrDefault(false)
 
   /** Every row left unfinished, once. Off the main thread. Returns how many it ended, resumed or restored. */
-  fun recover(context: Context): Int = synchronized(lock) {
+  fun recover(context: Context, questionsOnly: Boolean = false): Int = synchronized(lock) {
     val app = context.applicationContext
     val journal = InstinctExecutions.journal(app)
     val rows = runCatching { journal.unfinished() }.getOrNull() ?: return@synchronized 0
@@ -40,8 +40,10 @@ object InstinctExecutionRecoveryManager {
     val resume = ArrayList<Pair<ExecutionRecord, Boolean>>()
     val scheduledSeries by lazy { runCatching { InstinctScheduler.pending(app).map { it.series }.toSet() }.getOrNull() }
     for (row in rows) {
+      if (questionsOnly && !InstinctQuestion.isRelated(row.line)) continue
       val mine = row.owner == InstinctExecutionJournal.owner
       val action = ExecutionRecoveryPolicy.decide(row, now, effect(row))
+      if (action == ExecutionRecoveryPolicy.Action.RefreshQuestion) continue
       // A scheduled row is compared whoever owns it: cancelling a series does not pass through the journal.
       if (action == ExecutionRecoveryPolicy.Action.Reconcile) { if (reconcile(app, row, scheduledSeries)) touched++; continue }
       // This process's rows are in memory, except a received one nobody validated yet (a cold start without preferences).
@@ -68,7 +70,9 @@ object InstinctExecutionRecoveryManager {
       val source = if (first.transport == ExecutionTransport.WHATSAPP) ProposalSource.WHATSAPP else ProposalSource.BUZON
       runCatching { InstinctProposalIntake.resume(app, records, first.logMessage, source, adopted = key.second) }
     }
-    runCatching { journal.prune() }
+    InstinctQuestionNotifications.refresh(app)
+    runCatching { InstinctLog.recoverQuestionReplies(app) }
+    if (!questionsOnly) runCatching { journal.prune() }
     touched
   }
 
@@ -107,6 +111,10 @@ object InstinctExecutionRecoveryManager {
 
   /** Ends [row] as [state] and tells the log once, unless an acknowledgement already went out for it. */
   internal fun settle(app: Context, row: ExecutionRecord, state: ExecutionState, reason: String, attribution: ExecutionAttribution? = null) {
+    if (InstinctQuestion.isRelated(row.line)) {
+      InstinctQuestionNotifications.reject(app, row, reason, state)
+      return
+    }
     val kind = ExecutionRecoveryPolicy.ack(state)
     val ok = state == ExecutionState.VERIFIED || state == ExecutionState.HANDED_OFF
     val moved = InstinctExecutions.move(app, row.executionId, state, result = reason.takeIf { ok }, reason = reason.takeUnless { ok },

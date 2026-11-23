@@ -1,4 +1,4 @@
-# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.19.0)
+# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.21.0)
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
@@ -15,6 +15,8 @@ Desde 1.18.0, la orden firmada puede viajar **dentro del timbre** y ejecutarse a
 Desde 1.19.0, el timbre usa la biblioteca oficial de UnifiedPush y viaja **cifrado según RFC 8291**; la recepción ya no bloquea Android, lo recibido queda en una cola en disco que sobrevive a la muerte del proceso y una orden completa y autenticada se ejecuta sin leer la planilla ([Timbre cifrado y transporte confiable](#timbre-cifrado-y-transporte-confiable-1190)). Para Instinct no cambia nada: Protocolo Insto v6.
 
 La función está **apagada por defecto**: **Ajustes → Propuestas de Instinct → «Recibir órdenes de Instinct»**. En **Autonomía** elegís, por categoría, si Instinct lo hace solo, espera tu confirmación o nunca. Todos los interruptores y estados de esta función viven en `noBackupFilesDir`: una restauración de copia de seguridad nunca los enciende ni los trae.
+
+Desde 1.21.0, Instinct puede hacerte [preguntas con opciones](#preguntas-con-opciones-1210). El Protocolo Insto v7 mantiene la gramática de las órdenes y agrega `preguntar`.
 
 ## Protocolo
 
@@ -174,11 +176,11 @@ Instinct puede pedir `#insto ejecutar la rutina <nombre>` para correr una rutina
 
 ## Catálogo para Instinct (1.14.0)
 
-El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses (o, con la bitácora, cómo leerla) y la versión del protocolo («Protocolo Insto v6» desde 1.18.0; v5 en 1.17.0, v4 en 1.16.0).
+El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses (o, con la bitácora, cómo leerla) y la versión del protocolo («Protocolo Insto v7» desde 1.21.0; v6 desde 1.18.0, v5 en 1.17.0, v4 en 1.16.0).
 
 - **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** lo copia al portapapeles. Si las respuestas están activas y hay una acción «Responder» vigente (de un mensaje de Instinct de los últimos 10 minutos), aparece **«Enviarlas a Instinct»**: lo manda por ese chat.
 - La copia que viaja por WhatsApp marca cada ejemplo con «› » delante y lo explica, porque Insto lee ese chat y nunca debe tomar su propio mensaje por órdenes. Igual que un acuse, se comprueba que no tenga ninguna línea que empiece con «#insto ».
-- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v6 · rutinas habilitadas: Estudio.` (no el catálogo entero). Desde 1.18.0, si hay un [catálogo vivo](#catálogo-vivo-1180) publicado, agrega `Catálogo publicado: hash <hash>.`
+- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v7 · rutinas habilitadas: Estudio.` (no el catálogo entero). Desde 1.18.0, si hay un [catálogo vivo](#catálogo-vivo-1180) publicado, agrega `Catálogo publicado: hash <hash>.`
 - Copias de referencia, generadas sin rutinas: [`instinct-catalog.txt`](instinct-catalog.txt) (canal WhatsApp) y [`instinct-catalog-bitacora.txt`](instinct-catalog-bitacora.txt) (con bitácora, la copia que viaja por WhatsApp, sin URL ni token). Un test compara las dos con lo que genera el código; para regenerarla, corré `INSTO_WRITE_CATALOG=1 python3 scripts/test-phone-core.py com.example.phone.InstinctRoutinesTest`.
 
 ## Órdenes diferidas (1.14.0)
@@ -734,6 +736,23 @@ Diseño, auditoría, matrices y política de recuperación: [`architecture/insti
 - **Backup**: la copia `.insto` incluye todo Instinct (con token y clave en la copia completa); al restaurar queda
   apagado hasta «Reactivar Instinct en este teléfono», que registra UnifiedPush de nuevo con las claves y el endpoint
   del teléfono nuevo.
+
+## Preguntas con opciones (1.21.0)
+
+```text
+#insto preguntar ¿Preferís café o té? | Café | Té hasta las 18:30
+#insto probar preguntar ¿Preferís café o té? | Café | Té
+```
+
+Mandá una pregunta corta por línea cuando la decisión sea dudosa o personal. Si ya tenés permiso para una acción clara, ejecutala. `preguntar` acepta hasta 140 caracteres de texto y dos o tres opciones de hasta 24 caracteres, sin respuesta libre. Al final podés agregar `hasta las HH:MM` o `en N horas`. La hora indicada es la próxima ocurrencia en el horario local. El plazo por defecto es de 2 horas, con un máximo de 24. No programes ni envuelvas la pregunta en un disparador. Si vence o la persona la descarta, no la repitas ni insistas. `probar preguntar …` valida y dice qué haría Insto sin mostrar la pregunta ni ocupar un cupo.
+
+La pregunta puede llegar por cualquiera de los caminos de las órdenes de Instinct y se registra con el id de ejecución del diario. Se admiten hasta tres pendientes y cinco por hora. Sin bitácora configurada queda rechazada con «necesita bitácora». Los acuses de preguntas y sus pruebas usan la bitácora. Si todavía no hay bitácora, el motivo queda en el diario local.
+
+La notificación «Insto te pregunta» tiene un botón por opción y se puede responder desde la pantalla bloqueada si Android muestra las notificaciones de ese canal. Elegir una opción cierra la notificación. Deslizarla la descarta. Un toque después del plazo avisa que ya venció. Durante las horas de silencio, Insto espera para mostrar las preguntas nuevas. Si el plazo termina antes, registra «vencida». Después de un reinicio, una pregunta vigente pendiente recupera su misma notificación si hace falta y las respuestas ya registradas se siguen enviando desde la bandeja de la bitácora.
+
+En Autonomía → Preguntas, Solo muestra la notificación directamente. Confirmar abre una vista previa en Insto antes de mostrar los botones. Nunca rechaza la pregunta. Descartar preguntas o dejarlas vencer repetidamente puede ajustar Solo a Confirmar.
+
+Leé las respuestas con el GET habitual de la bitácora (`since` y `limit`). En las filas de tipo `respuesta`, `evento_id` es el id de ejecución de la pregunta, `orden` contiene su texto completo, `detalle` es la opción exacta o «vencida» / «descartada», y `ocurrido` es la hora UTC. `mensaje_id` y `protocolo` quedan vacíos. El id permite deduplicar los reintentos. El texto de la respuesta también aparece en Ejecuciones recientes en Insto y en las consultas `ver ejecuciones` y `estado de ejecución <id>` por bitácora. Cuando la consulta responde por WhatsApp, muestra el estado y remite el detalle a la bitácora.
 
 ## Qué tiene que hacer Instinct
 

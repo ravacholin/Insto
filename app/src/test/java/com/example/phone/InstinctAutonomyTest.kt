@@ -71,9 +71,9 @@ class InstinctAutonomyTest {
     assertTrue(mixed.refuses(steps, true))
   }
 
-  @Test fun `migration from askFirst starts every category at Confirmar`() {
+  @Test fun `migration from askFirst keeps confirmation for existing categories`() {
     val migrated = InstinctAutonomyPolicy.migrated(askFirst = true)
-    for (c in InstinctCategory.entries) assertEquals(InstinctAutonomy.CONFIRMAR, migrated.level(c))
+    for (c in InstinctCategory.entries.filterNot { it == InstinctCategory.PREGUNTAS }) assertEquals(InstinctAutonomy.CONFIRMAR, migrated.level(c))
     assertEquals(InstinctAutonomyPolicy(), InstinctAutonomyPolicy.migrated(askFirst = false))
   }
 

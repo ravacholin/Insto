@@ -97,7 +97,17 @@
         <receiver android:name=".phone.TemporaryModeReceiver" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
         </receiver>
-        <receiver android:name=".phone.InstinctProposalReceiver" android:exported="false" />
+        <receiver android:name=".phone.InstinctProposalReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <activity
+            android:name=".phone.InstinctQuestionPreviewActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.PingAssist.Translucent" />
         <service android:name=".phone.InstinctLogJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".phone.InstinctStateJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".phone.InstinctMailboxJobService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />

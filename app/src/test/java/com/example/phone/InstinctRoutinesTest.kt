@@ -160,7 +160,7 @@ class InstinctRoutinesTest {
     val catalog = InstinctProtocolCatalog.text(emptyList())
     val orders = catalog.lines().filter { it.startsWith("#insto ") && it != "#insto <orden>" }.map { it.removePrefix("#insto ") }
     val queries = ProposalCheck.QueryKind.entries.map { it.form }
-    assertEquals(InstinctProposalValidator.examples + queries, orders)
+    assertEquals(InstinctProposalValidator.examples + InstinctProtocolCatalog.QUESTION_EXAMPLE + queries, orders)
   }
 
   @Test fun `enabled routines appear by name only, and their lines are valid`() {
@@ -187,8 +187,8 @@ class InstinctRoutinesTest {
   @Test fun `ver catálogo is a read-only query`() {
     assertEquals(ProposalCheck.Query("ver catálogo", ProposalCheck.QueryKind.CATALOG), check("ver catálogo"))
     assertEquals(ProposalCheck.QueryKind.CATALOG, (check("Ver catalogo.") as ProposalCheck.Query).kind)
-    assertEquals("Protocolo Insto v6 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
-    assertEquals("Protocolo Insto v6 · rutinas habilitadas: Estudio, Noche.", InstinctProtocolCatalog.summary(listOf("Estudio", "Noche")))
+    assertEquals("Protocolo Insto v7 · rutinas habilitadas: ninguna.", InstinctProtocolCatalog.summary(emptyList()))
+    assertEquals("Protocolo Insto v7 · rutinas habilitadas: Estudio, Noche.", InstinctProtocolCatalog.summary(listOf("Estudio", "Noche")))
     assertTrue(check("ver catálogo completo") is ProposalCheck.Invalid)
   }
 

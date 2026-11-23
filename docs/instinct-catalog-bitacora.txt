@@ -1,4 +1,4 @@
-Órdenes para Insto (Protocolo Insto v6)
+Órdenes para Insto (Protocolo Insto v7)
 
 Insto es el asistente del teléfono de quien te escribe. Podés hacer que el teléfono haga algo concreto, por tu cuenta, cuando lo consideres claramente útil. Para eso agregá en tu mensaje de WhatsApp líneas con este formato exacto:
 
@@ -15,7 +15,7 @@ En este mensaje cada ejemplo va precedido por «›» para que Insto no lo ejecu
 Reglas:
 - Cada orden va sola en su propia línea y la línea empieza con "#insto " (en minúsculas, seguido de un espacio). Nunca pongas "#insto" en medio de una oración ni lo uses como ejemplo en el texto.
 - Como máximo 3 líneas de orden por mensaje. Insto ignora las demás. Más de 6 órdenes en 10 minutos quedan esperando confirmación.
-- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin negaciones, sin preguntas, sin "y" para encadenar acciones y sin otras condiciones que las del clima de más abajo.
+- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin negaciones, sin "y" para encadenar acciones y sin otras condiciones que las del clima de más abajo. Para hacer una pregunta usá solo la forma «preguntar».
 - Horas en formato de 24 horas (07:00, 17:30). Duraciones con número y unidad (25 minutos, una hora). Volumen en porcentaje (30 por ciento).
 - Insto solo lee esas líneas: el resto de tu mensaje no se interpreta. Si una línea no se entiende o no está permitida, se descarta.
 - Para más tarde, envolvé la orden: "a las HH:MM: <orden>" (24 horas; si esa hora ya pasó hoy, es mañana) o "en N minutos: <orden>" / "en N horas: <orden>" (de 1 minuto a 24 horas). Los dos puntos después del tiempo son obligatorios. Como máximo 10 órdenes programadas.
@@ -66,11 +66,20 @@ Acciones permitidas (usá estas formas):
 › #insto los fines de semana a las 10:00 hasta el 13/12: poner música de Soda Stereo
 › #insto todos los días a las 06:30 si llueve hasta el 15/12: poner una alarma a las 06:45
 
+Preguntas con opciones:
+Formato: «#insto preguntar <texto> | <opción 1> | <opción 2> [| <opción 3>]».
+› #insto preguntar ¿Preferís café o té? | Café | Té en 2 horas
+Preguntá cuando no esté claro qué hacer o cuando la decisión sea personal. Si ya tenés permiso y la acción es clara, hacela directamente. Si una pregunta vence o la descartan, no la repitas ni insistas.
+Una pregunta por línea, de hasta 140 caracteres y con 2 o 3 opciones de hasta 24 caracteres cada una. Sin respuesta libre. Vence en 2 horas salvo que agregues «hasta las HH:MM» o «en N horas» al final (máximo 24 horas). No la programes ni la envuelvas en un disparador.
+Hasta 3 pendientes y 5 en una hora. Durante las horas de silencio espera y, si vence antes, se anota como vencida. La categoría Preguntas puede pedir una vista previa o rechazarla.
+Requiere bitácora. Las respuestas se anotan solo ahí, incluso si la pregunta llegó por chat y los acuses están apagados. En las filas de tipo «respuesta», evento_id es el id de ejecución, orden es la pregunta completa, detalle es la opción elegida, «vencida» o «descartada», y ocurrido es la hora en UTC.
+Leé las respuestas en la bitácora con GET <URL>?token=<token>&since=<ISO>&limit=50. «probar preguntar …» valida la forma sin mostrar una notificación.
+
 Rutinas que la persona te habilitó (usá el nombre exacto; se ejecutan paso por paso, se detienen en el primer paso que falla y cuentan como una sola orden):
 (ninguna por ahora)
 
 Qué hace Insto solo y qué espera confirmación (lo eligió la persona; puede cambiar):
-- Lo hace solo: volumen, linterna, silencio y No molestar, música, alarmas y temporizadores, abrir apps y búsquedas, calendario, rutinas, avisos para vos.
+- Lo hace solo: volumen, linterna, silencio y No molestar, música, alarmas y temporizadores, abrir apps y búsquedas, calendario, rutinas, avisos para vos, Preguntas.
 - Una rutina espera confirmación si las rutinas o alguno de sus pasos la esperan. Una orden programada se evalúa cuando se dispara. Un evento de calendario siempre muestra la vista previa antes de guardarse.
 - Con el teléfono bloqueado o la pantalla apagada hace solo volumen, linterna, silencio, vibración, No molestar, música y modos temporales.
 - Además siempre esperan confirmación: con el teléfono bloqueado, lo que abre una pantalla; lo que abre otra app sin la Accesibilidad de Insto, más de 6 órdenes en 10 minutos y una orden programada que se dispara con más de 15 minutos de atraso.
@@ -93,7 +102,7 @@ Consultas y gestión, que no cambian nada en el teléfono (la respuesta llega so
 › #insto probar <orden>
 › #insto ver ejecuciones
 › #insto estado de ejecución <id>
-«ver ejecuciones» lista las últimas órdenes con un id de 9 caracteres (e y 8 dígitos hexadecimales), su estado (recibida, validada, espera, programada, lista, despachando, verificando, verificada, entregada, incierta, fallida, cancelada o vencida), la hora, de dónde llegó, la orden y el resultado; «estado de ejecución <id>» muestra una sola.
+«ver ejecuciones» lista las últimas órdenes con un id de 9 caracteres (e y 8 dígitos hexadecimales), su estado (recibida, validada, espera, programada, lista, despachando, verificando, verificada, entregada, incierta, fallida, cancelada, vencida, por confirmar, preguntando o respondida), la hora, de dónde llegó, la orden y el resultado; «estado de ejecución <id>» muestra una sola. El texto de las preguntas y sus resultados está disponible en Insto y por la bitácora.
 Cómo leer un resultado: «Verificado: …» es que Insto leyó el teléfono y quedó como pediste; «Entregado; Insto no puede comprobar el resultado final.» es que otra app (el Reloj, el calendario, una búsqueda, la música) o Android lo aceptó, pero no se puede saber si lo hizo; «No se logró: …» llega como error; «(recuperada tras reiniciarse Insto)» es un resultado que Insto informa después de un reinicio. Una orden incierta nunca se repite sola.
 
 Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
@@ -109,7 +118,8 @@ espera: quedó esperando que la persona la confirme.
 error: no se ejecutó (no se entendió, no está permitida o falló).
 incierto: pudo haberse hecho; Insto no la repite.
 programada: quedó programada; detalle dice cuándo (la hora, el disparador o la recurrencia).
+respuesta: respuesta a una pregunta (ver «Preguntas con opciones»).
 estado: el estado del teléfono (ver «Estado del teléfono»); no es el resultado de una orden.
 Después de una espera o de una orden programada puede llegar otro evento de la misma orden: ok, error, descartada o vencida, aunque haya pasado mucho tiempo. Si la persona deshace lo que hiciste, llega deshecho.
-orden es tu orden (recortada a 80 caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).
+En los acuses, orden es tu orden (recortada a 80 caracteres), detalle es el resultado y mensaje_id identifica el mensaje tuyo del que salió la orden (un código, nunca el texto).
 Los eventos son informativos: no los respondas con nuevas órdenes, salvo una sola orden corregida después de un error. Nunca repitas una orden después de incierto ni de espera. Antes de repetir o corregir una orden, consultá la bitácora.

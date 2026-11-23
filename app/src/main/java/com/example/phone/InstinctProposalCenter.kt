@@ -49,6 +49,7 @@ class InstinctProposalSettings(context: Context) {
       InstinctProposalCenter.discardAll(app)
       InstinctScheduler.cancelAll(app)
       InstinctProposalCenter.undos.clear()
+      InstinctQuestionNotifications.recoverSoon(app)
     }
   }
 
@@ -95,7 +96,8 @@ internal class ExtrasProposalNotification(
     val message = latestBundle() ?: return null
     @Suppress("DEPRECATION")
     val person = if (Build.VERSION.SDK_INT >= 28) message.getParcelable<android.app.Person>(KEY_SENDER_PERSON)?.name else null
-    return ProposalNotification.LatestMessage((person ?: message.getCharSequence(KEY_SENDER))?.toString())
+    return ProposalNotification.LatestMessage((person ?: message.getCharSequence(KEY_SENDER))?.toString(),
+      message.getLong(KEY_TIME).takeIf { it > 0L })
   }
 
   override fun text(): String? = (latestBundle()?.getCharSequence(KEY_TEXT)
@@ -104,6 +106,7 @@ internal class ExtrasProposalNotification(
   private companion object {
     // Keys of Notification.MessagingStyle.Message bundles (framework constants).
     const val KEY_TEXT = "text"
+    const val KEY_TIME = "time"
     const val KEY_SENDER = "sender"
     const val KEY_SENDER_PERSON = "sender_person"
   }
@@ -238,13 +241,18 @@ object InstinctProposalIntake {
     if (checks.none { it !is ProposalCheck.Invalid }) diagnose(Diagnosis.NOT_UNDERSTOOD)
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
     // 1.20.0: every accepted line gets its own row before anything runs; without the journal nothing runs.
+    val messageId = if (checks.any { InstinctQuestion.isRelated(it.order) }) {
+      // The same WhatsApp notification can be posted after process death. Reuse its message identity in the journal.
+      ExecutionIds.whatsappQuestion(outcome.message, view.latestMessage()?.sentAt)
+    } else ExecutionIds.whatsapp(outcome.message, InstinctScheduler.wallClock(), java.util.UUID.randomUUID().toString())
     val records = try {
-      (InstinctExecutions.journal(app).admit(ExecutionIds.whatsapp(outcome.message, InstinctScheduler.wallClock(), java.util.UUID.randomUUID().toString()),
-        ExecutionTransport.WHATSAPP, outcome.orders, outcome.message) as? InstinctExecutionJournal.Admission.Admitted)?.records.orEmpty()
+      (InstinctExecutions.journal(app).admit(messageId, ExecutionTransport.WHATSAPP, outcome.orders, outcome.message)
+        as? InstinctExecutionJournal.Admission.Admitted)?.records.orEmpty()
     } catch (_: Throwable) {
       diagnose(Diagnosis.FAILED, JOURNAL_FAILED); return
     }
-    val ticket = InstinctProposalCenter.openReply(app, checks.size, replyHandle, outcome.message)
+    if (records.isEmpty()) return
+    val ticket = InstinctProposalCenter.openReply(app, checks.count { !InstinctQuestion.isRelated(it.order) }, replyHandle, outcome.message)
     records.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.VALIDATED) }
     InstinctProposalCenter.deliver(app, checks, fingerprint, ticket, outcome.message, records = records)
     log(counters() + " valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")
@@ -291,11 +299,25 @@ object InstinctProposalIntake {
   private val resuming: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
   private val RESUMABLE = setOf(ExecutionState.RECEIVED, ExecutionState.VALIDATED, ExecutionState.READY)
 
-  private fun resumeNow(app: Context, records: List<ExecutionRecord>, message: String, source: ProposalSource) {
+  private fun resumeNow(app: Context, admitted: List<ExecutionRecord>, message: String, source: ProposalSource) {
     if (!InstinctProposalSettings(app).isEnabled() || (source == ProposalSource.BUZON && !InstinctMailboxSettings(app).enabled())) {
-      records.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.CANCELLED, reason = SWITCHED_OFF) }
+      admitted.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.CANCELLED, reason = SWITCHED_OFF) }
       return
     }
+    val records = if (source == ProposalSource.BUZON) {
+      val (questions, others) = admitted.partition { InstinctQuestion.isRelated(it.line) }
+      if (questions.isNotEmpty()) {
+        val parser = PhoneCommandParser()
+        val checks = questions.map {
+          val received = java.util.Calendar.getInstance().apply { timeInMillis = it.receivedAt }
+          InstinctProposalValidator.check(it.line, parser, received)
+        }
+        questions.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.VALIDATED) }
+        InstinctProposalCenter.deliver(app, checks, "", message = message, source = source, records = questions)
+      }
+      others
+    } else admitted
+    if (records.isEmpty()) return
     val fingerprint = InstinctProposalCenter.awaitFingerprint(app) ?: run {
       if (AssistantPreferencesCache.of(app).current == null) {
         // A cold start: DataStore has not answered. Nothing is lost: recovery resumes them.
@@ -310,7 +332,7 @@ object InstinctProposalIntake {
     val checks = records.map { InstinctProposalValidator.check(it.line, parser, now, routines) }
     records.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.VALIDATED) }
     val logOnly = source == ProposalSource.BUZON || records.any { it.transport != ExecutionTransport.WHATSAPP }
-    val ticket = InstinctProposalCenter.openReply(app, checks.size, { null }, message, logOnly = logOnly)
+    val ticket = InstinctProposalCenter.openReply(app, checks.count { !InstinctQuestion.isRelated(it.order) }, { null }, message, logOnly = logOnly)
     InstinctProposalCenter.deliver(app, checks, fingerprint, ticket, message, source, records)
     log("mailbox valid=${checks.count { it is ProposalCheck.Valid }} invalid=${checks.count { it is ProposalCheck.Invalid }}")
   }
@@ -383,8 +405,30 @@ object InstinctProposalCenter {
     message: String = "", source: ProposalSource = ProposalSource.WHATSAPP, records: List<ExecutionRecord> = emptyList()) {
     val app = context.applicationContext
     val offered = ArrayList<ProposalBook.Proposal>()
-    checks.forEachIndexed { index, check ->
-      val execution = records.getOrNull(index)?.executionId
+    var replyIndex = 0
+    checks.forEachIndexed { recordIndex, check ->
+      val record = records.getOrNull(recordIndex)
+      if (InstinctQuestion.isRelated(check.order)) {
+        if (record != null) when (check) {
+          is ProposalCheck.Question -> {
+            val received = java.util.Calendar.getInstance().apply { timeInMillis = record.receivedAt }
+            val question = InstinctQuestion.parse(check.order, received)
+            if (question == null) InstinctQuestionNotifications.reject(app, record, InstinctQuestion.INVALID)
+            else InstinctQuestionNotifications.receive(app, record, question, source)
+          }
+          is ProposalCheck.Invalid -> InstinctQuestionNotifications.reject(app, record, InstinctAck.reason(check.reason))
+          is ProposalCheck.Query -> {
+            val entry = probe(app, check.order, check.argument.orEmpty(), source)
+            InstinctExecutions.move(app, record.executionId, if (entry.kind == AckKind.OK) ExecutionState.VERIFIED else ExecutionState.FAILED,
+              result = entry.message, reported = entry.kind)
+            if (InstinctLogSettings(app).configured()) InstinctLog.enqueue(app, listOf(entry), message)
+          }
+          else -> Unit
+        }
+        return@forEachIndexed
+      }
+      val index = replyIndex++
+      val execution = record?.executionId
       // An answer given now, without a proposal: the row ends with it (1.20.0).
       fun answered(entry: AckEntry) {
         InstinctExecutions.move(app, execution, if (entry.kind == AckKind.OK) ExecutionState.VERIFIED else ExecutionState.FAILED,
@@ -393,12 +437,14 @@ object InstinctProposalCenter {
         reply(app, acks.resolve(ticket, index, entry))
       }
       when (check) {
+        is ProposalCheck.Question -> Unit // Handled above, outside the acknowledgement ledger.
         is ProposalCheck.Invalid -> answered(InstinctAck.invalid(check))
         // Read-only: nothing runs on the phone; the answer only goes back through the reply, if replies are on.
         is ProposalCheck.Query -> answered(when (check.kind) {
           ProposalCheck.QueryKind.STATE -> stateAnswer(app, check.order)
           ProposalCheck.QueryKind.PROBE -> probe(app, check.order, check.argument.orEmpty(), source)
-          else -> AckEntry(AckKind.OK, check.order, answer(app, check.kind, check.argument), informative = true)
+          else -> AckEntry(AckKind.OK, check.order, answer(app, check.kind, check.argument,
+            showQuestions = source != ProposalSource.WHATSAPP), informative = true)
         })
         is ProposalCheck.Notice -> answered(notice(app, check, source))
         // «Nunca» refuses at once, whatever the hour; Confirmar and the quiet hours are decided when it runs.
@@ -419,7 +465,8 @@ object InstinctProposalCenter {
         }
       }
     }
-    val notUnderstood = checks.any { it is ProposalCheck.Invalid }
+    val notUnderstood = checks.any { it is ProposalCheck.Invalid && !InstinctQuestion.isRelated(it.order) }
+    if (offered.isEmpty() && !notUnderstood) return
     val run = Runnable {
       val target = listener
       if (target != null) {
@@ -463,7 +510,7 @@ object InstinctProposalCenter {
     val app = context.applicationContext
     val settings = InstinctProposalSettings(app)
     bind(app)
-    if (settings.replyMode() == InstinctReplyMode.NEVER) return null
+    if (orders == 0 || settings.replyMode() == InstinctReplyMode.NEVER) return null
     // From the mailbox: to the log only, whatever the channel; WhatsApp's «Responder» is never touched.
     if (logOnly) return acks.open(null, orders, message, logOnly = true)
     val chat = settings.channel().usesChat
@@ -574,7 +621,8 @@ object InstinctProposalCenter {
   const val JOURNAL_UNREADABLE = "no se pudo leer el diario de ejecución."
 
   /** The answer to a query. Names of enabled routines only, never their steps. */
-  internal fun answer(context: Context, kind: ProposalCheck.QueryKind, argument: String? = null): String = when (kind) {
+  internal fun answer(context: Context, kind: ProposalCheck.QueryKind, argument: String? = null,
+    showQuestions: Boolean = true): String = when (kind) {
     ProposalCheck.QueryKind.CATALOG -> InstinctProtocolCatalog.summary(InstinctRoutineGrants(context).access().enabledNames(),
       InstinctCatalogPublisher.last(context).hash)
     ProposalCheck.QueryKind.SCHEDULED -> InstinctScheduler.describe(context)
@@ -587,8 +635,8 @@ object InstinctProposalCenter {
     ProposalCheck.QueryKind.CANCEL_ONE -> InstinctScheduler.cancelShortAnswer(context, argument.orEmpty())
     ProposalCheck.QueryKind.PROBE -> probe(context, "${ProposalCheck.QueryKind.PROBE.phrase} ${argument.orEmpty()}", argument.orEmpty(),
       ProposalSource.BUZON).message
-    ProposalCheck.QueryKind.EXECUTIONS -> runCatching { InstinctExecutionQueries.list(context) }.getOrDefault(JOURNAL_UNREADABLE)
-    ProposalCheck.QueryKind.EXECUTION_STATUS -> runCatching { InstinctExecutionQueries.status(context, argument.orEmpty()) }.getOrDefault(JOURNAL_UNREADABLE)
+    ProposalCheck.QueryKind.EXECUTIONS -> runCatching { InstinctExecutionQueries.list(context, showQuestions) }.getOrDefault(JOURNAL_UNREADABLE)
+    ProposalCheck.QueryKind.EXECUTION_STATUS -> runCatching { InstinctExecutionQueries.status(context, argument.orEmpty(), showQuestions) }.getOrDefault(JOURNAL_UNREADABLE)
   }
 
   /** «probar»'s own brake (1.18.0): 20 every 10 minutes. Never the anti-loop one, never the trust ledger. */
@@ -606,6 +654,7 @@ object InstinctProposalCenter {
     val check = InstinctProposalValidator.check(inner, PhoneCommandParser(), now, InstinctRoutineGrants(app).access())
     val minute = InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock())
     val verdict = when (check) {
+      is ProposalCheck.Question -> InstinctQuestionNotifications.probe(app, source)
       is ProposalCheck.Invalid -> InstinctProbe.Verdict.Invalid(InstinctAck.reason(check.reason))
       is ProposalCheck.Query -> if (check.kind == ProposalCheck.QueryKind.PROBE) InstinctProbe.Verdict.Invalid("no se puede probar una prueba")
         else InstinctProbe.Verdict.Alone("consulta")
@@ -996,7 +1045,8 @@ object InstinctProposalCenter {
       context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false
     if (!manager.areNotificationsEnabled()) return false
     if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(
-      if (channel == ACTIONS_CHANNEL_ID) NotificationChannel(ACTIONS_CHANNEL_ID, "Insto · acciones de Instinct", NotificationManager.IMPORTANCE_DEFAULT).apply {
+      if (channel == InstinctQuestionNotifications.CHANNEL) NotificationChannel(channel, "Insto · preguntas", NotificationManager.IMPORTANCE_HIGH)
+      else if (channel == ACTIONS_CHANNEL_ID) NotificationChannel(ACTIONS_CHANNEL_ID, "Insto · acciones de Instinct", NotificationManager.IMPORTANCE_DEFAULT).apply {
         description = "Avisos de lo que Insto hizo cuando Instinct se lo pidió."
       } else if (channel == CHANNEL_ID) NotificationChannel(CHANNEL_ID, "Insto · propuestas de Instinct", NotificationManager.IMPORTANCE_HIGH).apply {
         description = "Acciones que Instinct te propone. Ninguna se ejecuta sin que la confirmes."
@@ -1140,6 +1190,15 @@ object InstinctProposalCenter {
  */
 class InstinctProposalReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
+    if (intent.action == InstinctQuestionNotifications.ACTION || intent.action == InstinctQuestionNotifications.TICK ||
+      intent.action == Intent.ACTION_TIME_CHANGED || intent.action == Intent.ACTION_TIMEZONE_CHANGED) {
+      val pending = goAsync()
+      Thread({
+        try { runCatching { InstinctQuestionNotifications.handle(context.applicationContext, intent) } }
+        finally { pending.finish() }
+      }, "insto-preguntas").start()
+      return
+    }
     if (intent.action == InstinctTrust.ACTION_RESTORE || intent.action == InstinctTrust.ACTION_RAISE_YES ||
       intent.action == InstinctTrust.ACTION_RAISE_NO) {
       InstinctTrust.answer(context, intent.action, intent.getStringExtra(InstinctTrust.EXTRA_TOKEN))
