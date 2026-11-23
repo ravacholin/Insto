@@ -60,7 +60,7 @@ internal data class ContextRuleSpec(
     const val MAX_RULES = 12
     const val FORM = "cuando <condición> [y <condición> [y <condición>]] [por N días]: <acción>"
     const val EXAMPLE = "cuando batería menor de 15 por ciento y no cargando: avisarme Batería baja"
-    const val INVALID = "usá «cuando», hasta tres condiciones compatibles y una acción permitida sin interfaz o «avisarme»."
+    const val INVALID = "usá hasta tres condiciones y una acción sin interfaz o «avisarme»."
     const val DEBOUNCE = 5_000L
     const val COOLDOWN = 60_000L
     const val WINDOW = 10 * 60_000L

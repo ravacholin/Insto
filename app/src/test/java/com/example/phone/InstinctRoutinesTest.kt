@@ -160,7 +160,8 @@ class InstinctRoutinesTest {
     val catalog = InstinctProtocolCatalog.text(emptyList())
     val orders = catalog.lines().filter { it.startsWith("#insto ") && it != "#insto <orden>" }.map { it.removePrefix("#insto ") }
     val queries = ProposalCheck.QueryKind.entries.map { it.form }
-    assertEquals(InstinctProposalValidator.examples + InstinctProtocolCatalog.QUESTION_EXAMPLE + queries, orders)
+    val questionsAndRules = listOf(InstinctProtocolCatalog.QUESTION_EXAMPLE, InstinctProtocolCatalog.DECISION_EXAMPLE, ContextRuleSpec.EXAMPLE)
+    assertEquals(InstinctProposalValidator.examples + questionsAndRules + queries, orders)
   }
 
   @Test fun `enabled routines appear by name only, and their lines are valid`() {
