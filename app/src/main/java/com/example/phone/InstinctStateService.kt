@@ -246,9 +246,12 @@ internal class InstinctStateWatcher(private val context: Context) {
   private val handler = Handler(Looper.getMainLooper())
   private val receiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-      InstinctStatePublisher.changed(context)
+      if (intent.action != Intent.ACTION_BATTERY_CHANGED && intent.action != Intent.ACTION_SCREEN_ON)
+        InstinctStatePublisher.changed(context)
       // Triggers by state (1.17.0). The sticky headset broadcast delivered on registering is the current state, not a change.
       if (isInitialStickyBroadcast) return
+      if (intent.action == Intent.ACTION_SCREEN_OFF || intent.action == Intent.ACTION_SCREEN_ON || intent.action == Intent.ACTION_USER_PRESENT)
+        InstinctStatePublisher.background(Runnable { InstinctQuestionNotifications.refreshExisting(context) })
       if (intent.action != Intent.ACTION_USER_PRESENT) InstinctContextScheduler.signal(context)
       when (intent.action) {
         Intent.ACTION_USER_PRESENT -> InstinctScheduler.onPhoneEvent(context, PhoneEvent.UNLOCK)
@@ -304,6 +307,7 @@ internal class InstinctStateWatcher(private val context: Context) {
       addAction(AudioManager.ACTION_HEADSET_PLUG)
       addAction(Intent.ACTION_USER_PRESENT)
       addAction(Intent.ACTION_SCREEN_OFF)
+      addAction(Intent.ACTION_SCREEN_ON)
       addAction(Intent.ACTION_BATTERY_CHANGED)
     }
     runCatching {

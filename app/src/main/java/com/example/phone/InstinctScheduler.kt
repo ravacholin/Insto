@@ -424,8 +424,7 @@ class InstinctScheduleReceiver : BroadcastReceiver() {
             runCatching {
               if (intent.action == InstinctContextScheduler.ACTION_TICK) InstinctContextScheduler.evaluate(context.applicationContext)
               else {
-                val clockChanged = intent.action == Intent.ACTION_TIME_CHANGED || intent.action == Intent.ACTION_TIMEZONE_CHANGED
-                InstinctScheduler.rearm(context, zoneChanged = clockChanged)
+                InstinctScheduler.rearm(context, zoneChanged = intent.action == Intent.ACTION_TIMEZONE_CHANGED)
               }
             }
           } finally { pending.finish() }

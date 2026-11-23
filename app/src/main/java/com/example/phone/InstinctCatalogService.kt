@@ -50,6 +50,7 @@ object InstinctCatalogPublisher {
       doorbellDirect = doorbell && InstinctDoorbell.settings(app).withOrder(),
       replyMode = proposals.replyMode(),
       ackChannel = proposals.channel(),
+      showQuestionsOnLockScreen = InstinctAutonomySettings(app).showQuestionsOnLockScreen(),
     )
   }
 

@@ -1,4 +1,4 @@
-# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.21.0)
+# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.22.0)
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
@@ -176,11 +176,11 @@ Instinct puede pedir `#insto ejecutar la rutina <nombre>` para correr una rutina
 
 ## Catálogo para Instinct (1.14.0)
 
-El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses (o, con la bitácora, cómo leerla) y la versión del protocolo («Protocolo Insto v7» desde 1.21.0; v6 desde 1.18.0, v5 en 1.17.0, v4 en 1.16.0).
+El bloque de instrucciones para el prompt de Instinct ya no se escribe a mano: lo genera `InstinctProtocolCatalog` (lógica pura) a partir del código. Incluye las reglas del protocolo, una forma de ejemplo por cada tipo permitido, las rutinas que habilitaste (**solo los nombres**, nunca los pasos), las consultas de solo lectura, los prefijos de los acuses (o, con la bitácora, cómo leerla) y la versión del protocolo («Protocolo Insto v8» desde 1.22.0, v7 en 1.21.0, v6 desde 1.18.0, v5 en 1.17.0, v4 en 1.16.0).
 
 - **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** lo copia al portapapeles. Si las respuestas están activas y hay una acción «Responder» vigente (de un mensaje de Instinct de los últimos 10 minutos), aparece **«Enviarlas a Instinct»**: lo manda por ese chat.
 - La copia que viaja por WhatsApp marca cada ejemplo con «› » delante y lo explica, porque Insto lee ese chat y nunca debe tomar su propio mensaje por órdenes. Igual que un acuse, se comprueba que no tenga ninguna línea que empiece con «#insto ».
-- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v7 · rutinas habilitadas: Estudio.` (no el catálogo entero). Desde 1.18.0, si hay un [catálogo vivo](#catálogo-vivo-1180) publicado, agrega `Catálogo publicado: hash <hash>.`
+- `#insto ver catálogo` es una orden de **solo lectura**: no ejecuta nada en el teléfono, no avisa y no consume el freno. Si las respuestas están activas (en cualquiera de los dos modos), contesta `#insto-ok ver catálogo → Protocolo Insto v8 · rutinas habilitadas: Estudio.` (no el catálogo entero). Desde 1.18.0, si hay un [catálogo vivo](#catálogo-vivo-1180) publicado, agrega `Catálogo publicado: hash <hash>.`
 - Copias de referencia, generadas sin rutinas: [`instinct-catalog.txt`](instinct-catalog.txt) (canal WhatsApp) y [`instinct-catalog-bitacora.txt`](instinct-catalog-bitacora.txt) (con bitácora, la copia que viaja por WhatsApp, sin URL ni token). Un test compara las dos con lo que genera el código; para regenerarla, corré `INSTO_WRITE_CATALOG=1 python3 scripts/test-phone-core.py com.example.phone.InstinctRoutinesTest`.
 
 ## Órdenes diferidas (1.14.0)
@@ -865,3 +865,48 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 El bloque se genera desde el código y se obtiene en **Ajustes → Propuestas de Instinct → «Copiar instrucciones para Instinct»** (o «Enviarlas a Instinct»). Así nunca se desincroniza de la gramática ni de tus rutinas habilitadas. Copialo de nuevo cada vez que habilites o deshabilites una rutina, o cuando Insto se actualice.
 
 La copia de referencia, sin rutinas, está en [`instinct-catalog.txt`](instinct-catalog.txt). Con la bitácora, la copia de referencia es [`instinct-catalog-bitacora.txt`](instinct-catalog-bitacora.txt), y con la bitácora y el buzón, [`instinct-catalog-buzon.txt`](instinct-catalog-buzon.txt) (las tres sin URL, token ni clave, y con la autonomía por defecto). Desde 1.18.0, con la bitácora, Instinct además lee el [catálogo vivo](#catálogo-vivo-1180), que se actualiza solo; su copia de referencia en JSON es [`instinct-catalog.json`](instinct-catalog.json). Incluye las formas diferidas y condicionales, los prefijos de los acuses (`#insto-ok`, `#insto-espera`, `#insto-error`, `#insto-incierto`, `#insto-programada`, y `#insto-descartada`, `#insto-vencida` y `#insto-deshecho` como seguimiento) y la regla para Instinct: **esas líneas son informativas; no se responden con nuevas órdenes, salvo una sola orden corregida después de un `#insto-error`, y nunca se repite una orden después de `#insto-incierto` o `#insto-espera`.**
+
+## Decidir y reglas contextuales (1.22.0)
+
+### Elegir y ejecutar
+
+```text
+#insto decidir ¿Qué preferís? | Silencio => silenciar el teléfono | No molestar => activar no molestar
+#insto probar decidir ¿Qué preferís? | Silencio => silenciar el teléfono | No molestar => activar no molestar
+```
+
+Cada opción vincula una acción de la lista blanca que se puede ejecutar sin interfaz, como volumen, linterna, silencio, No molestar o controles multimedia. Se aplican los mismos plazos, cupos y ajustes de Preguntas que para `preguntar`. Si la categoría de la acción está en Confirmar, el toque de la opción ya es esa confirmación. Si el permiso falta o la categoría pasó a Nunca, Insto registra el resultado y no vuelve a pedir confirmación. La respuesta y el resultado van a la bitácora como filas con IDs de ejecución distintos. El resultado incluye el ID de la pregunta para vincularlos.
+
+Por defecto, en la pantalla bloqueada se ve un aviso genérico sin el texto ni los botones. «Mostrar preguntas en la pantalla bloqueada» permite verlos si la configuración de notificaciones de Android lo permite.
+
+### Automatizar por condiciones del teléfono
+
+```text
+#insto cuando batería menor de 15 por ciento y no cargando: avisarme Batería baja
+#insto cuando horario 22:00 a 07:00 y wifi conectado por 7 días: activar no molestar
+#insto cuando al desbloquear y evento en curso: silenciar el teléfono
+#insto ver reglas
+#insto diagnóstico de regla abc123
+#insto desactivar regla abc123
+#insto activar regla abc123
+#insto eliminar regla abc123
+```
+
+Enviá las órdenes de reglas por el buzón firmado. `cuando` admite hasta tres condiciones distintas unidas por `y`, seguidas de una sola acción de la lista blanca que pueda ejecutarse sin interfaz o de `avisarme`. Si omitís el plazo, la regla vence a los 30 días. Para acortarlo, agregá `por N días` antes de los dos puntos. Hay un cupo de 12 reglas vigentes. Para controlar las reglas manualmente, abrí Ajustes → Propuestas de Instinct → Reglas contextuales.
+
+| Señal | Condiciones |
+| --- | --- |
+| Batería | `batería menor de N por ciento`, `batería mayor de N por ciento` |
+| Carga | `cargando`, `no cargando` |
+| Red activa | `wifi conectado`, `sin wifi`, `con internet`, `sin internet` |
+| Multimedia | `reproduciendo multimedia`, `sin reproducción multimedia` |
+| Horario local | `horario HH:MM a HH:MM`, incluso si cruza medianoche |
+| Calendario | `evento en curso`, `sin evento en curso` |
+| Auriculares | `auriculares conectados`, `sin auriculares` |
+| Desbloqueo | `al desbloquear`, como evento instantáneo |
+
+Wi-Fi se refiere a la red activa del sistema. Internet requiere conectividad validada por Android. El calendario requiere permiso de lectura y excluye eventos de todo el día. Las condiciones desconocidas no disparan acciones. Las condiciones de estado deben sostenerse cinco segundos. Una vez disparada, la regla debe volver a estado falso antes de dispararse otra vez. Hay un minuto mínimo entre disparos por regla y un máximo persistente de seis disparos contextuales cada diez minutos. Bajo Confirmar, las acciones esperan la confirmación normal. Los avisos mantienen la semántica anterior y son silenciosos en Confirmar o en horas de silencio.
+
+Las reglas no dependen de una conexión permanente con Instinct. El servicio «Insto · notificaciones» entrega los eventos dinámicos disponibles, y Android entrega una alarma compartida para horarios, límites de calendario, vencimiento y antirrebote. Doze, la falta de permisos y las restricciones del fabricante pueden demorar o impedir algunos eventos. Tras reiniciar, Android debe permitir el acceso al almacenamiento de Insto. Una ocurrencia que ya empezó a ejecutarse se verifica si es posible y no se repite.
+
+El respaldo `.insto` conserva las definiciones, el vencimiento original, la activación y la preferencia de privacidad. Las definiciones nuevas se incorporan al tocar «Reactivar Instinct en este teléfono». El historial y las ocurrencias pendientes quedan en el teléfono de origen.

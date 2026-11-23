@@ -22,6 +22,7 @@ internal object InstinctQuestionNotifications {
   const val ACTION = "com.example.phone.INSTINCT_QUESTION_ACTION"
   const val TICK = "com.example.phone.INSTINCT_QUESTION_TICK"
   private const val NOTIFICATION_ID = 7_318
+  private const val REDACTED = "question-redacted"
   private const val PUBLIC_CONTENT = "question-public-content"
   private const val PREVIEW = "question-preview"
   private const val ID = "insto.question.execution"
@@ -84,6 +85,18 @@ internal object InstinctQuestionNotifications {
     InstinctMailbox.background(Runnable { runCatching { InstinctExecutionRecoveryManager.recover(app, localOnly = true) } })
   }
 
+  fun privacyChanged(context: Context) {
+    synchronized(lock) {
+      val manager = context.getSystemService(NotificationManager::class.java)
+      manager?.activeNotifications?.filter { it.id == NOTIFICATION_ID }?.forEach { manager.cancel(it.tag, it.id) }
+    }
+    recoverSoon(context)
+  }
+
+  fun refreshExisting(context: Context) {
+    if (InstinctExecutions.existingJournal(context) != null) refresh(context)
+  }
+
   fun refresh(context: Context) = synchronized(lock) { runCatching { refreshLocked(context.applicationContext) } }
 
   private fun refreshLocked(app: Context) {
@@ -106,28 +119,42 @@ internal object InstinctQuestionNotifications {
       val result = journal.finishQuestion(row.executionId, if (disabled) InstinctQuestion.DISCARD else null)
       if (result != null) completed(app, row.executionId, result)
     }
-    if (quietUntil != null || live.isEmpty() || !InstinctProposalCenter.canNotify(app, CHANNEL)) return
+    if (live.isEmpty() || !InstinctProposalCenter.canNotify(app, CHANNEL)) return
     if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) return
     val showOnLockScreen = InstinctAutonomySettings(app).showQuestionsOnLockScreen()
+    val locked = app.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true ||
+      app.getSystemService(android.os.PowerManager::class.java)?.isInteractive == false
     for (row in live) {
+      if (quietUntil != null && row.executionId !in active) continue
       val preview = row.state == ExecutionState.QUESTION_CONFIRM
       val publicContent = !preview && showOnLockScreen
+      val redacted = !publicContent && locked
       val shown = active[row.executionId]?.notification
-      if (shown?.extras?.getBoolean(PREVIEW) == preview && shown.extras.containsKey(PUBLIC_CONTENT) &&
-        shown.extras.getBoolean(PUBLIC_CONTENT) == publicContent) continue
+      if (shown != null && shown.extras.getBoolean(PREVIEW) == preview && shown.extras.containsKey(PUBLIC_CONTENT) &&
+        shown.extras.getBoolean(PUBLIC_CONTENT) == publicContent && shown.extras.getBoolean(REDACTED) == redacted) continue
       val question = InstinctQuestion.decode(row.command, row.deadline) ?: continue
-      val notification = InstinctProposalCenter.builder(app, CHANNEL)
+      val extras = Bundle().apply {
+        putBoolean(PREVIEW, preview)
+        putBoolean(PUBLIC_CONTENT, publicContent)
+        putBoolean(REDACTED, redacted)
+      }
+      val notification = if (redacted) redactedBuilder(app)
+        .setContentIntent(PendingIntent.getActivity(app, 0, Intent(app, com.example.MainActivity::class.java),
+          PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+      else InstinctProposalCenter.builder(app, CHANNEL)
         .setSmallIcon(android.R.drawable.ic_dialog_info)
         .setContentTitle(if (preview) "Instinct quiere hacerte una pregunta" else "Insto te pregunta")
         .setContentText(question.notificationText()).setStyle(Notification.BigTextStyle().bigText(question.notificationText()))
-        .setVisibility(if (publicContent) Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE)
-        .setPublicVersion(publicVersion(app))
+        // Keep full text out of the lock screen even if Android is configured to display sensitive notifications.
+        .setVisibility(if (publicContent) Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_SECRET)
+      notification.setPublicVersion(publicVersion(app))
         .setOnlyAlertOnce(true)
-        .setExtras(Bundle().apply {
-          putBoolean(PREVIEW, preview)
-          putBoolean(PUBLIC_CONTENT, publicContent)
-        })
+        .setExtras(extras)
         .setDeleteIntent(action(app, row.executionId, InstinctQuestion.DISCARD))
+      if (redacted) {
+        manager.notify(row.executionId, NOTIFICATION_ID, notification.build())
+        continue
+      }
       if (preview) {
         val review = PendingIntent.getActivity(app, 0, Intent(app, InstinctQuestionPreviewActivity::class.java)
           .setData(Uri.parse("insto-question://preview/${row.executionId}")).putExtra(ID, row.executionId),
@@ -136,19 +163,21 @@ internal object InstinctQuestionNotifications {
           .addAction(Notification.Action.Builder(null, "Descartar", action(app, row.executionId, InstinctQuestion.DISCARD)).build())
       } else {
         question.options.forEachIndexed { index, option ->
-          notification.addAction(Notification.Action.Builder(null, option, action(app, row.executionId, index)).build())
+          val label = question.actions.getOrNull(index)?.let { "$option · $it" } ?: option
+          notification.addAction(Notification.Action.Builder(null, label, action(app, row.executionId, index)).build())
         }
       }
       manager.notify(row.executionId, NOTIFICATION_ID, notification.build())
     }
   }
 
-  internal fun publicVersion(app: Context): Notification = InstinctProposalCenter.builder(app, CHANNEL)
+  private fun redactedBuilder(app: Context): Notification.Builder = InstinctProposalCenter.builder(app, CHANNEL)
     .setSmallIcon(android.R.drawable.ic_dialog_info)
     .setContentTitle("Insto")
     .setContentText("Tenés una pregunta pendiente.")
     .setVisibility(Notification.VISIBILITY_PUBLIC)
-    .build()
+
+  internal fun publicVersion(app: Context): Notification = redactedBuilder(app).build()
 
   private fun arm(app: Context, at: Long?) {
     val manager = app.getSystemService(AlarmManager::class.java) ?: return

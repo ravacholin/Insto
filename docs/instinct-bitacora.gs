@@ -12,8 +12,9 @@
  *   Los ids repetidos se descartan y se confirman igual (idempotencia).
  * GET ?token=…&since=<ISO>&limit=50  → {ok, events:[{recibido, evento_id, ocurrido, tipo, orden, detalle, mensaje_id, protocolo}]}
  *   Los eventos recibidos desde «since», en orden, como máximo 50.
- *   Para «respuesta» (v7), evento_id es el id de ejecución, orden es la pregunta completa,
- *   detalle es la opción elegida, «vencida» o «descartada», y ocurrido es la hora de registro en UTC.
+ *   Para «respuesta», evento_id es el id de ejecución y ocurrido es la hora de registro en UTC.
+ *   orden contiene el texto de la pregunta o la acción. detalle contiene la respuesta o el resultado
+ *   de la acción, con el id de la pregunta o la regla de origen.
  *   mensaje_id y protocolo quedan vacíos. El mismo evento_id se confirma sin volver a insertar la fila.
  * GET ?token=…&action=estado  → {ok, estado:{recibido, evento_id, ocurrido, tipo, orden, detalle, mensaje_id, protocolo} | null}
  *   El último evento de tipo «estado» que publicó Insto (1.16.0), o null si todavía no hay.

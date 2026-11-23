@@ -53,6 +53,20 @@ class InstinctBackupSectionTest {
 
   private fun open(manager: ConfigurationBackupManager, bytes: ByteArray) = (manager.open(bytes, password) as OpenResult.Ready).plan
 
+  @Test fun `context rules and lockscreen preference survive a copy without secrets and wait for reactivation`() = runBlocking {
+    val rule = InstinctBackupRule("cuando no cargando: avisarme Batería", System.currentTimeMillis() + 3_600_000, false)
+    val saved = full.copy(contextRules = listOf(rule), showQuestionsOnLockScreen = true)
+    val backup = Phone(FakeInstinct(saved)).manager.export(setOf(BackupCategory.INSTINCT), password, secrets = false)
+    val restored = Phone()
+    val report = restored.manager.restore(open(restored.manager, backup), mapOf(BackupCategory.INSTINCT to RestoreMode.MERGE), RestoreOptions())
+    assertTrue(report.failure, report.success)
+    assertEquals(true, restored.instinct.data.showQuestionsOnLockScreen)
+    assertTrue(restored.instinct.data.contextRules.isEmpty())
+    assertEquals(listOf(rule), restored.instinct.reactivation?.contextRules)
+    assertNull(restored.instinct.data.logToken)
+    assertNull(InstinctSection.decode(JSONObject("{}")).showQuestionsOnLockScreen)
+  }
+
   @Test fun `a full copy carries every Instinct setting and secret, and restores them on another phone without turning anything on`() = runBlocking {
     val a = Phone(FakeInstinct(full))
     val file = a.manager.export(BackupCategory.entries.toSet(), password)

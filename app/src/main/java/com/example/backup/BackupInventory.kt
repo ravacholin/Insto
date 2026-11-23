@@ -79,6 +79,8 @@ object BackupInventory {
     f("instinct-doorbell-state.json", Class.DEVICE_BOUND, null, "registro, token del conector, confirmaciones del script y diagnóstico"),
     Item("unifiedpush-connector", Kind.EXTERNAL, Class.DEVICE_BOUND, null, "base de datos de la biblioteca UnifiedPush y claves Web Push en el Keystore"),
     f("instinct-executions.db", Class.HISTORY, null, "diario de ejecución: nunca se importa como trabajo pendiente"),
+    Item("instinct-executions.db:context_rules", Kind.SQLITE, Class.CONFIG, BackupCategory.INSTINCT,
+      "definiciones, estado de activación y vencimiento original, con reactivación explícita"),
     Item("instinct-executions.db:preguntas-pendientes", Kind.SQLITE, Class.TRANSIENT, null,
       "preguntas pendientes y respuestas todavía sin confirmar por la bitácora, dentro del diario"),
     f("instinct-trust.json", Class.HISTORY, null, "contadores del ajuste adaptativo"),

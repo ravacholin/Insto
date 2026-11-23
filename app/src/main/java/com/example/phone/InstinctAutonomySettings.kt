@@ -81,7 +81,8 @@ class InstinctAutonomySettings(context: Context) {
   fun setShowQuestionsOnLockScreen(show: Boolean) {
     val preference = File(app.noBackupFilesDir, QUESTION_VISIBILITY)
     writeAtomically(preference, show.toString(), "insto-question-")
-    InstinctQuestionNotifications.recoverSoon(app)
+    InstinctQuestionNotifications.privacyChanged(app)
+    InstinctCatalogPublisher.changed(app)
   }
 
   companion object {

@@ -3,7 +3,11 @@ package com.example.backup
 import com.example.phone.InstinctAckChannel
 import com.example.phone.InstinctAutonomy
 import com.example.phone.InstinctAutonomyPolicy
+import com.example.phone.ContextRuleSpec
+import com.example.phone.ContextualCheck
 import com.example.phone.InstinctDeferral
+import com.example.phone.InstinctProposalValidator
+import com.example.phone.PhoneCommandParser
 import com.example.phone.InstinctLogConfig
 import com.example.phone.InstinctMailboxAccept
 import com.example.phone.InstinctMailboxKey
@@ -12,6 +16,10 @@ import com.example.phone.InstinctReplyMode
 import com.example.phone.InstinctRoutines
 import org.json.JSONArray
 import org.json.JSONObject
+
+data class InstinctBackupRule(val line: String, val expiresAt: Long, val enabled: Boolean) {
+  internal val id: String? get() = ContextRuleSpec.parse(line)?.id
+}
 
 /**
  * Everything of Instinct that moves to another phone (1.20.0). Configuration: the switches as they were (restored
@@ -41,6 +49,7 @@ data class InstinctBackupData(
   /** Recurring orders as Instinct wrote them («todos los días a las 7 …»), validated again when reactivated. */
   val recurrences: List<String> = emptyList(),
   val showQuestionsOnLockScreen: Boolean? = null,
+  val contextRules: List<InstinctBackupRule> = emptyList(),
 ) {
   val secrets: Boolean get() = mailboxKey != null || logToken != null
   val anything: Boolean get() = this != InstinctBackupData()
@@ -77,6 +86,7 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
     "bitácora".takeIf { d.logUrl != null }, "buzón".takeIf { d.mailboxEnabled || d.mailboxKey != null },
     "timbre".takeIf { d.doorbellEnabled }, "autonomía".takeIf { d.autonomy != null },
     "${d.recurrences.size} recurrentes".takeIf { d.recurrences.isNotEmpty() },
+    "${d.contextRules.size} reglas contextuales".takeIf { d.contextRules.isNotEmpty() },
   ).ifEmpty { listOf("ajustes") }.joinToString(", ").replaceFirstChar { it.uppercaseChar() } +
     if (d.secrets) " · con token y clave" else " · sin secretos"
 
@@ -113,15 +123,19 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
       doorbellWithOrder = if (mode == RestoreMode.REPLACE) incoming.doorbellWithOrder else current.doorbellWithOrder || incoming.doorbellWithOrder,
       doorbellDistributor = pick("el distribuidor del timbre", current.doorbellDistributor, incoming.doorbellDistributor),
       recurrences = current.recurrences,
+      contextRules = current.contextRules,
       showQuestionsOnLockScreen = pick("la visibilidad de preguntas", current.showQuestionsOnLockScreen, incoming.showQuestionsOnLockScreen),
     )
     // Recurrences this phone already has are never scheduled twice.
     val newRecurrences = incoming.recurrences.filter { it !in current.recurrences }
+    val existingRules = current.contextRules.mapTo(HashSet()) { it.id }
+    val newRules = incoming.contextRules.filter { it.id !in existingRules && it.expiresAt > System.currentTimeMillis() }
     val reactivate = incoming.copy(proposalsEnabled = incoming.proposalsEnabled && !current.proposalsEnabled,
       mailboxEnabled = incoming.mailboxEnabled && !current.mailboxEnabled, doorbellEnabled = incoming.doorbellEnabled && !current.doorbellEnabled,
-      recurrences = newRecurrences)
+      recurrences = newRecurrences, contextRules = newRules)
     val asks = listOfNotNull("recibir órdenes".takeIf { reactivate.proposalsEnabled }, "buzón".takeIf { reactivate.mailboxEnabled },
-      "timbre".takeIf { reactivate.doorbellEnabled }, "${newRecurrences.size} órdenes recurrentes".takeIf { newRecurrences.isNotEmpty() })
+      "timbre".takeIf { reactivate.doorbellEnabled }, "${newRecurrences.size} órdenes recurrentes".takeIf { newRecurrences.isNotEmpty() },
+      "${newRules.size} reglas contextuales".takeIf { newRules.isNotEmpty() })
     if (asks.isNotEmpty()) attention += "Control remoto apagado en este teléfono hasta que lo reactives: ${asks.joinToString(", ")}. " +
       "Ajustes → Propuestas de Instinct → «Reactivar Instinct en este teléfono»."
     if (reactivate.doorbellEnabled) attention += "El timbre se registra de nuevo al reactivarlo: este teléfono tiene sus propias claves y su propia dirección."
@@ -160,6 +174,30 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
       .put("doorbell", JSONObject().put("wasEnabled", d.doorbellEnabled).put("withOrder", d.doorbellWithOrder)
         .apply { d.doorbellDistributor?.let { put("distributor", it) } })
       .put("recurrences", JSONArray(d.recurrences))
+      .put("contextRules", encodeRules(d.contextRules))
+
+    internal fun encodeRules(rules: List<InstinctBackupRule>): JSONArray = JSONArray(rules.map {
+      JSONObject().put("line", it.line).put("expiresAt", it.expiresAt).put("enabled", it.enabled)
+    })
+
+    internal fun decodeRules(array: JSONArray): List<InstinctBackupRule> {
+      require(array.length() <= ContextRuleSpec.MAX_RULES) { "Demasiadas reglas contextuales en el respaldo." }
+      val parser = PhoneCommandParser()
+      val ids = HashSet<String>()
+      return List(array.length()) { index ->
+        val rule = array.getJSONObject(index)
+        val line = rule.getString("line")
+        val check = InstinctProposalValidator.check(line, parser) as? ContextualCheck
+        val end = when (val value = rule.get("expiresAt")) {
+          is Long -> value
+          is Int -> value.toLong()
+          else -> 0L
+        }
+        val enabled = rule.get("enabled") as? Boolean
+        require(check != null && ids.add(check.spec.id) && end > 0 && enabled != null) { "Regla contextual inválida en el respaldo." }
+        InstinctBackupRule(line, end, enabled)
+      }
+    }
 
     /** Every field checked with the rules Insto applies when the person types it. Throws [IllegalArgumentException]. */
     fun decode(json: JSONObject): InstinctBackupData {
@@ -199,6 +237,7 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
         mailboxInterval = interval, mailboxKey = key, logUrl = url, logToken = token,
         doorbellEnabled = doorbell?.optBoolean("wasEnabled") == true, doorbellWithOrder = doorbell?.optBoolean("withOrder") == true,
         doorbellDistributor = distributor, recurrences = recurrences,
+        contextRules = if (json.has("contextRules")) decodeRules(json.getJSONArray("contextRules")) else emptyList(),
         showQuestionsOnLockScreen = proposals?.takeIf { it.has("showQuestionsOnLockScreen") }?.let {
           it.get("showQuestionsOnLockScreen") as? Boolean ?: bad("La visibilidad de preguntas")
         },
