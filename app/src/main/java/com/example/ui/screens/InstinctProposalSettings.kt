@@ -453,7 +453,9 @@ private fun InstinctStateSection(revision: Int, onChange: () -> Unit) {
   val calendar = remember(revision) { context.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED }
   val askCalendar = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
     com.example.phone.NotificationAccessService.connected?.calendarPermissionChanged()
-    com.example.phone.InstinctContextScheduler.signal(context) onChange() }
+    com.example.phone.InstinctContextScheduler.signal(context)
+    onChange()
+  }
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_state")) {
     Text("Estado para Instinct", style = MaterialTheme.typography.bodyLarge)
     SettingsDescription("Con la bitácora configurada, Insto publica ahí un resumen del teléfono para que Instinct decida con contexto: " +

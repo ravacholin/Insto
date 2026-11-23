@@ -102,11 +102,11 @@
     "volumen": "solo"
   },
   "bloqueos_fijos": [
-    "el teléfono está bloqueado",
+    "el teléfono está bloqueado o la pantalla está apagada y la acción abre una pantalla; las acciones sin interfaz pueden ejecutarse",
     "la orden abre otra app y el servicio de Accesibilidad de Insto no está activo",
     "más de 6 órdenes en 10 minutos",
     "una orden programada que se dispara con más de 15 minutos de atraso",
-    "la acción necesita algo de la persona: un permiso, confirmar una hora que ya pasó, un modo temporal o elegir entre varias apps"
+    "la acción necesita algo de la persona: un permiso, confirmar una hora que ya pasó o elegir entre varias apps"
   ],
   "canales": {
     "acuses": "nunca",
@@ -136,7 +136,7 @@
     },
     {
       "orden": "cancelar programada <id>",
-      "solo_lectura": true
+      "solo_lectura": false
     },
     {
       "orden": "probar <orden>",
@@ -147,10 +147,36 @@
       "solo_lectura": true
     },
     {
+      "orden": "ver reglas",
+      "solo_lectura": true
+    },
+    {
+      "orden": "diagnóstico de regla <id>",
+      "solo_lectura": true
+    },
+    {
+      "orden": "activar regla <id>",
+      "solo_lectura": false
+    },
+    {
+      "orden": "desactivar regla <id>",
+      "solo_lectura": false
+    },
+    {
+      "orden": "eliminar regla <id>",
+      "solo_lectura": false
+    },
+    {
       "orden": "estado de ejecución <id>",
       "solo_lectura": true
     }
   ],
+  "decisiones": {
+    "forma": "decidir <texto> | <opción> => <acción> | <opción> => <acción> [| <opción> => <acción>]",
+    "orden": "decidir ¿Qué preferís? | Silencio => silenciar el teléfono | No molestar => activar no molestar",
+    "regla": "En «decidir», cada botón autoriza una sola acción de la lista permitida que pueda ejecutarse sin abrir una pantalla. El toque vale como confirmación. Se revisan los permisos y Nunca al ejecutar. La acción deja otra fila «respuesta» en la bitácora con su resultado y el id de la pregunta. La pantalla bloqueada oculta texto y opciones por defecto.",
+    "requiere_bitacora": true
+  },
   "firma_buzon": "insto-v4",
   "formas": {
     "clima": [
@@ -210,7 +236,7 @@
       }
     ]
   },
-  "hash": "9a0c16952588dd0d16570efc94d441afbc8596973a83074bf607e42f2c20fb86",
+  "hash": "0ebd2f88c2bac37fe29b102fa28ff52d30139dbb75ff04a3fcc1fcbf11d2f50c",
   "horas_de_silencio": null,
   "limites": {
     "atraso_minutos_max": 15,
@@ -223,6 +249,7 @@
     "diferida_minutos_min": 1,
     "disparador_horas": 12,
     "disparador_horas_max": 24,
+    "disparos_contextuales_cada_10_minutos": 6,
     "lineas_por_mensaje": 3,
     "lluvia_por_ciento": 50,
     "orden_caracteres_en_acuse": 80,
@@ -239,6 +266,9 @@
     "pruebas_cada_10_minutos": 20,
     "recurrente_dias_max": 30,
     "recurrentes": 5,
+    "regla_condiciones_max": 3,
+    "regla_dias_max": 30,
+    "reglas_contextuales": 12,
     "rutina_pasos_max": 6
   },
   "prefijo": "#insto ",
@@ -246,10 +276,11 @@
     "categoria": "Preguntas",
     "espera_en_horas_de_silencio": true,
     "forma": "preguntar <texto> | <opción 1> | <opción 2> [| <opción 3>]",
+    "muestra_contenido_en_pantalla_bloqueada": false,
     "orden": "preguntar ¿Preferís café o té? | Café | Té en 2 horas",
     "reglas": [
       "Preguntá cuando no esté claro qué hacer o cuando la decisión sea personal. Si ya tenés permiso y la acción es clara, hacela directamente. Si una pregunta vence o la descartan, no la repitas ni insistas.",
-      "Requiere bitácora. Las respuestas se anotan solo ahí, incluso si la pregunta llegó por chat y los acuses están apagados. En las filas de tipo «respuesta», evento_id es el id de ejecución, orden es la pregunta completa, detalle es la opción elegida, «vencida» o «descartada», y ocurrido es la hora en UTC."
+      "Requiere bitácora. Las respuestas se anotan ahí aunque hayan llegado por chat y los acuses estén apagados. En la fila «respuesta», evento_id identifica la ejecución, orden contiene el texto de la pregunta y detalle contiene la opción elegida, «vencida» o «descartada»."
     ],
     "requiere_bitacora": true,
     "respuesta_por": "bitacora",
@@ -267,12 +298,35 @@
     "rutinas que no están habilitadas",
     "varias acciones juntas"
   ],
-  "protocolo": "Protocolo Insto v7",
+  "protocolo": "Protocolo Insto v8",
   "reglas": [
     "Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después.",
     "Si no estás seguro de una forma o de si va a quedar esperando, probala antes con \"probar <orden>\"."
   ],
+  "reglas_contextuales": {
+    "condiciones": [
+      "batería menor de N por ciento",
+      "batería mayor de N por ciento",
+      "horario HH:MM a HH:MM",
+      "cargando",
+      "no cargando",
+      "wifi conectado",
+      "sin wifi",
+      "con internet",
+      "sin internet",
+      "reproduciendo multimedia",
+      "sin reproducción multimedia",
+      "evento en curso",
+      "sin evento en curso",
+      "auriculares conectados",
+      "sin auriculares",
+      "al desbloquear"
+    ],
+    "forma": "cuando <condición> [y <condición> [y <condición>]] [por N días]: <acción>",
+    "orden": "cuando batería menor de 15 por ciento y no cargando: avisarme Batería baja",
+    "regla": "Creá, consultá y administrá reglas por el buzón firmado. Hasta tres condiciones unidas con «y», una acción permitida sin interfaz o «avisarme» y hasta 12 reglas durante un máximo de 30 días. Se disparan al cumplirse las condiciones, según los eventos que Android entregue, incluso sin conexión con Instinct. Conservan los permisos y la autonomía del teléfono."
+  },
   "rutinas": [],
-  "version_insto": "1.21.0",
-  "version_protocolo": 7
+  "version_insto": "1.22.0",
+  "version_protocolo": 8
 }
