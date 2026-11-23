@@ -654,7 +654,7 @@ object InstinctProposalCenter {
     val check = InstinctProposalValidator.check(inner, PhoneCommandParser(), now, InstinctRoutineGrants(app).access())
     val minute = InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock())
     val verdict = when (check) {
-      is ProposalCheck.Question -> InstinctQuestionNotifications.probe(app, source)
+      is ProposalCheck.Question -> InstinctQuestionNotifications.probe(app, source, check.question)
       is ProposalCheck.Invalid -> InstinctProbe.Verdict.Invalid(InstinctAck.reason(check.reason))
       is ProposalCheck.Query -> if (check.kind == ProposalCheck.QueryKind.PROBE) InstinctProbe.Verdict.Invalid("no se puede probar una prueba")
         else InstinctProbe.Verdict.Alone("consulta")
@@ -770,7 +770,8 @@ object InstinctProposalCenter {
   val budget = AutoRunBudget({ clock() })
   internal var accessibilityConnected: () -> Boolean = { com.example.assist.PingAutoSendAccessibilityService.isConnected() }
   internal var keyguardLocked: (Context) -> Boolean = {
-    it.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
+    it.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true ||
+      it.getSystemService(android.os.PowerManager::class.java)?.isInteractive == false
   }
 
   /** Commands that open another app's screen. From the background Android only allows that while Insto is exempt. */
@@ -824,6 +825,41 @@ object InstinctProposalCenter {
     }
     val claim = book.claim(proposal.id, fingerprint(context))
     if (claim !is ProposalBook.Claim.Granted) { reportUnavailable(context, proposal, claim); return }
+    executeBackground(context, proposal)
+  }
+
+  /** A notification option is the person's confirmation; the journal still owns dispatch and verification. */
+  internal fun dispatchDecision(context: Context, row: ExecutionRecord, resumeReady: Boolean = false) {
+    val now = InstinctExecutionJournal.clock()
+    val calendar = java.util.Calendar.getInstance().apply { timeInMillis = now }
+    val command = InstinctProposalValidator.backgroundAction(row.line, PhoneCommandParser(), calendar)
+    val reason = when {
+      now >= (row.deadline ?: 0) -> ExecutionRecoveryPolicy.LAPSED
+      !InstinctProposalSettings(context).isEnabled() ||
+        InstinctAutonomySettings(context).policy().level(InstinctCategory.PREGUNTAS) == InstinctAutonomy.NUNCA ->
+        InstinctAutonomyPolicy.REFUSED
+      command == null -> InstinctQuestion.INVALID
+      refusedByPolicy(context, command) -> InstinctAutonomyPolicy.REFUSED
+      else -> blocker(context, command, foreground = false)
+    }
+    if (reason != null || command == null) {
+      InstinctExecutions.move(context, row.executionId,
+        if (reason == ExecutionRecoveryPolicy.LAPSED) ExecutionState.EXPIRED else ExecutionState.FAILED,
+        reason = reason, from = setOf(ExecutionState.RECEIVED, ExecutionState.READY))
+      InstinctLog.questionCompleted(context)
+      return
+    }
+    if (!resumeReady && !InstinctExecutions.move(context, row.executionId, ExecutionState.READY, from = setOf(ExecutionState.RECEIVED))) return
+    val fingerprint = row.parent.orEmpty()
+    val proposal = book.offer(row.line, command, fingerprint, ProposalSource.BUZON, row.executionId) ?: return
+    InstinctExecutions.link(proposal.id, row.executionId)
+    if (book.claim(proposal.id, fingerprint) !is ProposalBook.Claim.Granted) return
+    try { executeBackground(context, proposal, explicitChoice = true) }
+    finally { InstinctLog.questionCompleted(context) }
+  }
+
+  private fun executeBackground(context: Context, proposal: ProposalBook.Proposal, explicitChoice: Boolean = false) {
+    val execution = proposal.executionId
     // 1.20.0: «despachando» is on disk before anything touches the phone; without it nothing runs.
     if (!InstinctExecutions.begin(context, execution, proposal.command)) {
       report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, NOT_RECORDED)); return
@@ -847,6 +883,11 @@ object InstinctProposalCenter {
         InstinctProposalIntake.diagnose(InstinctProposalIntake.Diagnosis.FAILED, result.message)
         notifyResult(context, proposal, "Instinct pidió: ${proposal.summary}", "No se pudo: ${result.message}")
         report(context, proposal, result)
+      }
+      explicitChoice && InstinctAck.needsUser(result) -> {
+        InstinctReadiness.noteMissing(context, result)
+        notifyResult(context, proposal, "Insto no pudo ejecutar la opción", result.message)
+        report(context, proposal.id, AckEntry(AckKind.ERROR, proposal.order, result.message))
       }
       InstinctAck.needsUser(result) -> {
         // It did not happen: it goes back for a touch, which can open the panel, ask a permission or choose. A missing

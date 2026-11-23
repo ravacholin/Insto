@@ -34,6 +34,7 @@ internal object InstinctQuestionNotifications {
     val policy = InstinctAutonomySettings(app).policy()
     val level = policy.level(InstinctCategory.PREGUNTAS)
     if (level == InstinctAutonomy.NUNCA) return reject(app, record, InstinctAutonomyPolicy.REFUSED)
+    if (question.actions.any { actionRefused(app, it) }) return reject(app, record, InstinctAutonomyPolicy.REFUSED)
     if (!InstinctLogSettings(app).configured()) return reject(app, record, InstinctQuestion.NEEDS_LOG)
     val needsPreview = level == InstinctAutonomy.CONFIRMAR ||
       InstinctSourceCap.apply(AutonomyDecision.Run, source, InstinctMailboxSettings(app).whatsappCap()) is AutonomyDecision.Confirm
@@ -54,7 +55,14 @@ internal object InstinctQuestionNotifications {
       InstinctLog.enqueue(context, listOf(AckEntry(AckKind.ERROR, record.line, reason)), record.logMessage)
   }
 
-  fun probe(context: Context, source: ProposalSource): InstinctProbe.Verdict {
+  private fun actionRefused(context: Context, line: String): Boolean {
+    val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctExecutionJournal.clock() }
+    val command = InstinctProposalValidator.backgroundAction(line, PhoneCommandParser(), now) ?: return true
+    return InstinctProposalCenter.refusedByPolicy(context, command)
+  }
+
+  fun probe(context: Context, source: ProposalSource, question: InstinctQuestion? = null): InstinctProbe.Verdict {
+    if (question?.actions?.any { actionRefused(context, it) } == true) return InstinctProbe.Verdict.Refused
     val policy = InstinctAutonomySettings(context).policy()
     val category = InstinctCategory.PREGUNTAS
     val level = policy.level(category)
@@ -111,7 +119,7 @@ internal object InstinctQuestionNotifications {
       val notification = InstinctProposalCenter.builder(app, CHANNEL)
         .setSmallIcon(android.R.drawable.ic_dialog_info)
         .setContentTitle(if (preview) "Instinct quiere hacerte una pregunta" else "Insto te pregunta")
-        .setContentText(question.text).setStyle(Notification.BigTextStyle().bigText(question.text))
+        .setContentText(question.notificationText()).setStyle(Notification.BigTextStyle().bigText(question.notificationText()))
         .setVisibility(if (publicContent) Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE)
         .setPublicVersion(publicVersion(app))
         .setOnlyAlertOnce(true)
@@ -166,10 +174,14 @@ internal object InstinctQuestionNotifications {
     val id = intent.getStringExtra(ID) ?: return
     val choice = intent.getIntExtra(CHOICE, DEFAULT_CHOICE)
     if (choice == DEFAULT_CHOICE) return
-    finish(context, id, choice, showFeedback = choice != InstinctQuestion.DISCARD)
+    val selected = finish(context, id, choice, showFeedback = choice != InstinctQuestion.DISCARD)
+    if (selected != null) {
+      InstinctExecutionRecoveryManager.later(context)
+      InstinctProposalCenter.dispatchDecision(context, selected)
+    }
   }
 
-  private fun finish(context: Context, id: String, choice: Int, showFeedback: Boolean) = synchronized(lock) {
+  private fun finish(context: Context, id: String, choice: Int, showFeedback: Boolean): ExecutionRecord? = synchronized(lock) {
     val journal = InstinctExecutions.journal(context)
     val permitted = InstinctProposalSettings(context).isEnabled() &&
       InstinctAutonomySettings(context).policy().level(InstinctCategory.PREGUNTAS) != InstinctAutonomy.NUNCA
@@ -184,6 +196,7 @@ internal object InstinctQuestionNotifications {
       })
     }
     refresh(context)
+    outcome?.action
   }
 
   private fun completed(context: Context, id: String, outcome: QuestionOutcome) {
@@ -232,7 +245,7 @@ class InstinctQuestionPreviewActivity : Activity() {
     }
     AlertDialog.Builder(this)
       .setTitle("Instinct quiere hacerte una pregunta")
-      .setMessage(question.text + "\n\n" + question.options.joinToString(" · "))
+      .setMessage(question.notificationText() + if (question.actions.isEmpty()) "\n\n" + question.options.joinToString(" · ") else "")
       .setPositiveButton("Mostrar pregunta") { _, _ -> InstinctQuestionNotifications.approve(this, id) }
       .setNegativeButton("Descartar") { _, _ -> InstinctQuestionNotifications.discard(this, id) }
       .setOnDismissListener { finish() }

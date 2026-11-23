@@ -40,7 +40,7 @@ object InstinctExecutionRecoveryManager {
     val resume = ArrayList<Pair<ExecutionRecord, Boolean>>()
     val scheduledSeries by lazy { runCatching { InstinctScheduler.pending(app).map { it.series }.toSet() }.getOrNull() }
     for (row in rows) {
-      if (questionsOnly && !InstinctQuestion.isRelated(row.line)) continue
+      if (questionsOnly && !InstinctQuestion.isRelated(row.line) && row.transport != ExecutionTransport.DECISION) continue
       val mine = row.owner == InstinctExecutionJournal.owner
       val action = ExecutionRecoveryPolicy.decide(row, now, effect(row))
       if (action == ExecutionRecoveryPolicy.Action.RefreshQuestion) continue
@@ -52,7 +52,9 @@ object InstinctExecutionRecoveryManager {
       if (!mine && !journal.adopt(row)) continue
       touched++
       when (action) {
-        ExecutionRecoveryPolicy.Action.Resume -> resume += row to !mine
+        ExecutionRecoveryPolicy.Action.Resume -> if (row.transport == ExecutionTransport.DECISION) {
+          runCatching { InstinctProposalCenter.dispatchDecision(app, row, resumeReady = !mine && row.state == ExecutionState.READY) }
+        } else resume += row to !mine
         ExecutionRecoveryPolicy.Action.Verify -> verify(app, row)
         ExecutionRecoveryPolicy.Action.RestoreWaiting -> {
           val until = row.updatedAt + ExecutionJournalPolicy.WAITING_TTL_MILLIS

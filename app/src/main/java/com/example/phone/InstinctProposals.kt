@@ -92,6 +92,8 @@ object InstinctProposalValidator {
     }
     if (InstinctQuestion.isOrder(order)) {
       val question = InstinctQuestion.parse(order, now) ?: return ProposalCheck.Invalid(order, ProposalCheck.Reason.QUESTION)
+      if (question.actions.any { backgroundAction(it, parse, now, routines) == null })
+        return ProposalCheck.Invalid(order, ProposalCheck.Reason.QUESTION)
       return ProposalCheck.Question(order, question)
     }
     cancelOne.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.CANCEL_ONE, it.groupValues[1]) }
@@ -122,6 +124,18 @@ object InstinctProposalValidator {
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.SEMANTIC)
     if (!allowed(command) && !allowedRoutine(command, routines)) return ProposalCheck.Invalid(order, ProposalCheck.Reason.FORBIDDEN)
     return ProposalCheck.Valid(order, command)
+  }
+
+  internal fun backgroundAction(order: String, parser: PhoneCommandParser, now: Calendar,
+    routines: InstinctRoutineAccess = InstinctRoutineAccess.NONE): PhoneCommand? =
+    backgroundAction(order, parser::parse, now, routines)
+
+  private fun backgroundAction(order: String, parse: (String) -> PhoneRoute, now: Calendar,
+    routines: InstinctRoutineAccess): PhoneCommand? {
+    if (InstinctQuestion.isRelated(order) || '|' in order || order.length > 200) return null
+    val command = (check(order, parse, now, routines) as? ProposalCheck.Valid)
+      ?.takeIf { it.deferred == null }?.command ?: return null
+    return command.takeIf(LockScreenPolicy::runsLocked)
   }
 
   /** The order after «probar», as written (maybe empty); null when the line is not a probe. */

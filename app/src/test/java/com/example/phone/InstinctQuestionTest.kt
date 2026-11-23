@@ -14,6 +14,19 @@ class InstinctQuestionTest {
   private val order = "preguntar ¿Café o té? | Café | Té"
   private fun parse(line: String) = InstinctQuestion.parse(line, now)
 
+  @Test fun `decidir binds one validated background action to each button`() {
+    val line = "decidir ¿Qué preferís? | Silencio => silenciar el teléfono | No molestar => activar no molestar"
+    val parser = PhoneCommandParser()
+    val result = InstinctProposalValidator.check(line, parser) as ProposalCheck.Question
+    assertEquals(listOf("Silencio", "No molestar"), result.question.options)
+    assertEquals(listOf("silenciar el teléfono", "activar no molestar"), result.question.actions)
+    assertEquals(result.question, InstinctQuestion.decode(result.question.encode(), result.question.expiresAt))
+    for (invalid in listOf("abrir spotify", "cancelar programadas", "en una hora subir el volumen", "llamar a Ana")) {
+      assertTrue(invalid, InstinctProposalValidator.check(line.replace("activar no molestar", invalid), parser) is ProposalCheck.Invalid)
+    }
+    assertTrue(InstinctProposalValidator.check("probar $line", parser) is ProposalCheck.Query)
+  }
+
   @Test fun `preserves question and labels while parsing expiry`() {
     val question = requireNotNull(parse(order))
     assertEquals("¿Café o té?", question.text)

@@ -234,17 +234,24 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     db.update("executions", ContentValues().apply {
       put("state", outcome.state.name); put("updated_at", now); put("owner", owner); put("result", outcome.response)
     }, "execution_id = ?", arrayOf(id))
-    outcome
+    val action = choice?.takeIf { outcome.state == ExecutionState.ANSWERED }?.let(question.actions::getOrNull)?.let { line ->
+      val message = "decision:$id"
+      ExecutionRecord(ExecutionIds.of(message, 0), message, 0, ExecutionTransport.DECISION, line, now, now,
+        ExecutionState.RECEIVED, parent = id, deadline = question.expiresAt, owner = owner).also {
+        db.insertOrThrow("executions", null, values(it))
+      }
+    }
+    outcome.copy(action = action)
   }
 
   fun pendingQuestionReplies(limit: Int = 1): List<ExecutionRecord> = database().rawQuery(
-    "SELECT * FROM executions WHERE question_at IS NOT NULL AND reported IS NULL " +
-      "AND state IN ('ANSWERED','EXPIRED','CANCELLED') ORDER BY updated_at, execution_id LIMIT ?", arrayOf(limit.toString())
+    "SELECT * FROM executions WHERE reported IS NULL AND ((question_at IS NOT NULL AND state IN ('ANSWERED','EXPIRED','CANCELLED')) OR " +
+      "(transport = 'DECISION' AND state IN ('VERIFIED','HANDED_OFF','FAILED','CANCELLED','UNCERTAIN','EXPIRED'))) ORDER BY updated_at, execution_id LIMIT ?", arrayOf(limit.toString())
   ).use(::records)
 
   fun markQuestionReplies(ids: Set<String>) = transaction { db ->
     for (id in ids) db.update("executions", ContentValues().apply { put("reported", InstinctLogEvents.RESPONSE_KIND) },
-      "execution_id = ? AND question_at IS NOT NULL", arrayOf(id))
+      "execution_id = ? AND (question_at IS NOT NULL OR transport = 'DECISION')", arrayOf(id))
   }
 
   /**
@@ -257,6 +264,8 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     val current = getIn(db, executionId) ?: return@transaction false
     if (from != null && current.state !in from) return@transaction false
     if (!ExecutionTransitions.allowed(current.state, to)) return@transaction false
+    if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.DECISION &&
+      clock() >= (current.deadline ?: 0)) return@transaction false
     db.update("executions", ContentValues().apply {
       put("state", to.name); put("updated_at", clock()); put("owner", owner)
       result?.let { put("result", it.take(MAX_TEXT)) }
@@ -265,7 +274,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
       attribution?.let { put("attribution", it.name) }
       proposalId?.let { put("proposal_id", it) }
       occurrence?.let { put("occurrence", it) }
-      reported?.let { put("reported", it.name) }
+      if (current.transport != ExecutionTransport.DECISION) reported?.let { put("reported", it.name) }
       if (to == ExecutionState.DISPATCHING) put("attempts", current.attempts + 1)
     }, "execution_id = ?", arrayOf(executionId)) == 1
   }
@@ -279,7 +288,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
 
   /** Marks the acknowledgement sent for [executionId]. */
   fun markReported(executionId: String, kind: AckKind) {
-    runCatching { database().update("executions", ContentValues().apply { put("reported", kind.name) }, "execution_id = ?", arrayOf(executionId)) }
+    runCatching { database().update("executions", ContentValues().apply { put("reported", kind.name) }, "execution_id = ? AND transport != 'DECISION'", arrayOf(executionId)) }
   }
 
   /** Takes over a row another process left, so two recoveries never act on it. True for the one that wins. */
@@ -293,7 +302,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     runCatching {
       transaction { db ->
         val terminal = ExecutionState.TERMINAL.joinToString(",") { "'${it.name}'" }
-        val prunable = "state IN ($terminal) AND (question_at IS NULL OR (reported IS NOT NULL AND question_at <= ${clock() - InstinctQuestion.HOUR}))"
+        val prunable = "state IN ($terminal) AND ((question_at IS NULL AND transport != 'DECISION') OR (reported IS NOT NULL AND (question_at IS NULL OR question_at <= ${clock() - InstinctQuestion.HOUR})))"
         db.delete("executions", "$prunable AND updated_at < ?", arrayOf((clock() - ExecutionJournalPolicy.RETENTION_MILLIS).toString()))
         db.delete("claims", "at < ?", arrayOf((clock() - ExecutionJournalPolicy.CLAIM_RETENTION_MILLIS).toString()))
         db.execSQL("DELETE FROM executions WHERE $prunable AND execution_id NOT IN " +
