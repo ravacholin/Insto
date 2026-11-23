@@ -79,7 +79,7 @@ object InstinctLog {
 
   internal fun recoverQuestionReplies(context: Context) {
     val settings = InstinctLogSettings(context)
-    if (settings.configured() && InstinctExecutions.journal(context).pendingQuestionReplies().isNotEmpty() &&
+    if (settings.configured() && InstinctExecutions.existingJournal(context)?.pendingQuestionReplies()?.isNotEmpty() == true &&
       context.getSystemService(JobScheduler::class.java)?.getPendingJob(JOB_ID) == null) questionCompleted(context)
   }
 
@@ -117,13 +117,13 @@ object InstinctLog {
   private fun drainLocked(app: Context): Boolean {
     val box = outbox(app)
     val settings = InstinctLogSettings(app)
-    val journal by lazy { InstinctExecutions.journal(app) }
+    val journal = InstinctExecutions.existingJournal(app)
     while (true) {
       // The existing outbox can evict old events. Keep each answer in its execution until Sheets confirms it.
       synchronized(box) {
         val queued = box.read().events
         val available = InstinctLogOutbox.CAPACITY - queued.size
-        if (available > 0) {
+        if (available > 0 && journal != null) {
           val ids = queued.mapTo(HashSet()) { it.id }
           val responses = runCatching { journal.pendingQuestionReplies(InstinctLogOutbox.CAPACITY) }.getOrDefault(emptyList())
             .mapNotNull(InstinctLogEvents::questionResponse).filterNot { it.id in ids }
@@ -141,7 +141,7 @@ object InstinctLog {
           // An answer that confirms nothing would loop forever: it is invalid.
           if (result.ids.isEmpty()) { status(app, InstinctLogClient.Result.Failed(InstinctLogClient.Failure.INVALID)); return true }
           val responses = batch.filter { it.kind == InstinctLogEvents.RESPONSE_KIND && it.id in result.ids }.mapTo(HashSet()) { it.id }
-          if (responses.isNotEmpty()) journal.markQuestionReplies(responses)
+          if (responses.isNotEmpty()) journal?.markQuestionReplies(responses)
           box.remove(result.ids)
           status(app, result)
         }
@@ -203,7 +203,7 @@ object InstinctLog {
 
   /** After a boot: the job again, only if something is pending. */
   fun rearm(context: Context) {
-    if (outbox(context).size() > 0 || runCatching { InstinctExecutions.journal(context).pendingQuestionReplies().isNotEmpty() }.getOrDefault(false))
+    if (outbox(context).size() > 0 || runCatching { InstinctExecutions.existingJournal(context)?.pendingQuestionReplies()?.isNotEmpty() == true }.getOrDefault(false))
       schedule(context.applicationContext)
   }
 

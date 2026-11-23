@@ -20,7 +20,7 @@ data class InstinctQuestion(val text: String, val options: List<String>, val exp
 
   companion object {
     const val FORM = "preguntar <texto> | <opción 1> | <opción 2> [| <opción 3>]"
-    const val INVALID = "usá «$FORM», con texto de hasta 140 caracteres, opciones de hasta 24 y un plazo de hasta 24 horas"
+    const val INVALID = "separá la pregunta y 2 o 3 opciones con «|» y revisá el plazo."
     const val NEEDS_LOG = "necesita bitácora"
     const val MAX_TEXT = 140
     const val MAX_OPTION = 24

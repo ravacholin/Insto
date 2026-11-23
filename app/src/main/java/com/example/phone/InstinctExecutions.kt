@@ -1,6 +1,7 @@
 package com.example.phone
 
 import android.content.Context
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -12,6 +13,10 @@ object InstinctExecutions {
   private val byKey = ConcurrentHashMap<Long, String>()
 
   fun journal(context: Context): InstinctExecutionJournal = InstinctExecutionJournal.of(context)
+
+  /** Background checks for question work must not create a journal or start the legacy import. */
+  internal fun existingJournal(context: Context): InstinctExecutionJournal? =
+    if (File(context.applicationContext.noBackupFilesDir, InstinctExecutionJournal.FILE).isFile) journal(context) else null
 
   internal fun link(key: Long, executionId: String?) { if (executionId != null) byKey[key] = executionId }
   internal fun relink(old: Long, new: Long) { byKey.remove(old)?.let { byKey[new] = it } }

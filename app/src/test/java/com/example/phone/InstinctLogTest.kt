@@ -351,7 +351,8 @@ class InstinctLogTest {
     assertTrue(InstinctAck.safe(chat))
     assertTrue(InstinctProposalProtocol.orders(chat).isEmpty())
     val whatsapp = InstinctProtocolCatalog.text(emptyList())
-    assertFalse(whatsapp.contains("bitácora"))
+    assertTrue(whatsapp.contains("Requiere bitácora. Las respuestas se anotan solo ahí"))
+    assertFalse(whatsapp.contains("action=estado"))
     assertNotNull(whatsapp.lines().firstOrNull { it.startsWith("#insto-ok ") })
   }
 }
