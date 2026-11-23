@@ -196,7 +196,6 @@ object InstinctScheduler {
     // A recurrence is a local time: after a time zone change its next occurrence is the same hour in the new zone.
     if (zoneChanged) runCatching { relocate(app) }
     store(app).pending().forEach { alarms(app, it, true) }
-    InstinctContextScheduler.evaluate(app)
   }
 
   private fun relocate(app: Context) {
@@ -416,20 +415,20 @@ class InstinctScheduleReceiver : BroadcastReceiver() {
           try { runCatching { InstinctScheduler.fire(context, id, token) } } finally { pending.finish() }
         }
       }
-      InstinctContextScheduler.ACTION_TICK, Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
-      Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED, AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
-        val pending = goAsync()
-        InstinctStatePublisher.background(Runnable {
-          try {
-            runCatching {
-              if (intent.action == InstinctContextScheduler.ACTION_TICK) InstinctContextScheduler.evaluate(context.applicationContext)
-              else {
-                InstinctScheduler.rearm(context, zoneChanged = intent.action == Intent.ACTION_TIMEZONE_CHANGED)
-              }
-            }
-          } finally { pending.finish() }
-        })
+      InstinctContextScheduler.ACTION_TICK -> contextRules(context)
+      Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_TIME_CHANGED,
+      Intent.ACTION_TIMEZONE_CHANGED, AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
+        runCatching { InstinctScheduler.rearm(context, zoneChanged = intent.action == Intent.ACTION_TIMEZONE_CHANGED) }
+        if (InstinctExecutions.existingJournal(context) != null) contextRules(context)
       }
     }
+  }
+
+  private fun contextRules(context: Context) {
+    val pending = goAsync()
+    InstinctStatePublisher.background(Runnable {
+      try { runCatching { InstinctContextScheduler.evaluate(context.applicationContext) } }
+      finally { pending?.finish() }
+    })
   }
 }

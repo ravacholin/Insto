@@ -290,10 +290,17 @@ internal class InstinctStateWatcher(private val context: Context) {
     }
     override fun onLost(network: android.net.Network) { InstinctContextScheduler.signal(context) }
   }
-  private val playback = object : AudioManager.AudioPlaybackCallback() {
-    override fun onPlaybackConfigChanged(configs: MutableList<android.media.AudioPlaybackConfiguration>?) {
-      InstinctContextScheduler.signal(context)
+  private var stopPlayback: (() -> Unit)? = null
+
+  @androidx.annotation.RequiresApi(26)
+  private fun watchPlayback(audio: AudioManager): () -> Unit {
+    val callback = object : AudioManager.AudioPlaybackCallback() {
+      override fun onPlaybackConfigChanged(configs: MutableList<android.media.AudioPlaybackConfiguration>?) {
+        InstinctContextScheduler.signal(context)
+      }
     }
+    audio.registerAudioPlaybackCallback(callback, handler)
+    return { audio.unregisterAudioPlaybackCallback(callback) }
   }
   private var started = false
 
@@ -319,7 +326,7 @@ internal class InstinctStateWatcher(private val context: Context) {
       headphones.clear()
       audio?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.filter { InstinctAudioDevices.headphones(it.type) }?.forEach { headphones += it.id }
       audio?.registerAudioDeviceCallback(devices, handler)
-      if (android.os.Build.VERSION.SDK_INT >= 26) audio?.registerAudioPlaybackCallback(playback, handler)
+      if (android.os.Build.VERSION.SDK_INT >= 26 && audio != null) stopPlayback = watchPlayback(audio)
     }
     runCatching { context.getSystemService(android.net.ConnectivityManager::class.java)?.registerDefaultNetworkCallback(network) }
     watchCalendar()
@@ -340,8 +347,8 @@ internal class InstinctStateWatcher(private val context: Context) {
     started = false
     runCatching { context.unregisterReceiver(receiver) }
     runCatching { context.getSystemService(AudioManager::class.java)?.unregisterAudioDeviceCallback(devices) }
-    if (android.os.Build.VERSION.SDK_INT >= 26)
-      runCatching { context.getSystemService(AudioManager::class.java)?.unregisterAudioPlaybackCallback(playback) }
+    runCatching { stopPlayback?.invoke() }
+    stopPlayback = null
     runCatching { context.getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(network) }
     runCatching { context.contentResolver.unregisterContentObserver(calendar) }
     InstinctStatePublisher.debouncer.cancel()
