@@ -149,6 +149,15 @@ internal object InstinctContextScheduler {
     return rule.spec.evaluate(snapshot(app, now, signals, events, unlock = true)) == true
   }
 
+  /** The phone now, for [signals] only (a plan's «si …», 1.23.0). A signal without data or permission stays null. */
+  internal fun snapshotNow(app: Context, signals: Set<ContextSignal>): ContextSnapshot {
+    val now = InstinctExecutionJournal.clock()
+    val events = if (ContextSignal.CALENDAR in signals && app.checkSelfPermission(android.Manifest.permission.READ_CALENDAR) ==
+      android.content.pm.PackageManager.PERMISSION_GRANTED) runCatching { InstinctCalendarReader(app).instances(now) }.getOrNull()
+      ?.filterNot { it.allDay } else null
+    return snapshot(app, now, signals, events, unlock = false)
+  }
+
   private fun snapshot(app: Context, now: Long, signals: Set<ContextSignal>, events: List<CalendarInstance>?, unlock: Boolean): ContextSnapshot {
     val battery = if (ContextSignal.BATTERY in signals || ContextSignal.CHARGING in signals)
       runCatching { app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }.getOrNull() else null

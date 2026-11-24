@@ -169,6 +169,22 @@
     {
       "orden": "estado de ejecución <id>",
       "solo_lectura": true
+    },
+    {
+      "orden": "ver planes",
+      "solo_lectura": true
+    },
+    {
+      "orden": "estado de plan <id>",
+      "solo_lectura": true
+    },
+    {
+      "orden": "cancelar plan <id>",
+      "solo_lectura": false
+    },
+    {
+      "orden": "reanudar plan <id>",
+      "solo_lectura": false
     }
   ],
   "decisiones": {
@@ -236,7 +252,7 @@
       }
     ]
   },
-  "hash": "0ebd2f88c2bac37fe29b102fa28ff52d30139dbb75ff04a3fcc1fcbf11d2f50c",
+  "hash": "88b68187fb849062699f51869a0e6446dbd39859cb8b8caf30c3197561c7659d",
   "horas_de_silencio": null,
   "limites": {
     "atraso_minutos_max": 15,
@@ -254,6 +270,12 @@
     "lluvia_por_ciento": 50,
     "orden_caracteres_en_acuse": 80,
     "ordenes_automaticas_cada_10_minutos": 6,
+    "plan_acciones_max": 6,
+    "plan_espera_horas_max": 12,
+    "plan_horas": 12,
+    "plan_horas_max": 24,
+    "plan_pasos_max": 10,
+    "planes_activos_max": 5,
     "pregunta_caracteres_max": 140,
     "pregunta_horas": 2,
     "pregunta_horas_max": 24,
@@ -270,6 +292,27 @@
     "regla_dias_max": 30,
     "reglas_contextuales": 12,
     "rutina_pasos_max": 6
+  },
+  "planes": {
+    "ejemplos": [
+      {
+        "orden": "plan: activar no molestar; poner el volumen al 20 por ciento; pausar la música"
+      },
+      {
+        "orden": "plan: esperar al empezar el próximo evento; guardar no molestar; activar no molestar; esperar al terminar el evento; restaurar no molestar"
+      },
+      {
+        "orden": "plan: decidir ¿Preferís silencio o música? | Silencio => activar no molestar + pausar la música | Música => desactivar no molestar + poner el volumen al 40 por ciento"
+      }
+    ],
+    "forma": "plan[ hasta las HH:MM]: <paso>; <paso>; \u2026",
+    "pasos": "<acción> [si falla <acción>] · esperar N minutos|horas · esperar hasta las HH:MM · esperar al empezar el próximo evento|al terminar el evento|al conectar auriculares|al desconectar auriculares|al desbloquear · si <condición> [y <condición>] entonces <acción> [+ <acción>] [si no <acción> [+ <acción>]] · decidir <texto> | <opción> => <acción> [+ <acción>] | <opción> => \u2026 · guardar volumen|sonido|no molestar|estado · restaurar [volumen|sonido|no molestar]",
+    "progreso_por": "bitacora",
+    "reglas": [
+      "Un plan es una sola orden en una línea: hasta 6 acciones sin interfaz (contando alternativas y opciones), 10 pasos, una decisión y 5 planes activos. Insto ejecuta cada paso después de comprobar el anterior. Si una acción falla, el plan se detiene, salvo que hayas escrito «si falla <acción>». Si el resultado es incierto, no se repite: el plan queda suspendido hasta «reanudar plan <id>» o «cancelar plan <id>». Lo que «guardar» guarda se restaura con «restaurar», o al cancelarse, fallar o vencer el plan, salvo que la persona lo haya cambiado después. Vence a las 12 horas, o con «hasta las HH:MM» (máximo 24 horas). La autonomía se aplica al plan entero: con Confirmar la persona lo aprueba una vez; con Nunca se rechaza.",
+      "El acuse de la orden dice «Plan <id> aceptado». El progreso y el resultado final van a la bitácora como eventos de tipo «plan» (orden: «plan <id> · <paso> · <texto>», detalle: estado y resultado), nunca al chat. «ver planes» y «estado de plan <id>» los muestran."
+    ],
+    "tipo_evento": "plan"
   },
   "prefijo": "#insto ",
   "preguntas": {
@@ -296,7 +339,7 @@
     "guardar lugares",
     "navegación",
     "rutinas que no están habilitadas",
-    "varias acciones juntas"
+    "varias acciones juntas fuera de un plan"
   ],
   "protocolo": "Protocolo Insto v8",
   "reglas": [
@@ -327,6 +370,6 @@
     "regla": "Creá, consultá y administrá reglas por el buzón firmado. Hasta tres condiciones unidas con «y», una acción permitida sin interfaz o «avisarme» y hasta 12 reglas durante un máximo de 30 días. Se disparan al cumplirse las condiciones, según los eventos que Android entregue, incluso sin conexión con Instinct. Conservan los permisos y la autonomía del teléfono."
   },
   "rutinas": [],
-  "version_insto": "1.22.0",
+  "version_insto": "1.23.0",
   "version_protocolo": 8
 }

@@ -39,6 +39,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
           opened.execSQL("""CREATE TABLE IF NOT EXISTS context_rules (
             id TEXT PRIMARY KEY, line TEXT NOT NULL, expires_at INTEGER NOT NULL, enabled INTEGER NOT NULL,
             matched INTEGER NOT NULL, candidate_at INTEGER, last_at INTEGER, status TEXT NOT NULL)""")
+          createPlans(opened)
           opened.version = VERSION
           opened.setTransactionSuccessful()
         } finally { opened.endTransaction() }
@@ -61,6 +62,20 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     db.execSQL("CREATE INDEX IF NOT EXISTS executions_state ON executions (state)")
     db.execSQL("CREATE INDEX IF NOT EXISTS executions_occurrence ON executions (occurrence)")
     db.execSQL("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+  }
+
+  /** 1.23.0: plans of several steps. A migration from v3 only adds these two tables; every other row stays. */
+  private fun createPlans(db: SQLiteDatabase) {
+    db.execSQL("""CREATE TABLE IF NOT EXISTS plans (
+      id TEXT PRIMARY KEY, root TEXT, line TEXT NOT NULL, source TEXT NOT NULL, message TEXT NOT NULL, fingerprint TEXT NOT NULL,
+      state TEXT NOT NULL, block INTEGER NOT NULL, sub INTEGER NOT NULL, branch INTEGER, fallback INTEGER NOT NULL,
+      approval TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deadline INTEGER NOT NULL,
+      wake_at INTEGER, trigger TEXT, event TEXT, question TEXT, stash TEXT NOT NULL, result TEXT, reason TEXT,
+      owner TEXT NOT NULL, closed INTEGER NOT NULL, restore_on_close INTEGER NOT NULL)""")
+    db.execSQL("CREATE INDEX IF NOT EXISTS plans_state ON plans (state)")
+    db.execSQL("""CREATE TABLE IF NOT EXISTS plan_steps (
+      plan_id TEXT NOT NULL, pos TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL,
+      execution_id TEXT, updated_at INTEGER NOT NULL, reported INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (plan_id, pos))""")
   }
 
   /**
@@ -341,6 +356,113 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
       arrayOf(row.occurrence.orEmpty(), now.toString())).use { it.moveToFirst() }
   }
 
+  // ---------------------------------------------------------------------------------------------------------------
+  // Plans (1.23.0)
+  // ---------------------------------------------------------------------------------------------------------------
+
+  /** Inserts [plan] unless it exists (the same order twice) or [InstinctPlanSpec.MAX_ACTIVE] plans are active. */
+  internal fun insertPlan(plan: PlanRecord): PlanInsert = transaction { db ->
+    if (planIn(db, plan.id) != null) return@transaction PlanInsert.EXISTS
+    val active = db.rawQuery("SELECT COUNT(*) FROM plans WHERE state IN (${PlanState.ACTIVE.joinToString(",") { "'${it.name}'" }})", null)
+      .use { it.moveToFirst(); it.getInt(0) }
+    if (active >= InstinctPlanSpec.MAX_ACTIVE) return@transaction PlanInsert.FULL
+    db.insertOrThrow("plans", null, planValues(plan))
+    PlanInsert.ADDED
+  }
+
+  internal enum class PlanInsert { ADDED, EXISTS, FULL }
+
+  internal fun plan(id: String): PlanRecord? = planIn(database(), id)
+
+  internal fun planByShort(short: String): PlanRecord? {
+    val id = PlanIds.parseShort(short) ?: return null
+    return database().rawQuery("SELECT * FROM plans WHERE id LIKE ? ORDER BY created_at DESC LIMIT 1", arrayOf("$id%"))
+      .use { if (it.moveToFirst()) plan(it) else null }
+  }
+
+  internal fun plans(active: Boolean? = null, limit: Int = 50): List<PlanRecord> {
+    val names = PlanState.ACTIVE.joinToString(",") { "'${it.name}'" }
+    val where = when (active) { true -> "WHERE state IN ($names)"; false -> "WHERE state NOT IN ($names)"; null -> "" }
+    return database().rawQuery("SELECT * FROM plans $where ORDER BY updated_at DESC LIMIT ?", arrayOf(limit.toString())).use { c ->
+      buildList { while (c.moveToNext()) plan(c)?.let(::add) }
+    }
+  }
+
+  /** Terminal plans whose final work (restoration, log, notification) a process death interrupted. */
+  internal fun unclosedPlans(): List<PlanRecord> = database().rawQuery("SELECT * FROM plans WHERE closed = 0", null).use { c ->
+    buildList { while (c.moveToNext()) plan(c)?.takeIf { it.state.terminal }?.let(::add) }
+  }
+
+  /**
+   * Compare-and-set on the plan: [change] applies only while its state is one of [from] (any non-terminal one when
+   * null). A terminal state is never left. Null when it did not apply.
+   */
+  internal fun updatePlan(id: String, from: Set<PlanState>? = null, change: (PlanRecord) -> PlanRecord): PlanRecord? = transaction { db ->
+    val current = planIn(db, id) ?: return@transaction null
+    if (current.state !in (from ?: PlanState.ACTIVE)) return@transaction null
+    val next = change(current).copy(id = current.id, updatedAt = clock(), owner = owner)
+    if (current.state.terminal && next.state != current.state) return@transaction null
+    check(db.update("plans", planValues(next), "id = ?", arrayOf(id)) == 1)
+    next
+  }
+
+  /** Marks a terminal plan's final work done. */
+  internal fun closePlan(id: String) = transaction { db ->
+    db.update("plans", ContentValues().apply { put("closed", 1) }, "id = ? AND state IN (${PlanState.entries.filter { it.terminal }
+      .joinToString(",") { "'${it.name}'" }})", arrayOf(id))
+  }
+
+  /** Takes over a plan another process left: true for the one that wins. */
+  internal fun adoptPlan(plan: PlanRecord): Boolean = runCatching {
+    database().update("plans", ContentValues().apply { put("owner", owner) }, "id = ? AND owner = ?", arrayOf(plan.id, plan.owner)) == 1
+  }.getOrDefault(false)
+
+  internal fun putPlanStep(step: PlanStepRecord) = transaction { db ->
+    db.insertWithOnConflict("plan_steps", null, ContentValues().apply {
+      put("plan_id", step.plan); put("pos", step.position); put("text", step.text.take(MAX_TEXT)); put("status", step.status)
+      put("detail", step.detail.take(MAX_TEXT)); put("execution_id", step.executionId); put("updated_at", clock())
+      put("reported", if (step.reported) 1 else 0)
+    }, SQLiteDatabase.CONFLICT_REPLACE)
+  }
+
+  internal fun planSteps(plan: String): List<PlanStepRecord> =
+    database().rawQuery("SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY updated_at, pos", arrayOf(plan)).use { c ->
+      buildList {
+        while (c.moveToNext()) add(PlanStepRecord(c.getString(c.getColumnIndexOrThrow("plan_id")), c.getString(c.getColumnIndexOrThrow("pos")),
+          c.getString(c.getColumnIndexOrThrow("text")), c.getString(c.getColumnIndexOrThrow("status")),
+          c.getString(c.getColumnIndexOrThrow("detail")), c.getColumnIndexOrThrow("execution_id").let { if (c.isNull(it)) null else c.getString(it) },
+          c.getLong(c.getColumnIndexOrThrow("updated_at")), c.getInt(c.getColumnIndexOrThrow("reported")) != 0))
+      }
+    }
+
+  internal fun markPlanStepsReported(plan: String, positions: Collection<String>) = transaction { db ->
+    positions.forEach { db.update("plan_steps", ContentValues().apply { put("reported", 1) }, "plan_id = ? AND pos = ?", arrayOf(plan, it)) }
+  }
+
+  private fun planIn(db: SQLiteDatabase, id: String): PlanRecord? =
+    db.rawQuery("SELECT * FROM plans WHERE id = ?", arrayOf(id)).use { if (it.moveToFirst()) plan(it) else null }
+
+  private fun planValues(p: PlanRecord) = ContentValues().apply {
+    put("id", p.id); put("root", p.root); put("line", p.line.take(MAX_TEXT)); put("source", p.source.name); put("message", p.message)
+    put("fingerprint", p.fingerprint); put("state", p.state.name); put("block", p.block); put("sub", p.sub); put("branch", p.branch)
+    put("fallback", if (p.fallback) 1 else 0); put("approval", p.approval.name); put("created_at", p.createdAt)
+    put("updated_at", p.updatedAt); put("deadline", p.deadline); put("wake_at", p.wakeAt); put("trigger", p.trigger?.name)
+    put("event", PlanCodec.event(p.event)); put("question", p.question); put("stash", PlanCodec.stash(p.stash))
+    put("result", p.result?.take(MAX_TEXT)); put("reason", p.reason?.take(MAX_TEXT)); put("owner", p.owner)
+    put("closed", if (p.closed) 1 else 0); put("restore_on_close", if (p.restoreOnClose) 1 else 0)
+  }
+
+  private fun plan(c: Cursor): PlanRecord? {
+    fun s(name: String) = c.getColumnIndex(name).let { if (it < 0 || c.isNull(it)) null else c.getString(it) }
+    fun l(name: String) = c.getColumnIndex(name).let { if (it < 0 || c.isNull(it)) null else c.getLong(it) }
+    return PlanRecord(s("id") ?: return null, s("root"), s("line").orEmpty(),
+      ProposalSource.entries.firstOrNull { it.name == s("source") } ?: ProposalSource.BUZON, s("message").orEmpty(),
+      s("fingerprint").orEmpty(), PlanState.of(s("state")) ?: return null, (l("block") ?: 0).toInt(), (l("sub") ?: 0).toInt(),
+      l("branch")?.toInt(), l("fallback") == 1L, PlanApproval.of(s("approval")), l("created_at") ?: 0, l("updated_at") ?: 0,
+      l("deadline") ?: 0, l("wake_at"), PlanTrigger.of(s("trigger")), PlanCodec.event(s("event")), s("question"),
+      PlanCodec.stash(s("stash")), s("result"), s("reason"), s("owner").orEmpty(), l("closed") == 1L, l("restore_on_close") != 0L)
+  }
+
   /**
    * Moves [executionId] to [to] if [ExecutionTransitions] allows it (and, with [from], only from those states). False
    * when not allowed or not found; throws when it cannot write.
@@ -395,6 +517,9 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
         val prunable = "state IN ($terminal) AND (transport != 'CONTEXT' OR received_at <= $contextWindow) AND ((question_at IS NULL AND transport != 'DECISION') OR (reported IS NOT NULL AND (question_at IS NULL OR question_at <= ${clock() - InstinctQuestion.HOUR})))"
         db.delete("executions", "$prunable AND updated_at < ?", arrayOf((clock() - ExecutionJournalPolicy.RETENTION_MILLIS).toString()))
         db.delete("claims", "at < ?", arrayOf((clock() - ExecutionJournalPolicy.CLAIM_RETENTION_MILLIS).toString()))
+        val old = (clock() - ExecutionJournalPolicy.RETENTION_MILLIS).toString()
+        db.delete("plan_steps", "plan_id IN (SELECT id FROM plans WHERE closed = 1 AND updated_at < ?)", arrayOf(old))
+        db.delete("plans", "closed = 1 AND updated_at < ?", arrayOf(old))
         db.execSQL("DELETE FROM executions WHERE $prunable AND execution_id NOT IN " +
           "(SELECT execution_id FROM executions ORDER BY updated_at DESC LIMIT ${ExecutionJournalPolicy.MAX_ROWS})")
       }
@@ -443,7 +568,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
   companion object {
     const val FILE = "instinct-executions.db"
     private val LOCAL = setOf(ExecutionTransport.DECISION, ExecutionTransport.CONTEXT)
-    private const val VERSION = 3
+    private const val VERSION = 4
     private const val MAX_TEXT = 600
     private const val META_SEEN = "legacy_seen_imported"
     private const val META_LEGACY_CORRUPT = "legacy_seen_unreadable"

@@ -40,6 +40,8 @@ object InstinctExecutionRecoveryManager {
     val resume = ArrayList<Pair<ExecutionRecord, Boolean>>()
     val scheduledSeries by lazy { runCatching { InstinctScheduler.pending(app).map { it.series }.toSet() }.getOrNull() }
     for (row in rows) {
+      // A plan's action is the plan engine's: its own row decides (1.23.0). Its questions are refreshed below.
+      if (row.transport == ExecutionTransport.PLAN && row.state !in InstinctQuestion.PENDING) continue
       if (localOnly && !InstinctQuestion.isRelated(row.line) &&
         row.transport != ExecutionTransport.DECISION && row.transport != ExecutionTransport.CONTEXT) continue
       val mine = row.owner == InstinctExecutionJournal.owner
@@ -77,6 +79,7 @@ object InstinctExecutionRecoveryManager {
     }
     InstinctQuestionNotifications.refresh(app)
     runCatching { InstinctLog.recoverQuestionReplies(app) }
+    if (!localOnly) runCatching { InstinctPlanEngine.recover(app) }
     if (!localOnly) runCatching { journal.prune() }
     touched
   }

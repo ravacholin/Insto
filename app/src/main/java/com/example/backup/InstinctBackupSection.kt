@@ -6,6 +6,7 @@ import com.example.phone.InstinctAutonomyPolicy
 import com.example.phone.ContextRuleSpec
 import com.example.phone.ContextualCheck
 import com.example.phone.InstinctDeferral
+import com.example.phone.InstinctPlanSpec
 import com.example.phone.InstinctProposalValidator
 import com.example.phone.PhoneCommandParser
 import com.example.phone.InstinctLogConfig
@@ -16,6 +17,9 @@ import com.example.phone.InstinctReplyMode
 import com.example.phone.InstinctRoutines
 import org.json.JSONArray
 import org.json.JSONObject
+
+/** A plan that had not run anything yet (1.23.0): its line and deadline, started again only on «Reactivar». */
+data class InstinctBackupPlan(val line: String, val deadline: Long)
 
 data class InstinctBackupRule(val line: String, val expiresAt: Long, val enabled: Boolean) {
   internal val id: String? get() = ContextRuleSpec.parse(line)?.id
@@ -50,6 +54,7 @@ data class InstinctBackupData(
   val recurrences: List<String> = emptyList(),
   val showQuestionsOnLockScreen: Boolean? = null,
   val contextRules: List<InstinctBackupRule> = emptyList(),
+  val plans: List<InstinctBackupPlan> = emptyList(),
 ) {
   val secrets: Boolean get() = mailboxKey != null || logToken != null
   val anything: Boolean get() = this != InstinctBackupData()
@@ -87,6 +92,7 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
     "timbre".takeIf { d.doorbellEnabled }, "autonomía".takeIf { d.autonomy != null },
     "${d.recurrences.size} recurrentes".takeIf { d.recurrences.isNotEmpty() },
     "${d.contextRules.size} reglas contextuales".takeIf { d.contextRules.isNotEmpty() },
+    "${d.plans.size} planes sin empezar".takeIf { d.plans.isNotEmpty() },
   ).ifEmpty { listOf("ajustes") }.joinToString(", ").replaceFirstChar { it.uppercaseChar() } +
     if (d.secrets) " · con token y clave" else " · sin secretos"
 
@@ -124,18 +130,22 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
       doorbellDistributor = pick("el distribuidor del timbre", current.doorbellDistributor, incoming.doorbellDistributor),
       recurrences = current.recurrences,
       contextRules = current.contextRules,
+      plans = current.plans,
       showQuestionsOnLockScreen = pick("la visibilidad de preguntas", current.showQuestionsOnLockScreen, incoming.showQuestionsOnLockScreen),
     )
     // Recurrences this phone already has are never scheduled twice.
     val newRecurrences = incoming.recurrences.filter { it !in current.recurrences }
     val existingRules = current.contextRules.mapTo(HashSet()) { it.id }
     val newRules = incoming.contextRules.filter { it.id !in existingRules && it.expiresAt > System.currentTimeMillis() }
-    val reactivate = incoming.copy(proposalsEnabled = incoming.proposalsEnabled && !current.proposalsEnabled,
+    val currentPlans = current.plans.mapTo(HashSet()) { it.line }
+    val newPlans = incoming.plans.filter { it.line !in currentPlans && it.deadline > System.currentTimeMillis() }
+    val reactivate = incoming.copy(plans = newPlans,proposalsEnabled = incoming.proposalsEnabled && !current.proposalsEnabled,
       mailboxEnabled = incoming.mailboxEnabled && !current.mailboxEnabled, doorbellEnabled = incoming.doorbellEnabled && !current.doorbellEnabled,
       recurrences = newRecurrences, contextRules = newRules)
     val asks = listOfNotNull("recibir órdenes".takeIf { reactivate.proposalsEnabled }, "buzón".takeIf { reactivate.mailboxEnabled },
       "timbre".takeIf { reactivate.doorbellEnabled }, "${newRecurrences.size} órdenes recurrentes".takeIf { newRecurrences.isNotEmpty() },
-      "${newRules.size} reglas contextuales".takeIf { newRules.isNotEmpty() })
+      "${newRules.size} reglas contextuales".takeIf { newRules.isNotEmpty() },
+      "${newPlans.size} planes".takeIf { newPlans.isNotEmpty() })
     if (asks.isNotEmpty()) attention += "Control remoto apagado en este teléfono hasta que lo reactives: ${asks.joinToString(", ")}. " +
       "Ajustes → Propuestas de Instinct → «Reactivar Instinct en este teléfono»."
     if (reactivate.doorbellEnabled) attention += "El timbre se registra de nuevo al reactivarlo: este teléfono tiene sus propias claves y su propia dirección."
@@ -175,6 +185,26 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
         .apply { d.doorbellDistributor?.let { put("distributor", it) } })
       .put("recurrences", JSONArray(d.recurrences))
       .put("contextRules", encodeRules(d.contextRules))
+      .put("plans", encodePlans(d.plans))
+
+    internal fun encodePlans(plans: List<InstinctBackupPlan>): JSONArray = JSONArray(plans.map {
+      JSONObject().put("line", it.line).put("deadline", it.deadline)
+    })
+
+    /** Each plan checked with the grammar Insto applies when it arrives; it is validated again on «Reactivar». */
+    internal fun decodePlans(array: JSONArray): List<InstinctBackupPlan> {
+      require(array.length() <= InstinctPlanSpec.MAX_ACTIVE) { "Demasiados planes en el respaldo." }
+      val parser = PhoneCommandParser()
+      val now = java.util.Calendar.getInstance()
+      return List(array.length()) { index ->
+        val plan = array.getJSONObject(index)
+        val line = plan.getString("line")
+        val deadline = (plan.get("deadline") as? Number)?.toLong() ?: 0L
+        val valid = InstinctPlanSpec.parse(line, now) { InstinctProposalValidator.backgroundAction(it, parser, now) != null } is InstinctPlanSpec.Parse.Valid
+        require(valid && deadline > 0) { "Plan inválido en el respaldo." }
+        InstinctBackupPlan(line, deadline)
+      }
+    }
 
     internal fun encodeRules(rules: List<InstinctBackupRule>): JSONArray = JSONArray(rules.map {
       JSONObject().put("line", it.line).put("expiresAt", it.expiresAt).put("enabled", it.enabled)
@@ -238,6 +268,7 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
         doorbellEnabled = doorbell?.optBoolean("wasEnabled") == true, doorbellWithOrder = doorbell?.optBoolean("withOrder") == true,
         doorbellDistributor = distributor, recurrences = recurrences,
         contextRules = if (json.has("contextRules")) decodeRules(json.getJSONArray("contextRules")) else emptyList(),
+        plans = if (json.has("plans")) decodePlans(json.getJSONArray("plans")) else emptyList(),
         showQuestionsOnLockScreen = proposals?.takeIf { it.has("showQuestionsOnLockScreen") }?.let {
           it.get("showQuestionsOnLockScreen") as? Boolean ?: bad("La visibilidad de preguntas")
         },

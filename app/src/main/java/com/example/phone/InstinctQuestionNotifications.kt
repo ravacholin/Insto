@@ -230,6 +230,8 @@ internal object InstinctQuestionNotifications {
 
   private fun completed(context: Context, id: String, outcome: QuestionOutcome) {
     InstinctLog.questionCompleted(context)
+    // A plan waiting for this answer goes on, off this lock (1.23.0).
+    InstinctPlanEngine.questionSettled(context, id)
     context.getSystemService(NotificationManager::class.java)?.cancel(id, NOTIFICATION_ID)
     InstinctTrust.record(context, InstinctCategory.PREGUNTAS, when (outcome.state) {
       ExecutionState.ANSWERED -> TrustEvent.EJECUTADA

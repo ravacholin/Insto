@@ -147,7 +147,7 @@ object InstinctProtocolCatalog {
       appendLine("Reglas:")
       appendLine("- Cada orden va sola en su propia línea y la línea empieza con \"${InstinctProposalProtocol.PREFIX} \" (en minúsculas, seguido de un espacio). Nunca pongas \"${InstinctProposalProtocol.PREFIX}\" en medio de una oración ni lo uses como ejemplo en el texto.")
       appendLine("- Como máximo ${InstinctProposalProtocol.MAX_LINES} líneas de orden por mensaje. Insto ignora las demás. Más de 6 órdenes en 10 minutos quedan esperando confirmación.")
-      appendLine("- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin «y» para encadenar acciones. Para hacer una pregunta usá «preguntar» o «decidir».")
+      appendLine("- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin «y» para encadenar acciones: para varias acciones seguidas usá «plan». Para hacer una pregunta usá «preguntar» o «decidir».")
       appendLine("- Horas en formato de 24 horas (07:00, 17:30). Duraciones con número y unidad (25 minutos, una hora). Volumen en porcentaje (30 por ciento).")
       appendLine("- Insto solo lee esas líneas: el resto de tu mensaje no se interpreta. Si una línea no se entiende o no está permitida, se descarta.")
       appendLine("- Para más tarde, envolvé la orden: \"a las HH:MM: <orden>\" (24 horas; si esa hora ya pasó hoy, es mañana) o \"en N minutos: <orden>\" / \"en N horas: <orden>\" (de 1 minuto a 24 horas). Los dos puntos después del tiempo son obligatorios. Como máximo ${InstinctDeferral.MAX_SCHEDULED} órdenes programadas.")
@@ -173,6 +173,13 @@ object InstinctProtocolCatalog {
       appendLine("Leé las respuestas en la bitácora con GET <URL>?token=<token>&since=<ISO>&limit=50. «probar preguntar …» y «probar decidir …» validan la forma sin mostrar una notificación.")
       appendLine()
       appendLine(DECISION_RULE)
+      appendLine()
+      appendLine("Planes de varios pasos:")
+      appendLine("Formato: «${InstinctProposalProtocol.PREFIX} ${InstinctPlanSpec.FORM}».")
+      appendLine("Pasos: ${InstinctPlanSpec.STEP_FORMS}.")
+      InstinctPlanSpec.EXAMPLES.forEach { appendLine(example(it)) }
+      appendLine(PLAN_RULE)
+      appendLine(PLAN_RESULT)
       appendLine()
       appendLine("Reglas contextuales locales:")
       appendLine("Formato: «${InstinctProposalProtocol.PREFIX} ${ContextRuleSpec.FORM}».")
@@ -210,7 +217,7 @@ object InstinctProtocolCatalog {
       appendLine(EXECUTIONS_LINE)
       appendLine(OUTCOMES_LINE)
       appendLine()
-      appendLine("Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.")
+      appendLine("Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas fuera de un plan. Insto los rechaza siempre.")
       appendLine()
       if (log == null) {
         appendLine("Respuestas de Insto (si la persona las activó):")
@@ -262,6 +269,9 @@ object InstinctProtocolCatalog {
   private const val CONTEXT_RULE = "Creá, consultá y administrá reglas por el buzón firmado. Hasta tres condiciones unidas con «y», una acción permitida sin interfaz o «avisarme» y hasta 12 reglas durante un máximo de 30 días. Se disparan al cumplirse las condiciones, según los eventos que Android entregue, incluso sin conexión con Instinct. Conservan los permisos y la autonomía del teléfono."
 
 
+  const val PLAN_RULE = "Un plan es una sola orden en una línea: hasta ${InstinctPlanSpec.MAX_ACTIONS} acciones sin interfaz (contando alternativas y opciones), ${InstinctPlanSpec.MAX_STEPS} pasos, una decisión y ${InstinctPlanSpec.MAX_ACTIVE} planes activos. Insto ejecuta cada paso después de comprobar el anterior. Si una acción falla, el plan se detiene, salvo que hayas escrito «si falla <acción>». Si el resultado es incierto, no se repite: el plan queda suspendido hasta «reanudar plan <id>» o «cancelar plan <id>». Lo que «guardar» guarda se restaura con «restaurar», o al cancelarse, fallar o vencer el plan, salvo que la persona lo haya cambiado después. Vence a las 12 horas, o con «hasta las HH:MM» (máximo 24 horas). La autonomía se aplica al plan entero: con Confirmar la persona lo aprueba una vez; con Nunca se rechaza."
+  const val PLAN_RESULT = "El acuse de la orden dice «Plan <id> aceptado». El progreso y el resultado final van a la bitácora como eventos de tipo «plan» (orden: «plan <id> · <paso> · <texto>», detalle: estado y resultado), nunca al chat. «ver planes» y «estado de plan <id>» los muestran."
+
   const val TRIGGER_RULE = "Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después."
 
   const val LIVE_RULE = "Las reglas vigentes están en GET <URL>?token=<token>&action=catalogo. Leelo al empezar y cada vez que una orden dé un error inesperado; si el hash cambió, las reglas de ahí mandan sobre este texto."
@@ -276,7 +286,7 @@ object InstinctProtocolCatalog {
   )
 
   val FORBIDDEN: List<String> = listOf("llamadas", "mensajes de cualquier tipo", "enviar o compartir archivos", "guardar lugares",
-    "navegación", "rutinas que no están habilitadas", "varias acciones juntas")
+    "navegación", "rutinas que no están habilitadas", "varias acciones juntas fuera de un plan")
 
   private fun level(value: InstinctAutonomy) = value.name.lowercase()
 
@@ -317,6 +327,9 @@ object InstinctProtocolCatalog {
       ),
       "decisiones" to mapOf("forma" to InstinctQuestion.DECISION_FORM, "orden" to DECISION_EXAMPLE,
         "requiere_bitacora" to true, "regla" to DECISION_RULE),
+      "planes" to mapOf("forma" to InstinctPlanSpec.FORM, "pasos" to InstinctPlanSpec.STEP_FORMS,
+        "ejemplos" to InstinctPlanSpec.EXAMPLES.map { mapOf("orden" to it) }, "progreso_por" to "bitacora",
+        "tipo_evento" to InstinctPlanEngine.LOG_KIND, "reglas" to listOf(PLAN_RULE, PLAN_RESULT)),
       "reglas_contextuales" to mapOf("forma" to ContextRuleSpec.FORM, "orden" to ContextRuleSpec.EXAMPLE,
         "condiciones" to ContextRuleSpec.conditionForms, "regla" to CONTEXT_RULE),
       "consultas" to ProposalCheck.QueryKind.entries.map { mapOf("orden" to it.form, "solo_lectura" to it.readOnly) },
@@ -353,6 +366,12 @@ object InstinctProtocolCatalog {
         "avisos_por_hora" to InstinctNotice.PER_HOUR,
         "aviso_caracteres_max" to InstinctNotice.MAX_CHARS,
         "pruebas_cada_10_minutos" to InstinctProbe.PER_PERIOD,
+        "plan_acciones_max" to InstinctPlanSpec.MAX_ACTIONS,
+        "plan_pasos_max" to InstinctPlanSpec.MAX_STEPS,
+        "planes_activos_max" to InstinctPlanSpec.MAX_ACTIVE,
+        "plan_horas" to (InstinctPlanSpec.DEFAULT_EXPIRY_MILLIS / 3_600_000).toInt(),
+        "plan_horas_max" to (InstinctPlanSpec.MAX_EXPIRY_MILLIS / 3_600_000).toInt(),
+        "plan_espera_horas_max" to (InstinctPlanSpec.MAX_WAIT_MILLIS / 3_600_000).toInt(),
       ),
       "autonomia" to InstinctCategory.entries.associate { it.label to level(autonomy.level(it)) },
       "horas_de_silencio" to quiet?.let { mapOf("desde" to QuietHours.clock(it.start), "hasta" to QuietHours.clock(it.end),

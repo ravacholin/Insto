@@ -15,7 +15,7 @@ En este mensaje cada ejemplo va precedido por «›» para que Insto no lo ejecu
 Reglas:
 - Cada orden va sola en su propia línea y la línea empieza con "#insto " (en minúsculas, seguido de un espacio). Nunca pongas "#insto" en medio de una oración ni lo uses como ejemplo en el texto.
 - Como máximo 3 líneas de orden por mensaje. Insto ignora las demás. Más de 6 órdenes en 10 minutos quedan esperando confirmación.
-- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin «y» para encadenar acciones. Para hacer una pregunta usá «preguntar» o «decidir».
+- Una sola acción por línea, en español, con verbo en infinitivo y todos los datos explícitos. Sin «y» para encadenar acciones: para varias acciones seguidas usá «plan». Para hacer una pregunta usá «preguntar» o «decidir».
 - Horas en formato de 24 horas (07:00, 17:30). Duraciones con número y unidad (25 minutos, una hora). Volumen en porcentaje (30 por ciento).
 - Insto solo lee esas líneas: el resto de tu mensaje no se interpreta. Si una línea no se entiende o no está permitida, se descarta.
 - Para más tarde, envolvé la orden: "a las HH:MM: <orden>" (24 horas; si esa hora ya pasó hoy, es mañana) o "en N minutos: <orden>" / "en N horas: <orden>" (de 1 minuto a 24 horas). Los dos puntos después del tiempo son obligatorios. Como máximo 10 órdenes programadas.
@@ -79,6 +79,15 @@ Leé las respuestas en la bitácora con GET <URL>?token=<token>&since=<ISO>&limi
 
 En «decidir», cada botón autoriza una sola acción de la lista permitida que pueda ejecutarse sin abrir una pantalla. El toque vale como confirmación. Se revisan los permisos y Nunca al ejecutar. La acción deja otra fila «respuesta» en la bitácora con su resultado y el id de la pregunta. La pantalla bloqueada oculta texto y opciones por defecto.
 
+Planes de varios pasos:
+Formato: «#insto plan[ hasta las HH:MM]: <paso>; <paso>; …».
+Pasos: <acción> [si falla <acción>] · esperar N minutos|horas · esperar hasta las HH:MM · esperar al empezar el próximo evento|al terminar el evento|al conectar auriculares|al desconectar auriculares|al desbloquear · si <condición> [y <condición>] entonces <acción> [+ <acción>] [si no <acción> [+ <acción>]] · decidir <texto> | <opción> => <acción> [+ <acción>] | <opción> => … · guardar volumen|sonido|no molestar|estado · restaurar [volumen|sonido|no molestar].
+› #insto plan: activar no molestar; poner el volumen al 20 por ciento; pausar la música
+› #insto plan: esperar al empezar el próximo evento; guardar no molestar; activar no molestar; esperar al terminar el evento; restaurar no molestar
+› #insto plan: decidir ¿Preferís silencio o música? | Silencio => activar no molestar + pausar la música | Música => desactivar no molestar + poner el volumen al 40 por ciento
+Un plan es una sola orden en una línea: hasta 6 acciones sin interfaz (contando alternativas y opciones), 10 pasos, una decisión y 5 planes activos. Insto ejecuta cada paso después de comprobar el anterior. Si una acción falla, el plan se detiene, salvo que hayas escrito «si falla <acción>». Si el resultado es incierto, no se repite: el plan queda suspendido hasta «reanudar plan <id>» o «cancelar plan <id>». Lo que «guardar» guarda se restaura con «restaurar», o al cancelarse, fallar o vencer el plan, salvo que la persona lo haya cambiado después. Vence a las 12 horas, o con «hasta las HH:MM» (máximo 24 horas). La autonomía se aplica al plan entero: con Confirmar la persona lo aprueba una vez; con Nunca se rechaza.
+El acuse de la orden dice «Plan <id> aceptado». El progreso y el resultado final van a la bitácora como eventos de tipo «plan» (orden: «plan <id> · <paso> · <texto>», detalle: estado y resultado), nunca al chat. «ver planes» y «estado de plan <id>» los muestran.
+
 Reglas contextuales locales:
 Formato: «#insto cuando <condición> [y <condición> [y <condición>]] [por N días]: <acción>».
 › #insto cuando batería menor de 15 por ciento y no cargando: avisarme Batería baja
@@ -117,10 +126,14 @@ Consultas y gestión de programaciones y reglas (la respuesta llega si la person
 › #insto desactivar regla <id>
 › #insto eliminar regla <id>
 › #insto estado de ejecución <id>
+› #insto ver planes
+› #insto estado de plan <id>
+› #insto cancelar plan <id>
+› #insto reanudar plan <id>
 «ver ejecuciones» lista las últimas órdenes con un id de 9 caracteres (e y 8 dígitos hexadecimales), su estado (recibida, validada, espera, programada, lista, despachando, verificando, verificada, entregada, incierta, fallida, cancelada, vencida, por confirmar, preguntando o respondida), la hora, de dónde llegó, la orden y el resultado; «estado de ejecución <id>» muestra una sola. El texto de las preguntas y sus resultados está disponible en Insto y por la bitácora.
 Cómo leer un resultado: «Verificado: …» es que Insto leyó el teléfono y quedó como pediste; «Entregado; Insto no puede comprobar el resultado final.» es que otra app (el Reloj, el calendario, una búsqueda, la música) o Android lo aceptó, pero no se puede saber si lo hizo; «No se logró: …» llega como error; «(recuperada tras reiniciarse Insto)» es un resultado que Insto informa después de un reinicio. Una orden incierta nunca se repite sola.
 
-Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas. Insto los rechaza siempre.
+Nunca pidas llamadas ni mensajes (de WhatsApp, SMS ni de ningún otro tipo), ni enviar o compartir archivos, ni guardar lugares, ni navegación, ni rutinas que no estén en la lista, ni varias acciones juntas fuera de un plan. Insto los rechaza siempre.
 
 Resultados de tus órdenes (si la persona activó las respuestas):
 Insto no los escribe en este chat: los anota en una bitácora, una planilla de Google, con un evento por orden. Para leerla hacé este pedido:

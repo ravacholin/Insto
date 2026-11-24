@@ -401,3 +401,14 @@ en la bitácora y la fila de `#insto ver ejecuciones`. **No inventar métricas**
     acceso a notificaciones, canales de notificación, mosaico de Ajustes rápidos, widget, atajos y botón flotante: en
     ningún lado debe decir PingAssist.
 
+
+## 14. Planes de varios pasos (1.23.0)
+
+El esquema pasa a la versión 4 con dos tablas nuevas; las tablas anteriores no cambian.
+
+- `plans`: una fila por plan, con id `p` + 20 hex derivado de la ejecución de la orden (la misma orden dos veces es el mismo plan), estado (`pendiente`, `por confirmar`, `en curso`, `esperando`, `decidiendo`, `suspendido`, `completado`, `fallido`, `cancelado`, `vencido`), cursor (`block`, `sub`, rama y alternativa), aprobación (`AUTO`/`PERSON`), vencimiento, espera (`wake_at`, disparador, evento), pregunta pendiente, valores guardados (`stash`: antes y lo que dejó el plan), dueño y `closed` (trabajo final hecho).
+- `plan_steps`: el progreso por posición (`1.1`, `1.1a` para la alternativa, `fin`), con su estado, detalle, ejecución y si ya se publicó en la bitácora.
+- Cada acción y cada pregunta de un plan es una fila de `executions` con transporte `PLAN`, `occurrence` = id del plan y un `message_id` determinista por posición (`plan:<id>:<pos>`), admitida sin reclamo: nunca existe dos veces.
+- Todos los cambios de `plans` son compare-and-set por estado (`updatePlan`); un estado terminal no se abandona. Cancelar desde otro hilo gana entre dos acciones.
+- La recuperación general (`InstinctExecutionRecoveryManager`) deja las acciones `PLAN` al motor y lo invoca al final. `PlanStepPolicy` decide con la fila: sin despachar → se ejecuta; `despachando` de un ajuste legible o `verificando` → se relee; cualquier otro `despachando` → incierta y plan suspendido; terminal → se avanza. Un plan de un proceso muerto se adopta por `owner`.
+- Pruebas: `InstinctPlanTest` (gramática y políticas) e `InstinctPlanFlowTest` (Robolectric: ejecución bloqueado, duplicados, fallo y alternativa, incierto y reanudación, muerte del proceso con relectura y con incierto, cancelación con restauración, cambio posterior del usuario, eventos de calendario que se mueven, decisión con reinicio, aprobación única, Nunca, apagar «Recibir órdenes», migración v3 y respaldo con reactivación).

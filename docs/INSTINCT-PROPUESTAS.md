@@ -1,4 +1,4 @@
-# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.22.0)
+# Órdenes de Instinct («Instinct con manos», 1.13.0 a 1.23.0)
 
 Instinct puede pedirle acciones al teléfono **por su cuenta**: cuando lo considera útil, escribe en su chat de WhatsApp una o más líneas `#insto <orden>`. Insto las detecta en la notificación de ese contacto, las interpreta con la gramática local, las valida igual que cualquier pedido y **las ejecuta sin preguntar**. Después avisa con una notificación «Instinct hizo: …». No hace falta que vos le hayas escrito antes a Instinct.
 
@@ -54,7 +54,7 @@ Desde 1.21.0, Instinct puede hacerte [preguntas con opciones](#preguntas-con-opc
 
 Los ejemplos salen de una sola fuente en el código (`InstinctProposalValidator.examples`, junto a la lista blanca) y un test comprueba que cada uno es una orden válida.
 
-**Prohibidas siempre:** llamadas (`Dial`, `CALL_DIRECT`), cualquier envío de mensajes o archivos, compartir texto, `SavePlace`, navegación, rutinas que no habilitaste (o que cambiaron desde que las habilitaste), workflows y planes de varios pasos armados a partir del texto, y volumen multimedia temporal. `avisarme` **no** es un envío de mensajes: es una notificación local de Insto para vos, que no sale del teléfono ni le llega a nadie más.
+**Prohibidas siempre:** llamadas (`Dial`, `CALL_DIRECT`), cualquier envío de mensajes o archivos, compartir texto, `SavePlace`, navegación, rutinas que no habilitaste (o que cambiaron desde que las habilitaste), workflows y planes armados a partir de texto libre (solo se aceptan los [planes](#planes-de-varios-pasos-1230) con su gramática fija), y volumen multimedia temporal. `avisarme` **no** es un envío de mensajes: es una notificación local de Insto para vos, que no sale del teléfono ni le llega a nadie más.
 
 ## Cómo llega y se ejecuta
 
@@ -817,7 +817,7 @@ Con la clave `clave-de-prueba-0123456789-abcdefghijkl`, el id `3b241101-e2bb-425
 
 - No alimentan el aprendizaje: no crean frases (`LearnedPhraseStore`) ni estructuras (`PhrasePatterns`).
 - No cuentan como turnos de `OperationalContext` ni lo modifican, tampoco los pasos de una rutina pedida por Instinct. Eso sí: al ejecutar un control multimedia sin app indicada, `PhoneActionExecutor` sigue eligiendo la sesión con el contexto vigente, como con cualquier pedido.
-- No se juntan en planes: cada línea es un comando independiente. Una rutina es un plan que **vos** configuraste y habilitaste; Instinct solo la nombra.
+- Fuera de `plan` (1.23.0) no se juntan: cada línea es un comando independiente. Una rutina es un plan que **vos** configuraste y habilitaste; Instinct solo la nombra. Un plan de Instinct usa una gramática fija, acciones sin interfaz y la misma validación, autonomía y diario que una orden suelta ([Planes de varios pasos](#planes-de-varios-pasos-1230)).
 - **Condiciones:** las únicas formas admitidas son la del clima, con hora o en una recurrente ([Condiciones por clima](#condiciones-por-clima-1140)), y los cinco [disparadores](#disparadores-por-estado-1170). Una sola por línea: cualquier otra condición o combinación («si estoy en casa», «si llueve y hace frío», «al conectar auriculares y al desbloquear») se descarta.
 - **No vigilan nada por su cuenta** fuera de lo que ya vigilaba Insto: los disparadores usan los callbacks del estado y el calendario, nunca la ubicación, la red ni otras apps. No hay recurrentes sin fecha de fin.
 - No agregan dependencias ni servidores propios. Los acuses usan la acción «Responder» de WhatsApp, que ya existe en la notificación, o tu propio Apps Script (con OkHttp y `JobScheduler`, que ya estaban).
@@ -910,3 +910,54 @@ Wi-Fi se refiere a la red activa del sistema. Internet requiere conectividad val
 Las reglas no dependen de una conexión permanente con Instinct. El servicio «Insto · notificaciones» entrega los eventos dinámicos disponibles, y Android entrega una alarma compartida para horarios, límites de calendario, vencimiento y antirrebote. Doze, la falta de permisos y las restricciones del fabricante pueden demorar o impedir algunos eventos. Tras reiniciar, Android debe permitir el acceso al almacenamiento de Insto. Una ocurrencia que ya empezó a ejecutarse se verifica si es posible y no se repite.
 
 El respaldo `.insto` conserva las definiciones, el vencimiento original, la activación y la preferencia de privacidad. Las definiciones nuevas se incorporan al tocar «Reactivar Instinct en este teléfono». El historial y las ocurrencias pendientes quedan en el teléfono de origen.
+
+## Planes de varios pasos (1.23.0)
+
+Instinct puede pedir un objetivo compuesto en **una sola línea**, por WhatsApp o por el buzón firmado:
+
+```text
+#insto plan: activar no molestar; poner el volumen al 20 por ciento; pausar la música
+#insto plan: esperar al empezar el próximo evento; guardar no molestar; activar no molestar; esperar al terminar el evento; restaurar no molestar
+#insto plan: decidir ¿Preferís silencio o música? | Silencio => activar no molestar + pausar la música | Música => desactivar no molestar + poner el volumen al 40 por ciento
+#insto plan hasta las 22:00: bajar el volumen si falla silenciar el teléfono; si batería menor de 20 por ciento entonces activar no molestar si no subir el volumen
+#insto probar plan: …
+#insto ver planes
+#insto estado de plan p1a2b3
+#insto cancelar plan p1a2b3
+#insto reanudar plan p1a2b3
+```
+
+### Gramática
+
+`plan[ hasta las HH:MM]: <paso>; <paso>; …`. Los pasos se separan con `;` y cada uno es exactamente una de estas formas:
+
+| Paso | Forma |
+| --- | --- |
+| Acción | una orden de la lista blanca que se ejecuta **sin abrir una pantalla** (volumen, linterna, silencio, vibración, No molestar, modos temporales, música), con alternativa opcional `<acción> si falla <acción>` |
+| Espera | `esperar N minutos` / `esperar N horas` (1 minuto a 12 horas), `esperar hasta las HH:MM` |
+| Disparador | `esperar al empezar el próximo evento`, `esperar al terminar el evento`, `esperar al conectar auriculares`, `esperar al desconectar auriculares`, `esperar al desbloquear` |
+| Condición | `si <condición> [y <condición>] entonces <acción> [+ <acción>] [si no <acción> [+ <acción>]]`, con las condiciones de `cuando` salvo `al desbloquear` |
+| Decisión | `decidir <texto> \| <opción> => <acción> [+ <acción>] \| …` (2 o 3 opciones, mismos límites que `decidir`) |
+| Guardar | `guardar volumen`, `guardar sonido`, `guardar no molestar` o `guardar estado` (los tres) |
+| Restaurar | `restaurar`, `restaurar estado` o `restaurar <ajuste>` |
+
+Límites: 6 acciones (se cuentan las alternativas y todas las opciones), 10 pasos, una decisión, 500 caracteres y 5 planes activos. Vence a las 12 horas o en el tope `hasta las HH:MM` (máximo 24). Todo lo que se guarda tiene que restaurarse con un paso posterior. Cualquier otra forma rechaza el plan entero con su motivo: nunca se ejecuta texto libre, no se anidan planes, diferidas, reglas ni rutinas, y no hay acciones que abran apps, el Reloj o el calendario. Cada acción pasa por `InstinctProposalValidator.backgroundAction` al llegar y de nuevo justo antes de ejecutarse.
+
+### Ejecución
+
+- La orden recibe un acuse normal, `Plan p1a2b3 aceptado: N pasos, M acciones.`, y su fila del diario queda verificada. El plan vive en su propia fila (`plans`, en `instinct-executions.db`) y cada paso en `plan_steps`; cada acción y cada pregunta es una fila del diario con transporte `plan`.
+- Cada acción escribe «despachando» antes de tocar el teléfono, se ejecuta con `PhoneActionExecutor` (con la autorización de 1.20.0: no vuelve a pedir el «¿Confirmás?» del modo temporal) y se verifica con el mismo verificador. El paso siguiente empieza **solo después** de esa comprobación.
+- **Falla** (Android la rechazó, no se logró, falta un permiso): corre la alternativa `si falla` si existe; si no, el plan se detiene como `fallido`. Un permiso que falta se anota para Ajustes; nunca se pide en segundo plano.
+- **Incierta** (pudo haberse hecho): no se repite. El plan queda `suspendido` después de ese paso; `reanudar plan <id>` sigue con el siguiente y `cancelar plan <id>` lo termina.
+- **Autonomía**: el plan cuenta como una sola orden para el freno anti-bucle. Si alguna categoría está en Nunca, se rechaza al llegar. Si alguna está en Confirmar, hay horas de silencio, el freno está lleno o las órdenes sin firma de WhatsApp esperan, la persona lo aprueba **una sola vez** con una notificación de preguntas (Ejecutar / Cancelar, 10 minutos). Después no se vuelve a preguntar. Si un plan aprobado por Solo llega a una acción cuya categoría pasó a Confirmar, pregunta en ese momento; si pasó a Nunca, se detiene.
+- **Pantalla bloqueada**: como las acciones de un plan no abren pantallas, se ejecutan con el teléfono bloqueado o la pantalla apagada, igual que una orden suelta de esas categorías.
+- **Decidir**: el plan queda `decidiendo` y se muestra la notificación de preguntas de siempre, con sus botones, su privacidad en la pantalla bloqueada y su espera en horas de silencio. El toque elige la secuencia y el plan sigue. Descartarla cancela el plan; si vence, el plan vence. La categoría Preguntas en Confirmar pide la vista previa; en Nunca, el plan se rechaza.
+- **Esperas**: una alarma compartida (`AlarmManager`, exacta cuando Android lo permite) despierta el plan. Los eventos se leen con el mismo lector del calendario de los disparadores; `esperar al terminar el evento` después de `esperar al empezar el próximo evento` usa el mismo evento. Si el evento se mueve, el plan espera la hora nueva; si se borra, se detiene. Auriculares y desbloqueo usan los callbacks de «Insto · notificaciones». Una espera que Android entrega con más de 15 minutos de atraso pide aprobación, como una diferida atrasada.
+- **Restaurar**: `guardar` lee el valor con las mismas lecturas de Deshacer. `restaurar` lo vuelve a poner con `InstinctUndoActions` solo si el ajuste sigue como lo dejó el plan; si la persona lo cambió después, no se toca y se informa. Si el plan se cancela, falla o vence antes de restaurar, se restaura igual al cerrarse. Si se apaga «Recibir órdenes», el plan se cancela sin tocar nada más.
+
+### Progreso, consultas y recuperación
+
+- El progreso y el resultado final van **solo a la bitácora**, como eventos de tipo `plan`: `orden` es `plan <id> · <paso> · <texto>` y `detalle`, el estado y el resultado. Cada evento tiene un id estable, así que un reintento no duplica filas. No se escribe nada en el chat de WhatsApp. En el teléfono hay una sola notificación por plan, al terminar o al suspenderse.
+- `ver planes`, `estado de plan <id>`, `cancelar plan <id>` y `reanudar plan <id>` funcionan por cualquier canal; las dos últimas son cambios de programación. En **Ajustes → Propuestas de Instinct → Planes de Instinct** cada plan muestra su estado con Cancelar y, si está suspendido, Reanudar.
+- **Reinicios**: el plan sigue desde su fila. Un proceso nuevo adopta los planes del anterior. Una acción que quedó «despachando» se relee si es un ajuste legible (volumen, linterna, silencio, No molestar) y, si no, queda incierta y el plan se suspende: **nunca se repite**. Una pregunta pendiente reaparece con la misma notificación y una respuesta registrada antes de morir el proceso se aplica al volver. El mismo mensaje entregado dos veces es el mismo plan.
+- **Backup `.insto`**: viajan los planes que todavía no ejecutaron nada (su línea y su vencimiento). Al restaurar quedan esperando «Reactivar Instinct en este teléfono», que los valida de nuevo y los empieza solo si no vencieron. Los planes ya empezados, sus pasos y lo guardado quedan en el teléfono de origen.
