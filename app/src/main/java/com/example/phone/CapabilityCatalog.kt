@@ -5,21 +5,21 @@ import org.json.JSONObject
 
 /** Semantic catalogue only. Android executors remain the authority for permissions and effects. */
 object CapabilityCatalog {
-  data class Field(val kind: String, val values: List<String> = emptyList(), val min: Long? = null, val max: Long? = null) {
+  data class Field(val kind: String, val values: List<String> = emptyList(), val min: Long? = null, val max: Long? = null, val maxLength: Int = 2000) {
     fun schema(): JSONObject = JSONObject().put("type", kind).apply {
       if (values.isNotEmpty()) put("enum", JSONArray(values))
       if (min != null) put("minimum", min)
       if (max != null) put("maximum", max)
-      if (kind == "string") put("maxLength", 2000)
+      if (kind == "string") put("maxLength", maxLength)
       if (kind == "array") put("items", JSONObject().put("type", "integer").put("minimum", 1).put("maximum", 7)).put("maxItems", 7)
     }
   }
   data class Spec(val type: String, val fields: Map<String, Field>, val required: Set<String>) {
-    fun schema(partial: Boolean = false): JSONObject {
-      val properties = JSONObject().put("type", Field("string", listOf(type)).schema())
+    fun schema(partial: Boolean = false, includeType: Boolean = true): JSONObject {
+      val properties = JSONObject().apply { if (includeType) put("type", Field("string", listOf(type)).schema()) }
       fields.forEach { (name, field) -> properties.put(name, field.schema()) }
       return JSONObject().put("type", "object").put("properties", properties)
-        .put("required", JSONArray(listOf("type") + if (partial) emptyList() else required.toList()))
+        .put("required", JSONArray((if (includeType) listOf("type") else emptyList()) + if (partial) emptyList() else required.toList()))
         .put("additionalProperties", false)
     }
   }

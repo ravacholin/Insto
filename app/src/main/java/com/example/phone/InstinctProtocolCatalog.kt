@@ -91,7 +91,7 @@ internal object InstinctCatalogCanonical {
     return write(toKotlin(o).let { @Suppress("UNCHECKED_CAST") (it as Map<String, Any?>) + fields })
   }
 
-  private fun toKotlin(value: Any?): Any? = when (value) {
+  fun toKotlin(value: Any?): Any? = when (value) {
     is org.json.JSONObject -> value.keys().asSequence().associateWith { toKotlin(value.get(it)) }
     is org.json.JSONArray -> (0 until value.length()).map { toKotlin(value.get(it)) }
     org.json.JSONObject.NULL -> null
@@ -180,6 +180,12 @@ object InstinctProtocolCatalog {
       InstinctPlanSpec.EXAMPLES.forEach { appendLine(example(it)) }
       appendLine(PLAN_RULE)
       appendLine(PLAN_RESULT)
+      if (mailbox != null) {
+        appendLine()
+        appendLine(InstinctStructuredPlan.GUIDE)
+        appendLine("Usá las secciones «plan_json», «capacidades» y «rutinas» de action=catalogo.")
+        appendLine(example(InstinctStructuredPlan.MEETING_EXAMPLE))
+      }
       appendLine()
       appendLine("Reglas contextuales locales:")
       appendLine("Formato: «${InstinctProposalProtocol.PREFIX} ${ContextRuleSpec.FORM}».")
@@ -299,6 +305,8 @@ object InstinctProtocolCatalog {
    */
   fun json(routines: List<String>, autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(),
     channels: InstinctCatalogChannels = InstinctCatalogChannels(), instoVersion: String,
+    availability: Map<String, String> = emptyMap(), calendarIds: List<Long> = emptyList(),
+    calendarWriteIds: List<Long> = emptyList(), calendarLabels: Map<Long, String> = emptyMap(), routineRevisions: Map<String, String> = emptyMap(),
     parse: (String) -> PhoneRoute = PhoneCommandParser()::parse): InstinctCatalogJson {
     fun category(order: String) = (parse(order) as? PhoneRoute.Local)?.command?.let(InstinctCategory::of)?.label
     val quiet = autonomy.quiet
@@ -307,6 +315,16 @@ object InstinctProtocolCatalog {
       "version_protocolo" to VERSION,
       "version_insto" to instoVersion,
       "prefijo" to "${InstinctProposalProtocol.PREFIX} ",
+      "capacidades" to InstinctCapabilities.specs.values.map { spec ->
+        InstinctCatalogCanonical.toKotlin(spec.catalog(
+          if (autonomy.level(spec.category) == InstinctAutonomy.NUNCA) "nunca"
+          else availability[spec.id] ?: "consultar catálogo del teléfono"))
+      },
+      "calendarios_habilitados" to calendarIds,
+      "calendarios_con_escritura" to calendarWriteIds,
+      "calendarios" to calendarIds.map { mapOf("id" to it, "nombre" to calendarLabels[it].orEmpty(), "escritura" to (it in calendarWriteIds)) },
+      "plan_json" to InstinctStructuredPlan.contract,
+      "integraciones" to mapOf("omniremote" to "sin interfaz local compatible", "appfunctions" to "sin proveedor autorizado"),
       "acciones" to InstinctProposalValidator.immediateExamples.map { mapOf("orden" to it, "categoria" to category(it)) },
       "formas" to mapOf(
         "diferidas" to InstinctProposalValidator.deferredExamples.map { mapOf("orden" to it) },
@@ -329,11 +347,14 @@ object InstinctProtocolCatalog {
         "requiere_bitacora" to true, "regla" to DECISION_RULE),
       "planes" to mapOf("forma" to InstinctPlanSpec.FORM, "pasos" to InstinctPlanSpec.STEP_FORMS,
         "ejemplos" to InstinctPlanSpec.EXAMPLES.map { mapOf("orden" to it) }, "progreso_por" to "bitacora",
-        "tipo_evento" to InstinctPlanEngine.LOG_KIND, "reglas" to listOf(PLAN_RULE, PLAN_RESULT)),
+        "tipo_evento" to InstinctPlanSpec.LOG_KIND, "reglas" to listOf(PLAN_RULE, PLAN_RESULT)),
       "reglas_contextuales" to mapOf("forma" to ContextRuleSpec.FORM, "orden" to ContextRuleSpec.EXAMPLE,
         "condiciones" to ContextRuleSpec.conditionForms, "regla" to CONTEXT_RULE),
       "consultas" to ProposalCheck.QueryKind.entries.map { mapOf("orden" to it.form, "solo_lectura" to it.readOnly) },
-      "rutinas" to routines.map { mapOf("nombre" to it, "orden" to "$ROUTINE_FORM $it") },
+      "rutinas" to routines.map { name ->
+        mapOf("nombre" to name, "orden" to "$ROUTINE_FORM $name") +
+          listOfNotNull(routineRevisions[name]?.let { "revision" to it })
+      },
       "limites" to mapOf(
         "lineas_por_mensaje" to InstinctProposalProtocol.MAX_LINES,
         "ordenes_automaticas_cada_10_minutos" to 6,

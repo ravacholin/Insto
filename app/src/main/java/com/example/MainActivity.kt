@@ -47,6 +47,8 @@ class MainActivity : ComponentActivity() {
     com.example.phone.InstinctQuestionNotifications.recoverSoon(this)
     com.example.phone.NotificationAccessService.connected?.calendarPermissionChanged()
     com.example.phone.InstinctContextScheduler.signal(this)
+    com.example.phone.InstinctCatalogPublisher.changed(this)
+    com.example.phone.InstinctPlanEngine.prerequisitesChanged(this)
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {

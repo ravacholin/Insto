@@ -92,6 +92,20 @@ object InstinctMailboxSignature {
     return if (position.index == text.length) date.time else null
   }
 
+  private fun validLines(lines: List<String>): Boolean {
+    if (lines.size !in 1..InstinctProposalProtocol.MAX_LINES * 3) return false
+    if (lines.any(InstinctStructuredPlan::isWireLine) && lines.size > InstinctProposalProtocol.MAX_LINES) return false
+    var bytes = 0
+    for (line in lines) {
+      if (line.length > InstinctStructuredPlan.MAX_LINE_BYTES || line.any { it == '\n' || it == '\r' }) return false
+      val size = line.toByteArray(Charsets.UTF_8).size
+      val limit = if (InstinctStructuredPlan.isWireLine(line)) InstinctStructuredPlan.MAX_LINE_BYTES else 2048
+      if (size > limit) return false
+      bytes += size
+    }
+    return bytes <= InstinctStructuredPlan.MAX_ORDER_BYTES
+  }
+
   enum class Verdict { VALID, BAD_SIGNATURE, EXPIRED, REPEATED }
 
   /**
@@ -99,7 +113,7 @@ object InstinctMailboxSignature {
    * time window (more than 15 minutes old or 2 minutes in the future), then an id already seen.
    */
   fun verify(key: String, order: MailboxOrder, now: Long, seen: (String) -> Boolean): Verdict {
-    if (!UUID.matches(order.id) || order.lines.isEmpty() || order.lines.any { it.contains('\n') || it.contains('\r') })
+    if (!UUID.matches(order.id) || !validLines(order.lines))
       return Verdict.BAD_SIGNATURE
     if (!matches(sign(key, canonical(order.id, order.at, order.lines)), order.sig)) return Verdict.BAD_SIGNATURE
     val at = instant(order.at) ?: return Verdict.BAD_SIGNATURE
@@ -317,7 +331,7 @@ class InstinctMailboxClient(private val http: InstinctLogClient = InstinctLogCli
 
   /** `GET ?token=…&action=ordenes&limit=N`: the orders not taken yet, in order. */
   fun fetch(url: String, token: String, limit: Int = InstinctMailboxPoll.MAX_ORDERS): Fetch =
-    when (val raw = http.get(url, listOf("token" to token, "action" to "ordenes", "limit" to limit.coerceIn(1, InstinctMailboxPoll.MAX_ORDERS).toString()))) {
+    when (val raw = http.get(url, listOf("token" to token, "action" to "ordenes", "limit" to limit.coerceIn(1, InstinctMailboxPoll.MAX_ORDERS).toString()), mailbox = true)) {
       is InstinctLogClient.Raw.Failed -> Fetch.Failed(raw.reason)
       is InstinctLogClient.Raw.Body -> when {
         InstinctMailboxPoll.tokenRejected(raw.text) -> Fetch.Failed(InstinctLogClient.Failure.TOKEN.label)

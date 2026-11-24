@@ -22,6 +22,8 @@ data class PhoneActionResult(
    * controls and could not verify the result. The user sees the failure; the execution record treats it as uncertain.
    */
   val effectUnverified: Boolean = false,
+  val verifiedLocally: Boolean = false,
+  val executionData: String? = null,
 ) {
   val retainRequest: Boolean get() = outcome == PhoneActionOutcome.NEEDS_INPUT || outcome == PhoneActionOutcome.REJECTED || outcome == PhoneActionOutcome.UNCERTAIN || stopwatchAutomation != null || needsCamera || needsContacts || needsNotifications || contactOptions.isNotEmpty()
 }

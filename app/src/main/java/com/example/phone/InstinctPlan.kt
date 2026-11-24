@@ -3,6 +3,9 @@ package com.example.phone
 import java.util.Calendar
 import org.json.JSONObject
 
+/** «#insto plan …» after the validator: the parsed plan, or why it was refused. */
+internal data class PlanCheck(override val order: String, val spec: InstinctPlanSpec?, val why: String? = null) : ProposalCheck
+
 /**
  * Plans of several steps (1.23.0), the pure part: the explicit grammar of «#insto plan …», the program it compiles to,
  * the plan's states and the decisions the engine takes from what is on disk. Nothing here touches Android, the
@@ -43,8 +46,10 @@ enum class PlanTrigger(val phrase: String) {
 }
 
 /** One action of a plan, as Instinct wrote it, and the explicit alternative that runs only if it fails. */
-data class PlanAction(val line: String, val fallback: String? = null) {
+internal data class PlanAction(val line: String, val fallback: String? = null,
+  val invocation: PlanInvocation? = null, val alternative: PlanInvocation? = null, val routineCommand: PhoneCommand? = null) {
   val count: Int get() = if (fallback == null) 1 else 2
+  fun review(): String = listOfNotNull(invocation?.review() ?: line, alternative?.review()?.let { "si falla, $it" }).joinToString(" · ")
 }
 
 /** One step. [text] is the step as written, for messages and the log. */
@@ -52,6 +57,8 @@ internal sealed interface PlanStep {
   val text: String
 
   data class Act(val action: PlanAction, override val text: String) : PlanStep
+  data class Routine(val name: String, val revision: String, override val text: String) : PlanStep
+  data class WaitAt(val at: Long, override val text: String) : PlanStep
   data class Wait(val millis: Long, override val text: String) : PlanStep
   data class WaitUntil(val minuteOfDay: Int, override val text: String) : PlanStep
   data class WaitFor(val trigger: PlanTrigger, override val text: String) : PlanStep
@@ -63,6 +70,15 @@ internal sealed interface PlanStep {
     override val text: String) : PlanStep
   data class Save(val settings: Set<PlanSetting>, override val text: String) : PlanStep
   data class Restore(val settings: Set<PlanSetting>, override val text: String) : PlanStep
+
+  fun review(): String = when (this) {
+    is Branch -> listOf(text, then.joinToString(" + ", transform = PlanAction::review),
+      otherwise.joinToString(" + ", transform = PlanAction::review)).filter(String::isNotBlank).joinToString(" · ")
+    is Decide -> options.zip(branches).joinToString(" | ") { (label, actions) ->
+      label + " · " + actions.joinToString(" + ", transform = PlanAction::review)
+    }
+    else -> text
+  }
 
   /** The actions this step may run, for limits and the autonomy check. */
   val actions: List<PlanAction> get() = when (this) {
@@ -82,7 +98,10 @@ internal sealed interface PlanStep {
 }
 
 /** A validated plan: its steps and when it lapses (wall-clock millis). */
-internal data class InstinctPlanSpec(val line: String, val steps: List<PlanStep>, val expiresAt: Long) {
+internal data class InstinctPlanSpec(val line: String, val steps: List<PlanStep>, val expiresAt: Long,
+  val dependencies: Map<Int, Set<Int>> = emptyMap()) {
+  val structured: Boolean get() = InstinctStructuredPlan.isOrder(line)
+  val hasRoutines: Boolean get() = steps.any { it is PlanStep.Routine }
   /** Every action line of the plan, fallbacks and every branch included. */
   val actionLines: List<String> get() = steps.flatMap { it.actions }.flatMap { listOfNotNull(it.line, it.fallback) }
   val actionCount: Int get() = steps.sumOf { step -> step.actions.sumOf { it.count } }
@@ -126,6 +145,14 @@ internal data class InstinctPlanSpec(val line: String, val steps: List<PlanStep>
     private val fails = Regex("\\s+si falla\\s+", RegexOption.IGNORE_CASE)
     private val sequence = Regex("\\s*\\+\\s*")
     private val separators = Regex("\\s*(?:,|\\by\\b)\\s*")
+
+    const val LOG_KIND = "plan"
+
+    fun check(order: String, validate: (String) -> Boolean, now: Calendar): PlanCheck =
+      when (val parsed = parse(order, now, validate)) {
+        is Parse.Valid -> PlanCheck(order, parsed.spec)
+        is Parse.Invalid -> PlanCheck(order, null, parsed.why)
+      }
 
     fun isOrder(line: String): Boolean = head.containsMatchIn(line.trimStart())
 
@@ -276,6 +303,7 @@ enum class PlanState(val code: String) {
   WAITING("esperando"),
   /** A decision is shown with its buttons. */
   DECIDING("decidiendo"),
+  BLOCKED("pendiente de intervención"),
   /** An action may or may not have happened: it is never repeated, and the plan waits to be resumed or cancelled. */
   SUSPENDED("suspendido"),
   DONE("completado"),
@@ -297,7 +325,7 @@ enum class PlanApproval { NONE, AUTO, PERSON;
 }
 
 /** One saved setting: its value before, what the plan itself left, and whether it was already restored. */
-data class PlanStash(val before: Int, val applied: Int? = null, val restored: Boolean = false)
+data class PlanStash(val before: Int, val applied: Int? = null, val restored: Boolean = false, val diverged: Boolean = false)
 
 /** A calendar instance a plan waits for. */
 data class PlanEvent(val trigger: PlanTrigger, val eventId: Long, val instanceId: Long, val at: Long)
@@ -416,6 +444,7 @@ object PlanRestorePolicy {
   fun decide(stash: PlanStash, current: Int?): Decision = when {
     current == null -> Decision.Unreadable
     current == stash.before -> Decision.Already
+    stash.diverged -> Decision.UserChanged
     // What the plan left, or, if the plan never touched it, the value it had when it was saved.
     current == (stash.applied ?: stash.before) -> Decision.Write(stash.before)
     else -> Decision.UserChanged
@@ -435,7 +464,7 @@ object PlanText {
 
   fun status(plan: PlanRecord?, steps: List<PlanStepRecord>, short: String, total: Int?): String {
     plan ?: return "No hay ningún plan $short en los últimos 7 días."
-    val detail = steps.joinToString("; ") { "${it.position} ${it.status}: ${InstinctAck.cut(InstinctAck.flat(it.text), 50)}" +
+    val detail = steps.filterNot { it.position.startsWith("b") }.joinToString("; ") { "${it.position} ${it.status}: ${InstinctAck.cut(InstinctAck.flat(it.text), 50)}" +
       it.detail.takeIf(String::isNotBlank)?.let { d -> " (${InstinctAck.cut(InstinctAck.flat(d).trimEnd('.'), 70)})" }.orEmpty() }
     return line(plan, total) + if (detail.isEmpty()) "" else " · $detail"
   }
@@ -445,7 +474,7 @@ object PlanText {
 internal object PlanCodec {
   fun stash(value: Map<PlanSetting, PlanStash>): String = JSONObject().apply {
     value.forEach { (setting, s) ->
-      put(setting.name, JSONObject().put("before", s.before).put("restored", s.restored).apply { s.applied?.let { put("applied", it) } })
+      put(setting.name, JSONObject().put("before", s.before).put("restored", s.restored).put("diverged", s.diverged).apply { s.applied?.let { put("applied", it) } })
     }
   }.toString()
 
@@ -454,7 +483,7 @@ internal object PlanCodec {
     o.keys().asSequence().mapNotNull { key ->
       val setting = PlanSetting.of(key) ?: return@mapNotNull null
       val s = o.getJSONObject(key)
-      setting to PlanStash(s.getInt("before"), if (s.has("applied")) s.getInt("applied") else null, s.optBoolean("restored"))
+      setting to PlanStash(s.getInt("before"), if (s.has("applied")) s.getInt("applied") else null, s.optBoolean("restored"), s.optBoolean("diverged"))
     }.toMap()
   }.getOrDefault(emptyMap())
 

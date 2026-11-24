@@ -112,6 +112,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
         itemModifier = { Modifier.testTag("instinct_channel_${it.name.lowercase()}") })
       if (channel.usesLog) InstinctLogConfiguration(revision) { revision++ }
       InstinctStateSection(revision) { revision++ }
+      InstinctDeviceCapabilitiesSection(revision) { revision++ }
       InstinctCatalogSection(revision) { revision++ }
       InstinctMailboxSection(replyMode, revision) { revision++ }
       InstinctScheduledList(revision) { revision++ }
@@ -343,6 +344,66 @@ private fun InstinctContextRulesList(revision: Int, onChange: () -> Unit) {
   }
 }
 
+@Composable
+private fun InstinctDeviceCapabilitiesSection(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val grants = remember(context) { com.example.phone.InstinctCalendarAccess(context) }
+  var calendars by remember { mutableStateOf(emptyList<com.example.phone.InstinctCalendarActions.Access>()) }
+  var clock by remember { mutableStateOf(emptyList<com.example.phone.InstinctClockEntry>()) }
+  var calendarUndo by remember { mutableStateOf(emptyList<com.example.phone.ExecutionRecord>()) }
+  var feedback by remember { mutableStateOf<String?>(null) }
+  val read = Manifest.permission.READ_CALENDAR
+  val write = Manifest.permission.WRITE_CALENDAR
+  val missing = listOf(read, write).filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+  val request = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onChange() }
+  LaunchedEffect(revision, missing) {
+    withContext(Dispatchers.IO) {
+      val available = if (read in missing) emptyList() else runCatching {
+        com.example.phone.InstinctCalendarActions(context.contentResolver).calendars()
+      }.getOrDefault(emptyList())
+      val pending = runCatching { com.example.phone.InstinctLocalClock.pending(context) }.getOrDefault(emptyList())
+      val undo = runCatching {
+        com.example.phone.InstinctExecutions.journal(context).recent().filter {
+          it.state == com.example.phone.ExecutionState.VERIFIED && it.executionData?.contains("\"undo\"") == true
+        }
+      }.getOrDefault(emptyList())
+      Triple(available, pending, undo)
+    }.let { (available, pending, undo) -> calendars = available; clock = pending; calendarUndo = undo }
+  }
+  Text("Calendarios para planes de Instinct", style = MaterialTheme.typography.bodyLarge)
+  SettingsDescription("Elegí los calendarios a los que Instinct puede acceder desde el buzón firmado. Las escrituras dependen también de la autonomía y los permisos de Android.")
+  if (missing.isNotEmpty()) TextButton(onClick = { request.launch(arrayOf(if (read in missing) read else write)) }) {
+    Text(if (read in missing) "Permitir acceso al calendario" else "Permitir cambios en el calendario")
+  }
+  val enabled = remember(revision) { grants.enabled() }
+  val writable = remember(revision) { grants.enabled(write = true) }
+  calendars.forEach { calendar ->
+    SettingsSwitch("Leer ${calendar.label}", calendar.id in enabled, { grants.set(calendar.id, it); onChange() },
+      "Comparte el nombre del calendario con Instinct y permite consultarlo desde el buzón firmado.")
+    if (calendar.writable && calendar.id in enabled) {
+      SettingsSwitch("Modificar ${calendar.label}", calendar.id in writable,
+        { grants.set(calendar.id, it, write = true); onChange() },
+        "Incluye crear, cambiar y cancelar eventos individuales.")
+    }
+  }
+  calendarUndo.forEach { row ->
+    TextButton(onClick = { scope.launch {
+      feedback = withContext(Dispatchers.IO) { com.example.phone.InstinctCalendarActions.undo(context, row.executionId) }
+      onChange()
+    } }) { Text("Deshacer cambio de calendario ${row.shortId}") }
+  }
+  if (clock.isNotEmpty()) Text("Alarmas y temporizadores de Insto", style = MaterialTheme.typography.bodyLarge)
+  clock.forEach { timer ->
+    SettingsDescription(timer.label + " · " + java.text.DateFormat.getDateTimeInstance().format(java.util.Date(timer.at)))
+    TextButton(onClick = { scope.launch {
+      feedback = withContext(Dispatchers.IO) { com.example.phone.InstinctLocalClock.cancel(context, timer.id).message }
+      onChange()
+    } }) { Text("Cancelar aviso") }
+  }
+  feedback?.let { SettingsDescription(it) }
+}
+
 /** Plans of several steps (1.23.0): their state, «Cancelar» while active and «Reanudar» when suspended. */
 @Composable
 private fun InstinctPlansList(revision: Int, onChange: () -> Unit) {
@@ -354,14 +415,27 @@ private fun InstinctPlansList(revision: Int, onChange: () -> Unit) {
   LaunchedEffect(revision) { plans = withContext(Dispatchers.IO) { engine.plans(context) } }
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_plans")) {
     Text("Planes de Instinct", style = MaterialTheme.typography.bodyLarge)
-    if (plans.isEmpty()) SettingsDescription("No hay planes. Instinct los pide con «#insto plan: …».")
+    if (plans.isEmpty()) SettingsDescription("Todavía no hay planes de Instinct.")
     else {
       TextButton(onClick = onChange) { Text("Actualizar planes") }
       plans.forEach { plan ->
-        SettingsDescription(com.example.phone.PlanText.line(plan, null) + " · " + plan.line.removePrefix("plan").trimStart(':', ' ').take(120))
+        val review = engine.review(plan)
+        SettingsDescription(com.example.phone.PlanText.line(plan, null) +
+          if (review.isEmpty()) " · " + plan.line.removePrefix("plan").trimStart(':', ' ').take(120) else "")
+        if (!plan.state.terminal) review.forEach { SettingsDescription(it) }
         if (!plan.state.terminal) TextButton(onClick = {
           scope.launch { feedback = withContext(Dispatchers.IO) { engine.cancel(context, plan.shortId) }; onChange() }
         }, modifier = Modifier.testTag("instinct_plan_cancel")) { Text("Cancelar ${plan.shortId}") }
+        if (plan.state == com.example.phone.PlanState.BLOCKED) {
+          plan.reason?.let { SettingsDescription(it) }
+          val activity = context as? android.app.Activity
+          if (activity != null) TextButton(onClick = {
+            scope.launch {
+              feedback = withContext(Dispatchers.IO) { engine.continueInForeground(activity, plan.shortId) }
+              onChange()
+            }
+          }) { Text("Continuar ${plan.shortId}") }
+        }
         if (plan.state == com.example.phone.PlanState.SUSPENDED) TextButton(onClick = {
           scope.launch { feedback = withContext(Dispatchers.IO) { engine.resume(context, plan.shortId) }; onChange() }
         }, modifier = Modifier.testTag("instinct_plan_resume")) { Text("Reanudar ${plan.shortId}") }

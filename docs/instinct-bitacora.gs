@@ -81,6 +81,11 @@ const DOORBELL_TTL = '300';
 // Un mensaje cifrado de Web Push ocupa como mucho 4096 bytes: en base64url, 5464 caracteres con relleno.
 const DOORBELL_MAX_SEALED_CHARS = 5464;
 const MAX_LINE_CHARS = 300;
+const PLAN_LINE_BYTES = 8192;
+const ORDER_BYTES = 3 * PLAN_LINE_BYTES;
+const LEGACY_LINE_BYTES = 2048;
+
+function structuredLine_(line) { return /^#insto +plan-json(?: |$)/.test(line.trim()); }
 const CATALOG = 'Catálogo';
 const CATALOG_HEADERS = ['publicado', 'hash', 'json'];
 const CATALOG_MAX_CHARS = 45000;
@@ -128,8 +133,15 @@ function iso_(value) {
 function postOrder_(body) {
   if (typeof body.id !== 'string' || !body.id || typeof body.at !== 'string' || typeof body.sig !== 'string' ||
     !Array.isArray(body.lines) || !body.lines.length) return json_({ ok: false, error: 'orden' });
-  // Unas pocas más de las que Insto lee: la firma cubre todas, Insto ejecuta como máximo 3.
-  const lines = body.lines.slice(0, MAX_LINES * 3).map(function (l) { return String(l).slice(0, MAX_LINE_CHARS); });
+  const lines = body.lines;
+  if (lines.length > MAX_LINES * 3 || lines.some(function (line) {
+    return typeof line !== 'string' || /[\r\n]/.test(line) ||
+      utf8Bytes_(line) > (structuredLine_(line) ? PLAN_LINE_BYTES : LEGACY_LINE_BYTES);
+  }) || (lines.length > MAX_LINES && lines.some(structuredLine_)) || utf8Bytes_(lines.join('\n')) > ORDER_BYTES + lines.length - 1) {
+    return json_({ ok: false, error: 'tamano' });
+  }
+  const serialized = JSON.stringify(lines);
+  if (serialized.length > 49000) return json_({ ok: false, error: 'tamano' });
   let isNew = false;
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
@@ -139,7 +151,8 @@ function postOrder_(body) {
     const last = sheet.getLastRow();
     const known = last > 1 ? sheet.getRange(2, 2, last - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
     if (known.indexOf(body.id) < 0) {
-      sheet.appendRow([new Date().toISOString(), body.id, body.at, JSON.stringify(lines), body.sig, ''].map(cell_));
+      // La columna de líneas es un array JSON, que siempre empieza con "[" y no se interpreta como fórmula.
+      sheet.appendRow([cell_(new Date().toISOString()), cell_(body.id), cell_(body.at), serialized, cell_(body.sig), '']);
       isNew = true;
     }
   } finally {
@@ -202,7 +215,7 @@ function utf8Bytes_(text) {
 function orderPayload_(body) {
   if (body.lines.length > MAX_LINES) return null;
   const lines = body.lines.map(String);
-  if (lines.some(function (l) { return l.length > MAX_LINE_CHARS; })) return null;
+  if (lines.some(function (l) { return !structuredLine_(l) && l.length > MAX_LINE_CHARS; })) return null;
   const payload = JSON.stringify({ v: 1, id: body.id, at: body.at, lines: lines, sig: body.sig });
   return utf8Bytes_(payload) <= DOORBELL_MAX_PAYLOAD_BYTES ? payload : null;
 }

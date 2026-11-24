@@ -18,6 +18,12 @@ import org.junit.Test
 
 /** 1.20.0: Instinct in the `.insto` copy, over an in-memory phone. */
 class InstinctBackupSectionTest {
+  @Test fun `an unstarted structured plan round trips as a complete line with the original deadline`() {
+    val line = com.example.phone.InstinctStructuredPlan.MEETING_EXAMPLE
+    val plan = InstinctBackupPlan(line, System.currentTimeMillis() + 3_600_000)
+    assertEquals(listOf(plan), InstinctSection.decodePlans(InstinctSection.encodePlans(listOf(plan))))
+  }
+
   private val password = "una contraseña larga".toCharArray()
   private val dirs = mutableListOf<File>()
   @After fun clean() { dirs.forEach { it.deleteRecursively() } }

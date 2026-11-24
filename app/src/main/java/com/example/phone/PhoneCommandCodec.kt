@@ -49,6 +49,13 @@ object PhoneCommandCodec {
    "platform" -> {
     fields("action","argument","percent","content")
     val action = PlatformAction.valueOf(str("action"))
+    if (action == PlatformAction.INSTINCT_CAPABILITY) {
+      require(!o.has("percent"))
+      return PhoneCommand.Platform(action, str("argument"), content = o.get("content").let {
+        require(it is String && it.toByteArray(Charsets.UTF_8).size <= 8192)
+        it
+      }).also { InstinctCapabilities.platform(it) }
+    }
     val argument = if(o.has("argument")) str("argument") else null
     val content = if(o.has("content")) str("content") else null
     val percent = if(o.has("percent")) integer("percent",0..100) else null
@@ -100,20 +107,22 @@ object PhoneCommandCodec {
  }
  fun summary(command: PhoneCommand): String = when(command) {
   is PhoneCommand.Platform -> {
-    val calendar = if (command.action in CalendarSelection.actions) CalendarSelection.decode(command) else null
-    val content = if (calendar == null) command.content else listOfNotNull(
-      calendar.from,
-      calendar.until?.let { "hasta $it (excluido)" },
-      calendar.at,
-      "por la tarde".takeIf { calendar.afternoon },
-      "próximos eventos".takeIf { calendar.next },
-      calendar.newDate?.let { "nueva fecha $it" },
-      calendar.newTime?.let { "nueva hora $it" },
-      calendar.legacyBegin?.let { java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it)) },
-      calendar.durationSeconds?.let { "duración $it s" },
-    ).joinToString(" · ").takeIf(String::isNotEmpty)
-    (LocalIntentRegistry.default.definitions.firstOrNull { it.accepts(command) }?.description ?: "Acción del dispositivo") +
-      (listOfNotNull(if (calendar == null) command.argument else calendar.title,command.percent?.let {"$it%"},content).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: "")
+    if (command.action == PlatformAction.INSTINCT_CAPABILITY) command.argument ?: "acción local" else {
+      val calendar = if (command.action in CalendarSelection.actions) CalendarSelection.decode(command) else null
+      val content = if (calendar == null) command.content else listOfNotNull(
+        calendar.from,
+        calendar.until?.let { "hasta $it (excluido)" },
+        calendar.at,
+        "por la tarde".takeIf { calendar.afternoon },
+        "próximos eventos".takeIf { calendar.next },
+        calendar.newDate?.let { "nueva fecha $it" },
+        calendar.newTime?.let { "nueva hora $it" },
+        calendar.legacyBegin?.let { java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it)) },
+        calendar.durationSeconds?.let { "duración $it s" },
+      ).joinToString(" · ").takeIf(String::isNotEmpty)
+      (LocalIntentRegistry.default.definitions.firstOrNull { it.accepts(command) }?.description ?: "Acción del dispositivo") +
+        (listOfNotNull(if (calendar == null) command.argument else calendar.title,command.percent?.let {"$it%"},content).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: "")
+    }
   }
   is PhoneCommand.CalendarEvent -> "Calendario: ${command.title} · ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(java.util.Date(command.beginMillis))} · ${(command.endMillis-command.beginMillis)/60000} min" + (command.description?.let { " · $it" } ?: "")
   is PhoneCommand.Timer -> "Temporizador: ${command.seconds / 60} min ${command.seconds % 60} s ${command.label}"

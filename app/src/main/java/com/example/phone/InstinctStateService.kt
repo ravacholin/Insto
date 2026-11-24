@@ -227,6 +227,7 @@ class InstinctStateJobService : JobService() {
   override fun onStartJob(params: JobParameters): Boolean {
     Thread({
       runCatching { InstinctStatePublisher.publish(applicationContext, InstinctState.Reason.HEARTBEAT) }
+      runCatching { InstinctCatalogPublisher.changed(applicationContext) }
       // The outbox drains through its own job, armed by the enqueue.
       jobFinished(params, false)
     }, "insto-estado-latido").start()
@@ -254,6 +255,8 @@ internal class InstinctStateWatcher(private val context: Context) {
         InstinctStatePublisher.background(Runnable { InstinctQuestionNotifications.refreshExisting(context) })
       if (intent.action != Intent.ACTION_USER_PRESENT) InstinctContextScheduler.signal(context)
       when (intent.action) {
+        AudioManager.RINGER_MODE_CHANGED_ACTION -> InstinctPlanEngine.settingChanged(context, setOf(PlanSetting.RINGER, PlanSetting.DND))
+        NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED -> InstinctPlanEngine.settingChanged(context, setOf(PlanSetting.DND))
         Intent.ACTION_USER_PRESENT -> InstinctScheduler.onPhoneEvent(context, PhoneEvent.UNLOCK)
         AudioManager.ACTION_HEADSET_PLUG -> when (intent.getIntExtra("state", -1)) {
           1 -> InstinctScheduler.onPhoneEvent(context, PhoneEvent.HEADPHONES_ON)
@@ -262,6 +265,10 @@ internal class InstinctStateWatcher(private val context: Context) {
       }
     }
   }
+  private val packages = object : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) { InstinctCatalogPublisher.changed(context) }
+  }
+
   /** Headphones connected now, by device id: the callback's first call (the devices already there) fires nothing. */
   private val headphones = HashSet<Int>()
   private val devices = object : AudioDeviceCallback() {
@@ -283,6 +290,9 @@ internal class InstinctStateWatcher(private val context: Context) {
       InstinctStatePublisher.changed(context)
       InstinctContextScheduler.signal(context)
     }
+  }
+  private val deviceSettings = object : ContentObserver(handler) {
+    override fun onChange(selfChange: Boolean) { InstinctPlanEngine.settingChanged(context, setOf(PlanSetting.VOLUME)) }
   }
   private val network = object : android.net.ConnectivityManager.NetworkCallback() {
     override fun onCapabilitiesChanged(network: android.net.Network, capabilities: android.net.NetworkCapabilities) {
@@ -322,6 +332,16 @@ internal class InstinctStateWatcher(private val context: Context) {
       else context.registerReceiver(receiver, filter)
     }
     runCatching {
+      val packageFilter = IntentFilter().apply {
+        addAction(Intent.ACTION_PACKAGE_ADDED)
+        addAction(Intent.ACTION_PACKAGE_REMOVED)
+        addAction(Intent.ACTION_PACKAGE_CHANGED)
+        addDataScheme("package")
+      }
+      if (android.os.Build.VERSION.SDK_INT >= 33) context.registerReceiver(packages, packageFilter, Context.RECEIVER_NOT_EXPORTED)
+      else context.registerReceiver(packages, packageFilter)
+    }
+    runCatching {
       val audio = context.getSystemService(AudioManager::class.java)
       headphones.clear()
       audio?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.filter { InstinctAudioDevices.headphones(it.type) }?.forEach { headphones += it.id }
@@ -330,6 +350,7 @@ internal class InstinctStateWatcher(private val context: Context) {
     }
     runCatching { context.getSystemService(android.net.ConnectivityManager::class.java)?.registerDefaultNetworkCallback(network) }
     watchCalendar()
+    runCatching { context.contentResolver.registerContentObserver(android.provider.Settings.System.CONTENT_URI, true, deviceSettings) }
     InstinctContextScheduler.signal(context)
     InstinctStatePublisher.rearm(context)
   }
@@ -346,11 +367,13 @@ internal class InstinctStateWatcher(private val context: Context) {
     if (!started) return
     started = false
     runCatching { context.unregisterReceiver(receiver) }
+    runCatching { context.unregisterReceiver(packages) }
     runCatching { context.getSystemService(AudioManager::class.java)?.unregisterAudioDeviceCallback(devices) }
     runCatching { stopPlayback?.invoke() }
     stopPlayback = null
     runCatching { context.getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(network) }
     runCatching { context.contentResolver.unregisterContentObserver(calendar) }
+    runCatching { context.contentResolver.unregisterContentObserver(deviceSettings) }
     InstinctStatePublisher.debouncer.cancel()
   }
 }

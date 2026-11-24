@@ -271,6 +271,22 @@ test('con conOrden, una orden nueva viaja firmada en el timbre, en JSON compacto
   assert.ok(!options.payload.includes('token-de-prueba'), 'el timbre nunca lleva el token');
 });
 
+test('un plan JSON largo se conserva firmado y puede usar el timbre simple', () => {
+  const s = load();
+  s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: true });
+  const body = order('00000000-0000-4000-8000-000000000104');
+  const json = '#insto plan-json ' + JSON.stringify({version:1, steps:[
+    {id:'open', kind:'action', capability:'open_resource', params:{url:'https://example.org/' + 'x'.repeat(3900)}}
+  ]});
+  body.lines = [json];
+  assert.strictEqual(s.post(body).ok, true);
+  assert.strictEqual(s.fetches[0].options.payload, 'insto-timbre');
+  assert.strictEqual(s.get({ token: T, action: 'ordenes' }).ordenes[0].lineas[0], json);
+  const oversize = {...body, id:'00000000-0000-4000-8000-000000000105', lines:[json + 'x'.repeat(8192)]};
+  assert.deepStrictEqual(s.post(oversize), {ok:false, error:'tamano'});
+  assert.strictEqual(s.get({ token: T, action: 'ordenes' }).ordenes.length, 1);
+});
+
 test('una orden demasiado grande (o con más de 3 líneas) toca el timbre sin la orden', () => {
   const s = load();
   s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: true });

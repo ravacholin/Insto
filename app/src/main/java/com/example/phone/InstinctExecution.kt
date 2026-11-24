@@ -98,6 +98,11 @@ enum class ActionEffect {
         PlatformAction.DND_OFF -> IDEMPOTENT_SET
         PlatformAction.BATTERY, PlatformAction.ROUTINE_LIST -> READ_ONLY
         PlatformAction.ROUTINE_RUN -> NON_IDEMPOTENT
+        PlatformAction.INSTINCT_CAPABILITY -> when {
+          command.argument == "calendar_query" -> READ_ONLY
+          InstinctCapabilities.specs[command.argument]?.runsLocked == true -> NON_IDEMPOTENT
+          else -> EXTERNAL_HANDOFF
+        }
         else -> EXTERNAL_HANDOFF
       }
       else -> EXTERNAL_HANDOFF
@@ -139,6 +144,7 @@ data class ExecutionRecord(
   val attribution: ExecutionAttribution? = null,
   /** The in-memory proposal of the process that owns it. */
   val proposalId: Long? = null,
+  val executionData: String? = null,
 ) {
   val shortId: String get() = ExecutionIds.short(executionId)
   override fun toString() = "ExecutionRecord($executionId, $state, $transport)"

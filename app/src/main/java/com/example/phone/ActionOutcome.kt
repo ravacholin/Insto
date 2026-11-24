@@ -70,7 +70,9 @@ object ActionOutcomeRules {
       PhoneActionOutcome.HANDOFF -> return if (command is PhoneCommand.Media) media(command, before, after)
         .takeIf { it.verdict == OutcomeVerdict.VERIFIED } ?: Observation(OutcomeVerdict.NOT_OBSERVABLE, detail = HANDED_OFF)
         else Observation(OutcomeVerdict.NOT_OBSERVABLE, detail = HANDED_OFF)
-      PhoneActionOutcome.COMPLETED -> Unit
+      PhoneActionOutcome.COMPLETED -> {
+        if (result.verifiedLocally) return Observation(OutcomeVerdict.VERIFIED, detail = "resultado local comprobado")
+      }
     }
     return when (command) {
       is PhoneCommand.Volume -> volume(command, before, after)

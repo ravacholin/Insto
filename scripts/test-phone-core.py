@@ -26,6 +26,7 @@ ARTIFACTS = {
     "okhttp": "com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.jar",
     "okio": "com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar",
     "json": "org/json/json/20260814/json-20260814.jar",
+    "gson": "com/google/code/gson/gson/2.13.2/gson-2.13.2.jar",
     "junit": "junit/junit/4.13.2/junit-4.13.2.jar",
     "hamcrest": "org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar",
 }
@@ -53,7 +54,7 @@ def main():
              "EverydayCommandParser", "ExtendedCommandParser", "CalendarRequestParser", "CalendarSelection", "CalendarSelectionParser",
              "ClockTime", "CommandDuration", "HybridPhoneRouter", "GeminiDecisionsClient", "GroqIntentVerifier", "StructuredCommandClient",
              "ConversationSession", "WorkflowRunner", "TemporaryModePolicy", "MediaSessionPolicy",
-             "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "ProviderHttp", "GeminiTransport", "CapabilityCatalog",
+             "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "ProviderHttp", "GeminiTransport", "CapabilityCatalog", "InstinctCapabilities", "InstinctPlan", "InstinctStructuredPlan",
              "DecisionsPolicy", "DecisionsCircuitBreaker", "Interpretation", "CommandDraft", "RequestSafetyPolicy", "GeminiCoordinator", "GeminiDiagnostics",
              "LocalIntentRegistry", "LocalIntentPhrases", "ExtendedLocalIntents", "NativeActionParameters",
              "DocumentNamePolicy", "ConfiguredRoutineStore", "PhrasePatterns", "OperationalContext",

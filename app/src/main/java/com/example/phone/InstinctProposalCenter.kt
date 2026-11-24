@@ -1302,6 +1302,8 @@ object InstinctProposalCenter {
       .setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text))
       .setVisibility(Notification.VISIBILITY_PRIVATE)
       .setPublicVersion(builder(context, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Instinct usó Insto").build())
+      .setContentIntent(PendingIntent.getActivity(context, (planId.hashCode() and 0xFFFF),
+        Intent(context, com.example.MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
       .setAutoCancel(true).build()
     runCatching { context.getSystemService(NotificationManager::class.java).notify(PLAN_BASE + (planId.hashCode() and 0xFFFF), notification) }
   }

@@ -40,6 +40,7 @@ enum class InstinctCategory(val label: String) {
       is PhoneCommand.OpenApp, is PhoneCommand.MusicSearch, is PhoneCommand.SpotifySearch, is PhoneCommand.YouTubeSearch -> APPS
       is PhoneCommand.CalendarEvent -> CALENDARIO
       is PhoneCommand.Platform -> when {
+        command.action == PlatformAction.INSTINCT_CAPABILITY -> InstinctCapabilities.specs[command.argument]?.category
         command.action == PlatformAction.ROUTINE_RUN -> RUTINAS
         command.action in silence -> SILENCIO
         else -> null
@@ -240,8 +241,8 @@ object InstinctGatePreview {
 
   /** Commands that open another app's screen. From the background Android only allows that while Insto is exempt. */
   fun opensActivity(command: PhoneCommand): Boolean = when (command) {
-    is PhoneCommand.Volume, is PhoneCommand.Torch, is PhoneCommand.Media, is PhoneCommand.TemporaryMode,
-    is PhoneCommand.Platform -> false
+    is PhoneCommand.Volume, is PhoneCommand.Torch, is PhoneCommand.Media, is PhoneCommand.TemporaryMode -> false
+    is PhoneCommand.Platform -> command.action == PlatformAction.INSTINCT_CAPABILITY && !LockScreenPolicy.runsLocked(command)
     else -> true
   }
 
@@ -297,7 +298,8 @@ object LockScreenPolicy {
 
   fun runsLocked(command: PhoneCommand): Boolean = when (command) {
     is PhoneCommand.Volume, is PhoneCommand.Torch, is PhoneCommand.Media, is PhoneCommand.TemporaryMode, PhoneCommand.EndMode -> true
-    is PhoneCommand.Platform -> command.action in lockSafe
+    is PhoneCommand.Platform -> command.action in lockSafe || command.action == PlatformAction.INSTINCT_CAPABILITY &&
+      InstinctCapabilities.specs[command.argument]?.runsLocked == true
     else -> false
   }
 }

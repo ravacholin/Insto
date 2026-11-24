@@ -184,7 +184,7 @@ object InstinctDoorbellPayload {
     if (at != at.trim() || InstinctMailboxSignature.instant(at) == null) return null
     if (array.length() !in 1..InstinctProposalProtocol.MAX_LINES) return null
     val lines = (0 until array.length()).map { array.opt(it) as? String ?: return null }
-    if (lines.any { it.length > MAX_LINE_CHARS || it.contains('\n') || it.contains('\r') }) return null
+    if (lines.any { (!InstinctStructuredPlan.isWireLine(it) && it.length > MAX_LINE_CHARS) || it.contains('\n') || it.contains('\r') }) return null
     MailboxOrder(id, at, lines, sig)
   }.getOrNull()
 

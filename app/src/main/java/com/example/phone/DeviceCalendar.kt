@@ -148,9 +148,12 @@ internal class DeviceCalendar(private val resolver: ContentResolver, private val
       arrayOf(event.id.toString(), event.calendarId.toString(), event.begin.toString(), event.end.toString(), event.title, event.title)
 
   private fun isWritable(calendarId: Long): Boolean =
+    (accessLevel(calendarId) ?: 0) >= Calendars.CAL_ACCESS_CONTRIBUTOR
+
+  fun accessLevel(calendarId: Long): Int? =
     resolver.query(ContentUris.withAppendedId(Calendars.CONTENT_URI, calendarId),
       arrayOf(Calendars.CALENDAR_ACCESS_LEVEL), null, null, null)
-      ?.use { it.moveToFirst() && it.getInt(0) >= Calendars.CAL_ACCESS_CONTRIBUTOR } == true
+      ?.use { if (it.moveToFirst()) it.getInt(0) else null }
 
   fun agenda(selection: CalendarSelection): String {
     val matches = find(selection, if (selection.next && selection.title != null) 1 else 21)

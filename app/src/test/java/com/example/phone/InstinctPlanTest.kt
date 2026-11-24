@@ -136,6 +136,7 @@ class InstinctPlanTest {
   @Test fun `a restoration never overwrites a later change`() {
     val saved = PlanStash(before = 7, applied = 3)
     assertEquals(PlanRestorePolicy.Decision.Write(7), PlanRestorePolicy.decide(saved, 3))
+    assertEquals(PlanRestorePolicy.Decision.UserChanged, PlanRestorePolicy.decide(saved.copy(diverged = true), 3))
     assertEquals(PlanRestorePolicy.Decision.Already, PlanRestorePolicy.decide(saved, 7))
     assertEquals(PlanRestorePolicy.Decision.UserChanged, PlanRestorePolicy.decide(saved, 10))
     assertEquals(PlanRestorePolicy.Decision.Unreadable, PlanRestorePolicy.decide(saved, null))
