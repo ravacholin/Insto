@@ -125,7 +125,7 @@ object InstinctProposalValidator {
       return if (inner.isBlank()) ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY) else ProposalCheck.Query(order, ProposalCheck.QueryKind.PROBE, inner)
     }
     // «plan: …» (1.23.0): an explicit grammar; every action goes through this same validator, one by one.
-    if (InstinctPlanSpec.isOrder(order)) return InstinctPlanEngine.check(order, { backgroundAction(it, parse, now, routines) != null }, now)
+    if (InstinctPlanSpec.isOrder(order)) return InstinctPlanSpec.check(order, { backgroundAction(it, parse, now, routines) != null }, now)
     if (ContextRuleSpec.isOrder(order)) {
       val spec = ContextRuleSpec.parse(order) ?: return ProposalCheck.Invalid(order, ProposalCheck.Reason.CONTEXT_RULE)
       val notice = InstinctNotice.text(spec.action)?.let(InstinctNotice::valid) == true

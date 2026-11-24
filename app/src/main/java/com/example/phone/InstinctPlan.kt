@@ -3,6 +3,9 @@ package com.example.phone
 import java.util.Calendar
 import org.json.JSONObject
 
+/** «#insto plan …» after the validator: the parsed plan, or why it was refused. */
+internal data class PlanCheck(override val order: String, val spec: InstinctPlanSpec?, val why: String? = null) : ProposalCheck
+
 /**
  * Plans of several steps (1.23.0), the pure part: the explicit grammar of «#insto plan …», the program it compiles to,
  * the plan's states and the decisions the engine takes from what is on disk. Nothing here touches Android, the
@@ -126,6 +129,14 @@ internal data class InstinctPlanSpec(val line: String, val steps: List<PlanStep>
     private val fails = Regex("\\s+si falla\\s+", RegexOption.IGNORE_CASE)
     private val sequence = Regex("\\s*\\+\\s*")
     private val separators = Regex("\\s*(?:,|\\by\\b)\\s*")
+
+    const val LOG_KIND = "plan"
+
+    fun check(order: String, validate: (String) -> Boolean, now: Calendar): PlanCheck =
+      when (val parsed = parse(order, now, validate)) {
+        is Parse.Valid -> PlanCheck(order, parsed.spec)
+        is Parse.Invalid -> PlanCheck(order, null, parsed.why)
+      }
 
     fun isOrder(line: String): Boolean = head.containsMatchIn(line.trimStart())
 

@@ -10,9 +10,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import org.json.JSONObject
 
-/** «#insto plan …» after the validator: the parsed plan, or why it was refused. */
-internal data class PlanCheck(override val order: String, val spec: InstinctPlanSpec?, val why: String? = null) : ProposalCheck
-
 /**
  * Runs plans of several steps (1.23.0) on what already exists, without a second infrastructure:
  *
@@ -33,7 +30,7 @@ internal data class PlanCheck(override val order: String, val spec: InstinctPlan
  */
 object InstinctPlanEngine {
   const val ACTION_TICK = "com.example.phone.ACTION_INSTINCT_PLAN_TICK"
-  const val LOG_KIND = "plan"
+  const val LOG_KIND = InstinctPlanSpec.LOG_KIND
   const val APPROVE = "Ejecutar"
   const val DECLINE = "Cancelar"
   const val SWITCHED_OFF = "se apagó «Recibir órdenes»; no se restauró nada."
@@ -66,13 +63,6 @@ object InstinctPlanEngine {
   // ---------------------------------------------------------------------------------------------------------------
   // Grammar and admission
   // ---------------------------------------------------------------------------------------------------------------
-
-  /** The validator's step: the explicit grammar, each action through [InstinctProposalValidator.backgroundAction]. */
-  internal fun check(order: String, validate: (String) -> Boolean, now: Calendar): PlanCheck =
-    when (val parsed = InstinctPlanSpec.parse(order, now, validate)) {
-      is InstinctPlanSpec.Parse.Valid -> PlanCheck(order, parsed.spec)
-      is InstinctPlanSpec.Parse.Invalid -> PlanCheck(order, null, parsed.why)
-    }
 
   /** Every action of [spec], validated again now; null when one is no longer valid. */
   private fun commands(spec: InstinctPlanSpec): List<PhoneCommand>? {

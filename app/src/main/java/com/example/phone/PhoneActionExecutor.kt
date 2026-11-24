@@ -21,7 +21,7 @@ class PhoneActionExecutor(
   /** The media app of the brief operational context, to choose among several sessions instead of asking. */
   private val preferredMediaPackage: () -> String? = { null },
 ) {
-  fun execute(command: PhoneCommand, confirmed: Boolean = false): PhoneActionResult {
+  fun execute(command: PhoneCommand, confirmed: Boolean = false, executionId: String? = null, foreground: Boolean = false): PhoneActionResult {
     // 1.20.0: only what needs a screen waits for the phone to be unlocked; settings and reads run locked.
     if (!LockScreenPolicy.runsLocked(command) && context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true)
       return PhoneActionResult(LOCKED, outcome = PhoneActionOutcome.REJECTED)
@@ -29,7 +29,9 @@ class PhoneActionExecutor(
       PhoneCommandCodec.decode(PhoneCommandCodec.encode(command))
       if(command is PhoneCommand.CalendarEvent && command.beginMillis<=System.currentTimeMillis()) return PhoneActionResult("La fecha del evento ya pasó. No preparé un evento con otra fecha.",outcome=PhoneActionOutcome.REJECTED)
       when (command) {
-        is PhoneCommand.Platform -> PlatformActionExecutor(context).execute(command,confirmed)
+        is PhoneCommand.Platform -> if (command.action == PlatformAction.INSTINCT_CAPABILITY)
+          InstinctDeviceCapabilities.execute(context, command, executionId, foreground)
+        else PlatformActionExecutor(context).execute(command, confirmed)
         is PhoneCommand.Media -> MediaControllerAdapter(context).execute(command,
           if (command.packageName == null) preferredMediaPackage() else null)
         is PhoneCommand.TemporaryMode -> TemporaryModeManager(context).execute(command, confirmed)

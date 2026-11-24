@@ -57,8 +57,25 @@ object InstinctCatalogPublisher {
   /** The catalog now, from the settings in force. */
   fun current(context: Context): InstinctCatalogJson {
     val app = context.applicationContext
+    val channels = channels(app)
+    val enabledCalendars = if (InstinctDeviceCapabilities.granted(app, android.Manifest.permission.READ_CALENDAR))
+      runCatching { InstinctCalendarActions(app.contentResolver).calendars().map { it.id } }.getOrDefault(emptyList())
+        .intersect(InstinctCalendarAccess(app).enabled()).sorted() else emptyList()
+    val availability = InstinctCapabilities.specs.mapValues { (_, spec) ->
+      if (!channels.mailbox) return@mapValues "requiere el buzón firmado"
+      val blocker = runCatching { InstinctDeviceCapabilities.blockers(app, spec) }.getOrElse {
+        InstinctDeviceCapabilities.Block("No se pudo comprobar la disponibilidad.", false)
+      }
+      when {
+        blocker?.pending == true -> "pendiente: ${blocker.reason}"
+        blocker != null -> "no disponible: ${blocker.reason}"
+        spec.id.startsWith("calendar_") && enabledCalendars.isEmpty() -> "no hay calendarios habilitados disponibles"
+        !spec.runsLocked -> "requiere un toque"
+        else -> "disponible"
+      }
+    }
     return InstinctProtocolCatalog.json(InstinctRoutineGrants(app).access().enabledNames(), InstinctAutonomySettings(app).policy(),
-      channels(app), instoVersion())
+      channels, instoVersion(), availability = availability, calendarIds = enabledCalendars)
   }
 
   fun last(context: Context): Last = runCatching {

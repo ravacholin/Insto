@@ -53,7 +53,7 @@ def main():
              "EverydayCommandParser", "ExtendedCommandParser", "CalendarRequestParser", "CalendarSelection", "CalendarSelectionParser",
              "ClockTime", "CommandDuration", "HybridPhoneRouter", "GeminiDecisionsClient", "GroqIntentVerifier", "StructuredCommandClient",
              "ConversationSession", "WorkflowRunner", "TemporaryModePolicy", "MediaSessionPolicy",
-             "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "ProviderHttp", "GeminiTransport", "CapabilityCatalog",
+             "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "ProviderHttp", "GeminiTransport", "CapabilityCatalog", "InstinctCapabilities", "InstinctPlan",
              "DecisionsPolicy", "DecisionsCircuitBreaker", "Interpretation", "CommandDraft", "RequestSafetyPolicy", "GeminiCoordinator", "GeminiDiagnostics",
              "LocalIntentRegistry", "LocalIntentPhrases", "ExtendedLocalIntents", "NativeActionParameters",
              "DocumentNamePolicy", "ConfiguredRoutineStore", "PhrasePatterns", "OperationalContext",
