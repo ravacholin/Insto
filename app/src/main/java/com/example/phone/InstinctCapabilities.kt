@@ -78,7 +78,7 @@ internal object InstinctCapabilities {
     spec("torch", InstinctCategory.LINTERNA, "enabled", "enabled" to flag, permissions = listOf("android.permission.CAMERA")) {
       PhoneCommand.Torch(it.getBoolean("enabled"))
     },
-    silence("silent_on", PlatformAction.SILENT_ON), silence("silent_off", PlatformAction.SILENT_OFF),
+    silence("silent_on", PlatformAction.SILENT_ON, true), silence("silent_off", PlatformAction.SILENT_OFF, true),
     silence("vibrate_on", PlatformAction.VIBRATE_ON),
     silence("dnd_on", PlatformAction.DND_ON, true), silence("dnd_off", PlatformAction.DND_OFF, true),
     spec("media", InstinctCategory.MUSICA, "operation",
@@ -103,9 +103,11 @@ internal object InstinctCapabilities {
       PhoneCommand.Timer(it.getInt("seconds"), it.optString("label"))
     },
     external("clock_alarm", InstinctCategory.RELOJ, "hour minute", "hour" to number(0, 23), "minute" to number(0, 59),
-      "date" to text(10), label) {
-      PhoneCommand.Alarm(it.getInt("hour"), it.getInt("minute"), label = it.optString("label"),
-        date = it.optString("date").takeIf(String::isNotEmpty))
+      "date" to text(10), "days" to CapabilityCatalog.Field("array"), label) {
+      val days = it.optJSONArray("days")?.let { values -> (0 until values.length()).map(values::getInt) }.orEmpty()
+      require(days.distinct().size == days.size && (!it.has("date") || days.isEmpty()))
+      PhoneCommand.Alarm(it.getInt("hour"), it.getInt("minute"), days, it.optString("label"),
+        it.optString("date").takeIf(String::isNotEmpty))
     },
     external("open_app", InstinctCategory.APPS, "package", "package" to text(160)),
     external("open_resource", InstinctCategory.APPS, "url", "url" to text(2000)),
@@ -124,6 +126,8 @@ internal object InstinctCapabilities {
       require(when (rule.kind) {
         "boolean" -> value is Boolean
         "integer" -> (value is Int || value is Long) && (value as Number).toLong() in rule.min!!..rule.max!!
+        "array" -> value is JSONArray && value.length() in 1..7 &&
+          (0 until value.length()).all { index -> (value.get(index) as? Int)?.let { it in 1..7 } == true }
         "string" -> value is String && value.isNotBlank() && value.length <= rule.maxLength &&
           value.none { it.isISOControl() } && (rule.values.isEmpty() || value in rule.values)
         else -> false
@@ -134,7 +138,7 @@ internal object InstinctCapabilities {
       require(span in 1..31L * 86_400_000)
     }
     if (params.has("revision")) require(hash.matches(params.getString("revision")))
-    if (params.has("clockId")) require(hash.matches(params.getString("clockId")))
+    if (params.has("clockId")) require(Regex("e[0-9a-f]{20}").matches(params.getString("clockId")))
     if (id == "open_app") require(pkg.matches(params.getString("package")))
     if (id == "open_resource") {
       val uri = URI.create(params.getString("url"))

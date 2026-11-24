@@ -180,6 +180,12 @@ object InstinctProtocolCatalog {
       InstinctPlanSpec.EXAMPLES.forEach { appendLine(example(it)) }
       appendLine(PLAN_RULE)
       appendLine(PLAN_RESULT)
+      if (mailbox != null) {
+        appendLine()
+        appendLine(InstinctStructuredPlan.GUIDE)
+        appendLine("Usá las secciones «plan_json», «capacidades» y «rutinas» de action=catalogo.")
+        appendLine(example(InstinctStructuredPlan.MEETING_EXAMPLE))
+      }
       appendLine()
       appendLine("Reglas contextuales locales:")
       appendLine("Formato: «${InstinctProposalProtocol.PREFIX} ${ContextRuleSpec.FORM}».")
@@ -300,6 +306,7 @@ object InstinctProtocolCatalog {
   fun json(routines: List<String>, autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(),
     channels: InstinctCatalogChannels = InstinctCatalogChannels(), instoVersion: String,
     availability: Map<String, String> = emptyMap(), calendarIds: List<Long> = emptyList(),
+    calendarWriteIds: List<Long> = emptyList(), calendarLabels: Map<Long, String> = emptyMap(), routineRevisions: Map<String, String> = emptyMap(),
     parse: (String) -> PhoneRoute = PhoneCommandParser()::parse): InstinctCatalogJson {
     fun category(order: String) = (parse(order) as? PhoneRoute.Local)?.command?.let(InstinctCategory::of)?.label
     val quiet = autonomy.quiet
@@ -314,6 +321,9 @@ object InstinctProtocolCatalog {
           else availability[spec.id] ?: "consultar catálogo del teléfono"))
       },
       "calendarios_habilitados" to calendarIds,
+      "calendarios_con_escritura" to calendarWriteIds,
+      "calendarios" to calendarIds.map { mapOf("id" to it, "nombre" to calendarLabels[it].orEmpty(), "escritura" to (it in calendarWriteIds)) },
+      "plan_json" to InstinctStructuredPlan.contract,
       "integraciones" to mapOf("omniremote" to "sin interfaz local compatible", "appfunctions" to "sin proveedor autorizado"),
       "acciones" to InstinctProposalValidator.immediateExamples.map { mapOf("orden" to it, "categoria" to category(it)) },
       "formas" to mapOf(
@@ -341,7 +351,10 @@ object InstinctProtocolCatalog {
       "reglas_contextuales" to mapOf("forma" to ContextRuleSpec.FORM, "orden" to ContextRuleSpec.EXAMPLE,
         "condiciones" to ContextRuleSpec.conditionForms, "regla" to CONTEXT_RULE),
       "consultas" to ProposalCheck.QueryKind.entries.map { mapOf("orden" to it.form, "solo_lectura" to it.readOnly) },
-      "rutinas" to routines.map { mapOf("nombre" to it, "orden" to "$ROUTINE_FORM $it") },
+      "rutinas" to routines.map { name ->
+        mapOf("nombre" to name, "orden" to "$ROUTINE_FORM $name") +
+          listOfNotNull(routineRevisions[name]?.let { "revision" to it })
+      },
       "limites" to mapOf(
         "lineas_por_mensaje" to InstinctProposalProtocol.MAX_LINES,
         "ordenes_automaticas_cada_10_minutos" to 6,

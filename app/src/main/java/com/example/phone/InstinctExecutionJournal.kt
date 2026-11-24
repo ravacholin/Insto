@@ -451,7 +451,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     db.rawQuery("SELECT * FROM plans WHERE id = ?", arrayOf(id)).use { if (it.moveToFirst()) plan(it) else null }
 
   private fun planValues(p: PlanRecord) = ContentValues().apply {
-    put("id", p.id); put("root", p.root); put("line", p.line.take(MAX_TEXT)); put("source", p.source.name); put("message", p.message)
+    put("id", p.id); put("root", p.root); put("line", p.line); put("source", p.source.name); put("message", p.message)
     put("fingerprint", p.fingerprint); put("state", p.state.name); put("block", p.block); put("sub", p.sub); put("branch", p.branch)
     put("fallback", if (p.fallback) 1 else 0); put("approval", p.approval.name); put("created_at", p.createdAt)
     put("updated_at", p.updatedAt); put("deadline", p.deadline); put("wake_at", p.wakeAt); put("trigger", p.trigger?.name)
@@ -483,6 +483,8 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     if (!ExecutionTransitions.allowed(current.state, to)) return@transaction false
     if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.DECISION &&
       clock() >= (current.deadline ?: 0)) return@transaction false
+    if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.PLAN &&
+      current.occurrence?.let { planIn(db, it)?.state != PlanState.RUNNING } != false) return@transaction false
     if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.CONTEXT &&
       !contextEnabled(db, current, clock())) return@transaction false
     db.update("executions", ContentValues().apply {
@@ -554,7 +556,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
 
   private fun values(r: ExecutionRecord) = ContentValues().apply {
     put("execution_id", r.executionId); put("message_id", r.messageId); put("idx", r.index); put("transport", r.transport.name)
-    put("line", r.line.take(MAX_TEXT)); put("received_at", r.receivedAt); put("updated_at", r.updatedAt); put("state", r.state.name)
+    put("line", if (InstinctStructuredPlan.isWireLine(r.line) || InstinctStructuredPlan.isOrder(r.line)) r.line else r.line.take(MAX_TEXT)); put("received_at", r.receivedAt); put("updated_at", r.updatedAt); put("state", r.state.name)
     put("command", r.command); put("result", r.result); put("reason", r.reason); put("occurrence", r.occurrence); put("parent", r.parent)
     put("attempts", r.attempts); put("log_message", r.logMessage); put("owner", r.owner); r.deadline?.let { put("deadline", it) }
     put("reported", r.reported); put("attribution", r.attribution?.name); r.proposalId?.let { put("proposal_id", it) }
@@ -573,30 +575,40 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
       s("reported"), ExecutionAttribution.of(s("attribution")), l("proposal_id"), s("execution_data"))
   }
 
+  /** The executor returned NEEDS_INPUT before side effects. A killed process cannot take this path. */
+  internal fun pausePlanExecution(id: String): Boolean = transaction { db ->
+    db.update("executions", ContentValues().apply {
+      put("state", ExecutionState.WAITING.name)
+      put("updated_at", clock())
+    }, "execution_id = ? AND transport = ? AND state = ? AND owner = ?",
+      arrayOf(id, ExecutionTransport.PLAN.name, ExecutionState.DISPATCHING.name, owner)) == 1
+  }
+
   internal fun takeCalendarUndo(id: String, expected: String): Boolean = transaction { db ->
     db.update("executions", ContentValues().apply { putNull("execution_data") },
       "execution_id = ? AND state = ? AND execution_data = ?", arrayOf(id, ExecutionState.VERIFIED.name, expected)) == 1
   }
 
-  internal fun insertClock(clock: InstinctClockEntry): Boolean = transaction { db ->
+  internal fun insertClock(entry: InstinctClockEntry): Boolean = transaction { db ->
     val active = InstinctClockState.ACTIVE
     val count = db.rawQuery("SELECT COUNT(*) FROM instinct_clock WHERE state IN (?, ?)", active.map { it.name }.toTypedArray())
       .use { it.moveToFirst(); it.getInt(0) }
     if (count >= 12) return@transaction false
     db.insertWithOnConflict("instinct_clock", null, ContentValues().apply {
-      put("id", clock.id)
-      put("at", clock.at)
-      put("elapsed_at", clock.elapsedAt)
-      put("boot", clock.boot)
-      put("label", clock.label)
-      put("state", clock.state.name)
-      put("updated_at", this@InstinctExecutionJournal.clock())
+      put("id", entry.id)
+      put("at", entry.at)
+      put("elapsed_at", entry.elapsedAt)
+      put("boot", entry.boot)
+      put("label", entry.label)
+      put("state", entry.state.name)
+      put("updated_at", clock())
     }, SQLiteDatabase.CONFLICT_IGNORE) != -1L
   }
 
-  internal fun clockEntries(id: String? = null): List<InstinctClockEntry> {
-    val states = InstinctClockState.ACTIVE.map { it.name }.toTypedArray()
-    val where = if (id == null) "state IN (?, ?)" else "id = ?"
+  internal fun clockEntries(id: String? = null, includeFiring: Boolean = false): List<InstinctClockEntry> {
+    val states = (InstinctClockState.ACTIVE + listOfNotNull(InstinctClockState.FIRING.takeIf { includeFiring }))
+      .map { it.name }.toTypedArray()
+    val where = if (id == null) "state IN (${states.joinToString { "?" }})" else "id = ?"
     return database().rawQuery("SELECT id, at, elapsed_at, boot, label, state FROM instinct_clock WHERE $where",
       if (id == null) states else arrayOf(id)).use { cursor ->
       buildList {

@@ -961,3 +961,9 @@ Límites: 6 acciones (se cuentan las alternativas y todas las opciones), 10 paso
 - `ver planes`, `estado de plan <id>`, `cancelar plan <id>` y `reanudar plan <id>` funcionan por cualquier canal; las dos últimas son cambios de programación. En **Ajustes → Propuestas de Instinct → Planes de Instinct** cada plan muestra su estado con Cancelar y, si está suspendido, Reanudar.
 - **Reinicios**: el plan sigue desde su fila. Un proceso nuevo adopta los planes del anterior. Una acción que quedó «despachando» se relee si es un ajuste legible (volumen, linterna, silencio, No molestar) y, si no, queda incierta y el plan se suspende: **nunca se repite**. Una pregunta pendiente reaparece con la misma notificación y una respuesta registrada antes de morir el proceso se aplica al volver. El mismo mensaje entregado dos veces es el mismo plan.
 - **Backup `.insto`**: viajan los planes que todavía no ejecutaron nada (su línea y su vencimiento). Al restaurar quedan esperando «Reactivar Instinct en este teléfono», que los valida de nuevo y los empieza solo si no vencieron. Los planes ya empezados, sus pasos y lo guardado quedan en el teléfono de origen.
+
+## Objetivos y planes estructurados
+
+Desde 1.24.0, las instrucciones para Instinct incluyen un ejemplo de cómo pasar de un objetivo a un plan JSON v1. Instinct lee las capacidades disponibles y el estado fechado, genera el plan y lo manda por el buzón firmado. El ejecutor local usa el diario, la autonomía, las condiciones y las preguntas existentes. Para activar líneas de más de 300 caracteres en la planilla hace falta desplegar el Apps Script actualizado.
+
+El contrato y el ejemplo de la reunión están en `plan_json` del catálogo vivo. Los accesos del dispositivo, los resultados verificables y el procedimiento de prueba física están en la guía de la versión. [Insto 1.24.0](releases/Insto-1.24.0.md)

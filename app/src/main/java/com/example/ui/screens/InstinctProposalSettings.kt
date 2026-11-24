@@ -373,13 +373,19 @@ private fun InstinctDeviceCapabilitiesSection(revision: Int, onChange: () -> Uni
   }
   Text("Calendarios para planes de Instinct", style = MaterialTheme.typography.bodyLarge)
   SettingsDescription("Elegí los calendarios a los que Instinct puede acceder desde el buzón firmado. Las escrituras dependen también de la autonomía y los permisos de Android.")
-  if (missing.isNotEmpty()) TextButton(onClick = { request.launch(missing.toTypedArray()) }) {
+  if (missing.isNotEmpty()) TextButton(onClick = { request.launch(arrayOf(if (read in missing) read else write)) }) {
     Text(if (read in missing) "Permitir acceso al calendario" else "Permitir cambios en el calendario")
   }
   val enabled = remember(revision) { grants.enabled() }
+  val writable = remember(revision) { grants.enabled(write = true) }
   calendars.forEach { calendar ->
-    SettingsSwitch(calendar.label, calendar.id in enabled, { grants.set(calendar.id, it); onChange() },
-      if (calendar.writable) "Admite cambios." else "Solo lectura.")
+    SettingsSwitch("Leer ${calendar.label}", calendar.id in enabled, { grants.set(calendar.id, it); onChange() },
+      "Comparte el nombre del calendario con Instinct y permite consultarlo desde el buzón firmado.")
+    if (calendar.writable && calendar.id in enabled) {
+      SettingsSwitch("Modificar ${calendar.label}", calendar.id in writable,
+        { grants.set(calendar.id, it, write = true); onChange() },
+        "Incluye crear, cambiar y cancelar eventos individuales.")
+    }
   }
   calendarUndo.forEach { row ->
     TextButton(onClick = { scope.launch {
@@ -409,14 +415,27 @@ private fun InstinctPlansList(revision: Int, onChange: () -> Unit) {
   LaunchedEffect(revision) { plans = withContext(Dispatchers.IO) { engine.plans(context) } }
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_plans")) {
     Text("Planes de Instinct", style = MaterialTheme.typography.bodyLarge)
-    if (plans.isEmpty()) SettingsDescription("No hay planes. Instinct los pide con «#insto plan: …».")
+    if (plans.isEmpty()) SettingsDescription("Todavía no hay planes de Instinct.")
     else {
       TextButton(onClick = onChange) { Text("Actualizar planes") }
       plans.forEach { plan ->
-        SettingsDescription(com.example.phone.PlanText.line(plan, null) + " · " + plan.line.removePrefix("plan").trimStart(':', ' ').take(120))
+        val review = engine.review(plan)
+        SettingsDescription(com.example.phone.PlanText.line(plan, null) +
+          if (review.isEmpty()) " · " + plan.line.removePrefix("plan").trimStart(':', ' ').take(120) else "")
+        if (!plan.state.terminal) review.forEach { SettingsDescription(it) }
         if (!plan.state.terminal) TextButton(onClick = {
           scope.launch { feedback = withContext(Dispatchers.IO) { engine.cancel(context, plan.shortId) }; onChange() }
         }, modifier = Modifier.testTag("instinct_plan_cancel")) { Text("Cancelar ${plan.shortId}") }
+        if (plan.state == com.example.phone.PlanState.BLOCKED) {
+          plan.reason?.let { SettingsDescription(it) }
+          val activity = context as? android.app.Activity
+          if (activity != null) TextButton(onClick = {
+            scope.launch {
+              feedback = withContext(Dispatchers.IO) { engine.continueInForeground(activity, plan.shortId) }
+              onChange()
+            }
+          }) { Text("Continuar ${plan.shortId}") }
+        }
         if (plan.state == com.example.phone.PlanState.SUSPENDED) TextButton(onClick = {
           scope.launch { feedback = withContext(Dispatchers.IO) { engine.resume(context, plan.shortId) }; onChange() }
         }, modifier = Modifier.testTag("instinct_plan_resume")) { Text("Reanudar ${plan.shortId}") }

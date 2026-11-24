@@ -55,7 +55,7 @@ internal object InstinctLocalClock {
       makeChannel(context)
       arm(context, entry)
       if (!journal.moveClock(id, InstinctClockState.REGISTERING, InstinctClockState.SCHEDULED)) return uncertain()
-      PhoneActionResult("Programado en Insto · ${id.take(8)}.", verifiedLocally = true,
+      PhoneActionResult("Programado en Insto · $id.", verifiedLocally = true,
         executionData = JSONObject().put("clockId", id).toString())
     } catch (_: Exception) {
       journal.moveClock(id, InstinctClockState.REGISTERING, InstinctClockState.UNCERTAIN)
@@ -80,17 +80,24 @@ internal object InstinctLocalClock {
   fun recover(context: Context, id: String): PhoneActionResult? {
     val entry = journal(context).clockEntries(id).singleOrNull() ?: return null
     if (entry.state !in setOf(InstinctClockState.SCHEDULED, InstinctClockState.FIRED)) return null
-    return PhoneActionResult("Programación de Insto registrada.", verifiedLocally = true,
+    return PhoneActionResult("Programación de Insto registrada · $id.", verifiedLocally = true,
       executionData = JSONObject().put("clockId", id).toString())
   }
 
   fun rearm(context: Context) = synchronized(lock) {
-    if (!InstinctDeviceCapabilities.granted(context, android.Manifest.permission.SCHEDULE_EXACT_ALARM)) return
     val now = System.currentTimeMillis()
-    for (entry in pending(context)) {
+    val canSchedule = InstinctDeviceCapabilities.granted(context, android.Manifest.permission.SCHEDULE_EXACT_ALARM)
+    val journal = journal(context)
+    for (entry in journal.clockEntries(includeFiring = true)) {
+      if (entry.state == InstinctClockState.REGISTERING || entry.state == InstinctClockState.FIRING) {
+        if (journal.moveClock(entry.id, entry.state, InstinctClockState.UNCERTAIN))
+          report(context, entry, "La programación o entrega del aviso quedó incierta.")
+        continue
+      }
+      if (!canSchedule) continue
       val late = if (useElapsed(context, entry)) SystemClock.elapsedRealtime() - checkNotNull(entry.elapsedAt) else now - entry.at
       if (late > FIRED_LATE_LIMIT) {
-        if (journal(context).moveClock(entry.id, InstinctClockState.SCHEDULED, InstinctClockState.MISSED))
+        if (journal.moveClock(entry.id, InstinctClockState.SCHEDULED, InstinctClockState.MISSED))
           report(context, entry, "Venció mientras el reloj de Insto no estaba disponible.")
       } else runCatching { arm(context, entry) }
     }
@@ -102,8 +109,13 @@ internal object InstinctLocalClock {
   private fun arm(context: Context, entry: InstinctClockEntry) {
     val manager = checkNotNull(context.getSystemService(AlarmManager::class.java))
     val intent = checkNotNull(pendingIntent(context, entry.id, PendingIntent.FLAG_UPDATE_CURRENT))
-    if (useElapsed(context, entry)) manager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, checkNotNull(entry.elapsedAt), intent)
-    else manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, entry.at, intent)
+    if (entry.elapsedAt == null) {
+      val show = PendingIntent.getActivity(context, 0, Intent(context, com.example.MainActivity::class.java),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+      manager.setAlarmClock(AlarmManager.AlarmClockInfo(entry.at, show), intent)
+    } else if (useElapsed(context, entry)) {
+      manager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, checkNotNull(entry.elapsedAt), intent)
+    } else manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, entry.at, intent)
   }
 
   private fun pendingIntent(context: Context, id: String, flags: Int): PendingIntent? =
@@ -153,6 +165,10 @@ internal object InstinctLocalClock {
 
 class InstinctClockReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
-    runCatching { InstinctLocalClock.receive(context.applicationContext, intent) }
+    val pending = goAsync()
+    Thread({
+      try { runCatching { InstinctLocalClock.receive(context.applicationContext, intent) } }
+      finally { pending.finish() }
+    }, "insto-reloj").start()
   }
 }

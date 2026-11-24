@@ -14,12 +14,13 @@ internal class InstinctCalendarActions(private val resolver: ContentResolver) {
 
   private data class Event(
     val id: Long, val calendar: Long, val begin: Long, val end: Long, val title: String?, val description: String?,
-    val zone: String?, val status: Int?, val safeToChange: Boolean,
+    val zone: String?, val status: Int?, val safeToChange: Boolean, val localDetails: Map<String, String?>,
   ) {
     val revision: String
       get() = sha256(JSONObject().put("id", id).put("calendar", calendar).put("begin", begin).put("end", end)
         .put("title", title ?: JSONObject.NULL).put("description", description ?: JSONObject.NULL)
-        .put("zone", zone ?: JSONObject.NULL).put("status", status ?: JSONObject.NULL).put("safe", safeToChange).toString())
+        .put("zone", zone ?: JSONObject.NULL).put("status", status ?: JSONObject.NULL).put("safe", safeToChange)
+        .put("details", JSONObject().apply { localDetails.forEach { (key, value) -> put(key, value ?: JSONObject.NULL) } }).toString())
 
     fun reference() = JSONObject().put("calendarId", calendar).put("eventId", id).put("revision", revision)
   }
@@ -36,8 +37,8 @@ internal class InstinctCalendarActions(private val resolver: ContentResolver) {
 
   fun execute(capability: String, params: JSONObject): PhoneActionResult {
     val calendar = params.getLong("calendarId")
-    val access = calendars().singleOrNull { it.id == calendar } ?: return reject("El calendario habilitado ya no está disponible.")
-    if (capability != "calendar_query" && !access.writable) return reject("El calendario es de solo lectura.")
+    val access = DeviceCalendar(resolver).accessLevel(calendar) ?: return reject("El calendario habilitado ya no está disponible.")
+    if (capability != "calendar_query" && access < Calendars.CAL_ACCESS_CONTRIBUTOR) return reject("El calendario es de solo lectura.")
     return when (capability) {
       "calendar_query" -> query(calendar, params)
       "calendar_create" -> create(calendar, params)
@@ -52,20 +53,29 @@ internal class InstinctCalendarActions(private val resolver: ContentResolver) {
       ContentUris.appendId(this, params.getLong("endMillis"))
     }.build()
     val filter = params.optString("title").takeIf(String::isNotEmpty)
-    val matches = checkNotNull(resolver.query(uri, arrayOf(Instances.EVENT_ID, Events.TITLE),
+    data class Match(val id: Long, val begin: Long, val end: Long)
+    var limitReached = false
+    val matches = checkNotNull(resolver.query(uri, arrayOf(Instances.EVENT_ID, Events.TITLE, Instances.BEGIN, Instances.END),
       "${Events.CALENDAR_ID} = ? AND (${Events.STATUS} IS NULL OR ${Events.STATUS} != ?)",
       arrayOf(calendar.toString(), Events.STATUS_CANCELED.toString()), Instances.BEGIN)).use { cursor ->
       buildList {
-        while (size <= 20 && cursor.moveToNext()) {
-          if (filter == null || cursor.getString(1)?.equals(filter, ignoreCase = true) == true) add(cursor.getLong(0))
+        var scanned = 0
+        while (cursor.moveToNext()) {
+          if (++scanned > 2000 || size >= 21) {
+            limitReached = true
+            break
+          }
+          if (filter == null || cursor.getString(1)?.equals(filter, ignoreCase = true) == true) add(Match(cursor.getLong(0), cursor.getLong(2), cursor.getLong(3)))
         }
       }
     }
-    val single = matches.singleOrNull()?.let(::event)?.takeIf { it.calendar == calendar && it.safeToChange }
-    val count = if (matches.size > 20) "más de 20" else matches.size.toString()
-    val detail = if (single == null) "$count coincidencias."
-      else "1 coincidencia · inicio ${single.begin} · fin ${single.end} · evento ${single.id}."
-    return verified(detail, single?.reference())
+    val single = matches.singleOrNull()?.takeUnless { limitReached }?.let { event(it.id) }
+      ?.takeIf { it.calendar == calendar && it.safeToChange }
+    val count = if (limitReached) "Al menos ${matches.size}" else matches.size.toString()
+    val times = matches.take(3).joinToString(", ") { "${it.begin}–${it.end}" }
+    val detail = if (single == null) "$count coincidencias." + times.takeIf(String::isNotEmpty)?.let { " Horarios: $it." }.orEmpty()
+      else "1 coincidencia · inicio ${single.begin} · fin ${single.end} · evento ${single.id} · revisión ${single.revision}."
+    return verified(detail + if (limitReached) " Acotá el intervalo para completar la consulta." else "", single?.reference())
   }
 
   private fun create(calendar: Long, params: JSONObject): PhoneActionResult {
@@ -118,7 +128,7 @@ internal class InstinctCalendarActions(private val resolver: ContentResolver) {
     val row = event(data.getLong("eventId")) ?: return reject("El evento ya no existe.")
     if (!row.safeToChange || row.calendar != data.getLong("calendarId") || row.revision != data.getString("revision"))
       return reject("El evento cambió después de la ejecución.")
-    if (calendars().none { it.id == row.calendar && it.writable }) return reject("El calendario es de solo lectura.")
+    if ((DeviceCalendar(resolver).accessLevel(row.calendar) ?: 0) < Calendars.CAL_ACCESS_CONTRIBUTOR) return reject("El calendario es de solo lectura.")
     val (where, args) = compare(row)
     return mutation {
       if (data.getString("undo") == "create") {
@@ -152,21 +162,24 @@ internal class InstinctCalendarActions(private val resolver: ContentResolver) {
     }
   }
 
+  private val localDetails = listOf(Events.EVENT_LOCATION, Events.AVAILABILITY, Events.ACCESS_LEVEL, Events.HAS_ALARM)
+
   private fun event(id: Long): Event? = checkNotNull(resolver.query(ContentUris.withAppendedId(Events.CONTENT_URI, id),
     arrayOf(Events.CALENDAR_ID, Events.DTSTART, Events.DTEND, Events.TITLE, Events.DESCRIPTION, Events.EVENT_TIMEZONE,
       Events.STATUS, Events.DELETED, Events.RRULE, Events.RDATE, Events.ORIGINAL_ID, Events.ORIGINAL_SYNC_ID,
-      Events.ALL_DAY, Events.HAS_ATTENDEE_DATA), null, null, null)).use { cursor ->
+      Events.ALL_DAY, Events.HAS_ATTENDEE_DATA) + localDetails, null, null, null)).use { cursor ->
     if (!cursor.moveToFirst() || cursor.getInt(7) != 0 || cursor.getInt(6) == Events.STATUS_CANCELED) return@use null
     Event(id, cursor.getLong(0), cursor.getLong(1), cursor.getLong(2), cursor.getString(3), cursor.getString(4),
       cursor.getString(5), if (cursor.isNull(6)) null else cursor.getInt(6),
       cursor.getString(8).isNullOrEmpty() && cursor.getString(9).isNullOrEmpty() && cursor.isNull(10) &&
-        cursor.isNull(11) && cursor.getInt(12) == 0 && cursor.getInt(13) == 0)
+        cursor.isNull(11) && cursor.getInt(12) == 0 && cursor.getInt(13) == 0,
+      localDetails.associateWith { cursor.getString(cursor.getColumnIndexOrThrow(it)) })
   }
 
   private fun compare(row: Event): Pair<String, Array<String>> {
     val fields = linkedMapOf(Events._ID to row.id.toString(), Events.CALENDAR_ID to row.calendar.toString(),
       Events.DTSTART to row.begin.toString(), Events.DTEND to row.end.toString(), Events.TITLE to row.title,
-      Events.DESCRIPTION to row.description, Events.EVENT_TIMEZONE to row.zone, Events.STATUS to row.status?.toString())
+      Events.DESCRIPTION to row.description, Events.EVENT_TIMEZONE to row.zone, Events.STATUS to row.status?.toString()) + row.localDetails
     val where = fields.entries.joinToString(" AND ") { (key, value) -> if (value == null) "$key IS NULL" else "$key = ?" }
     return ("$where AND ${Events.DELETED} = 0 AND COALESCE(${Events.RRULE}, '') = '' AND COALESCE(${Events.RDATE}, '') = ''" +
       " AND ${Events.ORIGINAL_ID} IS NULL AND ${Events.ORIGINAL_SYNC_ID} IS NULL AND ${Events.ALL_DAY} = 0" +

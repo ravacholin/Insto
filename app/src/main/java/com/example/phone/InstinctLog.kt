@@ -247,15 +247,15 @@ class InstinctLogClient(base: OkHttpClient = OkHttpClient()) {
   }
 
   /** A GET of the Apps Script with [query] parameters (encoded), following its redirect. */
-  fun get(url: String, query: List<Pair<String, String>>): Raw {
+  fun get(url: String, query: List<Pair<String, String>>, mailbox: Boolean = false): Raw {
     if (!InstinctLogConfig.validUrl(url)) return Raw.Failed(Failure.NOT_CONFIGURED)
     val target = url.trim().toHttpUrlOrNull()?.newBuilder()?.apply { query.forEach { (k, v) -> addQueryParameter(k, v) } }?.build()
       ?: return Raw.Failed(Failure.NOT_CONFIGURED)
-    return try { exchange(Request.Builder().url(target).get().build()) } catch (_: IOException) { Raw.Failed(Failure.NETWORK) }
+    return try { exchange(Request.Builder().url(target).get().build(), if (mailbox) 524_288 else MAX_RESPONSE_BYTES) } catch (_: IOException) { Raw.Failed(Failure.NETWORK) }
   }
 
   /** The request, then at most [MAX_HOPS] redirects, each one a GET to a Google host over HTTPS. */
-  private fun exchange(first: Request): Raw {
+  private fun exchange(first: Request, limit: Int = MAX_RESPONSE_BYTES): Raw {
     var request = first
     repeat(MAX_HOPS + 1) {
       http.newCall(request).execute().use { response ->
@@ -263,7 +263,7 @@ class InstinctLogClient(base: OkHttpClient = OkHttpClient()) {
         if (code !in REDIRECTS) return when {
           code == 401 || code == 403 -> Raw.Failed(Failure.TOKEN)
           code !in 200..299 -> Raw.Failed(Failure.HTTP, code)
-          else -> Raw.Body(response.body?.let { readLimited(it.byteStream()) })
+          else -> Raw.Body(response.body?.let { readLimited(it.byteStream(), limit) })
         }
         val location = response.header("Location")?.let { response.request.url.resolve(it) }
         if (location != null && location.host in LOGIN_HOSTS) return Raw.Failed(Failure.LOGIN)
@@ -274,8 +274,8 @@ class InstinctLogClient(base: OkHttpClient = OkHttpClient()) {
     return Raw.Failed(Failure.INVALID)
   }
 
-  private fun readLimited(stream: java.io.InputStream): String? = runCatching {
-    stream.readBounded(MAX_RESPONSE_BYTES) { IOException("Respuesta demasiado grande") }.toString(Charsets.UTF_8)
+  private fun readLimited(stream: java.io.InputStream, limit: Int): String? = runCatching {
+    stream.readBounded(limit) { IOException("Respuesta demasiado grande") }.toString(Charsets.UTF_8)
   }.getOrNull()
 
   companion object {

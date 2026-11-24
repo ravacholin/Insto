@@ -420,6 +420,7 @@ class InstinctScheduleReceiver : BroadcastReceiver() {
       InstinctPlanEngine.ACTION_TICK -> plans(context)
       Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_TIME_CHANGED,
       Intent.ACTION_TIMEZONE_CHANGED, AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
+        runCatching { InstinctCatalogPublisher.changed(context) }
         runCatching { InstinctScheduler.rearm(context, zoneChanged = intent.action == Intent.ACTION_TIMEZONE_CHANGED) }
         if (InstinctExecutions.existingJournal(context) != null) { contextRules(context); plans(context) }
       }

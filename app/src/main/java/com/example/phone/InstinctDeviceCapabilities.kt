@@ -12,15 +12,33 @@ import org.json.JSONObject
 
 /** Grants are tied to this phone's provider IDs and are intentionally absent from portable backups. */
 internal class InstinctCalendarAccess(private val context: Context) {
-  private val prefs = context.getSharedPreferences("instinct-calendar-access", Context.MODE_PRIVATE)
+  private val file = android.util.AtomicFile(java.io.File(context.noBackupFilesDir, "instinct-calendar-access.json"))
 
-  fun enabled(): Set<Long> = prefs.getStringSet("calendars", emptySet()).orEmpty().mapNotNull(String::toLongOrNull).toSet()
+  fun enabled(write: Boolean = false): Set<Long> {
+    val array = read().optJSONArray(if (write) "writable" else "calendars") ?: return emptySet()
+    return (0 until array.length()).mapNotNull { index -> array.optLong(index).takeIf { it > 0 } }.toSet()
+  }
 
-  fun set(id: Long, enabled: Boolean) {
-    val current = this.enabled()
-    prefs.edit().putStringSet("calendars", (if (enabled) current + id else current - id).map(Long::toString).toSet()).apply()
+  fun set(id: Long, enabled: Boolean, write: Boolean = false) = synchronized(lock) {
+    if (write && enabled && id !in this.enabled()) return
+    val current = this.enabled(write)
+    val key = if (write) "writable" else "calendars"
+    val settings = read().put(key, org.json.JSONArray(if (enabled) current + id else current - id))
+    if (!write && !enabled) settings.put("writable", org.json.JSONArray(this.enabled(write = true) - id))
+    val stream = file.startWrite()
+    try {
+      stream.write(settings.toString().toByteArray(Charsets.UTF_8))
+      file.finishWrite(stream)
+    } catch (error: Exception) {
+      file.failWrite(stream)
+      throw error
+    }
     InstinctCatalogPublisher.changed(context)
   }
+
+  private fun read() = runCatching { JSONObject(file.readFully().toString(Charsets.UTF_8)) }.getOrElse { JSONObject() }
+
+  companion object { private val lock = Any() }
 }
 
 /** A missing prerequisite is distinct from a failed or uncertain action. Null means the action can be dispatched. */
@@ -40,7 +58,7 @@ internal object InstinctDeviceCapabilities {
 
   fun blockers(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject? = null): Block? {
     if (spec.id.startsWith("calendar_")) {
-      val grants = InstinctCalendarAccess(context).enabled()
+      val grants = InstinctCalendarAccess(context).enabled(write = spec.id != "calendar_query")
       val calendar = params?.optLong("calendarId")
       if (grants.isEmpty() || calendar != null && calendar !in grants) {
         return Block("El calendario no está habilitado para Instinct en este teléfono.", pending = false)
@@ -65,6 +83,7 @@ internal object InstinctDeviceCapabilities {
           Block("La aplicación elegida no se puede abrir.", false) else null
       }
       "open_resource" -> Intent(Intent.ACTION_VIEW, Uri.parse(params?.getString("url") ?: "https://example.org"))
+        .addCategory(Intent.CATEGORY_BROWSABLE)
       else -> null
     }
     return if (handler != null && handler.resolveActivity(context.packageManager) == null)

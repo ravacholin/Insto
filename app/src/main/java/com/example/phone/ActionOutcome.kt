@@ -71,7 +71,7 @@ object ActionOutcomeRules {
         .takeIf { it.verdict == OutcomeVerdict.VERIFIED } ?: Observation(OutcomeVerdict.NOT_OBSERVABLE, detail = HANDED_OFF)
         else Observation(OutcomeVerdict.NOT_OBSERVABLE, detail = HANDED_OFF)
       PhoneActionOutcome.COMPLETED -> {
-        if (result.verifiedLocally) return Observation(OutcomeVerdict.VERIFIED, detail = result.message)
+        if (result.verifiedLocally) return Observation(OutcomeVerdict.VERIFIED, detail = "resultado local comprobado")
       }
     }
     return when (command) {

@@ -149,6 +149,98 @@ class InstinctPlanFlowTest {
   private fun tap(notification: Notification, index: Int) =
     InstinctQuestionNotifications.handle(app, shadowOf(notification.actions[index].actionIntent).savedIntent)
 
+  @Test fun `a signed meeting plan schedules the timer while locked and restores DND after the event`() {
+    InstinctProposalCenter.keyguardLocked = { true }
+    shadowOf(app.getSystemService(android.app.KeyguardManager::class.java)).setKeyguardLocked(true)
+    shadowOf(app.getSystemService(android.os.PowerManager::class.java)).setIsInteractive(false)
+    shadowOf(app).grantPermissions(Manifest.permission.READ_CALENDAR)
+    org.robolectric.shadows.ShadowAlarmManager.setCanScheduleExactAlarms(true)
+    try {
+      events = listOf(CalendarInstance(instanceId = 7, eventId = 70, begin = wall + 30 * 60_000, end = wall + 90 * 60_000))
+      val incoming = order("#insto ${InstinctStructuredPlan.MEETING_EXAMPLE}")
+      push(incoming)
+      val plan = planOf(incoming)
+      assertEquals(PlanState.WAITING, plan.state)
+      assertEquals(1, InstinctLocalClock.pending(app).size)
+      push(incoming)
+      assertEquals(1, InstinctLocalClock.pending(app).size)
+      wall += 30 * 60_000
+      InstinctPlanEngine.reset()
+      InstinctPlanEngine.background = { it.run() }
+      InstinctPlanEngine.alarms = { _, _ -> }
+      InstinctPlanEngine.recover(app)
+      assertTrue(dnd())
+      wall += 60 * 60_000
+      InstinctPlanEngine.recover(app)
+      assertFalse(dnd())
+      assertEquals(PlanState.DONE, planOf(incoming).state)
+      assertTrue(chat.isEmpty())
+    } finally {
+      org.robolectric.shadows.ShadowAlarmManager.setCanScheduleExactAlarms(false)
+    }
+  }
+
+  @Test fun `a missing permission blocks dispatch and resumes without duplicate effects`() {
+    shadowOf(notifications).setNotificationPolicyAccessGranted(false)
+    val incoming = order("""#insto plan-json {"version":1,"steps":[{"id":"focus","kind":"action","capability":"dnd_on","params":{}}]}""")
+    push(incoming)
+    val waiting = planOf(incoming)
+    assertEquals(PlanState.BLOCKED, waiting.state)
+    assertEquals(0, stepRows(waiting).single().attempts)
+    shadowOf(notifications).setNotificationPolicyAccessGranted(true)
+    InstinctPlanEngine.recover(app)
+    assertEquals(PlanState.DONE, planOf(incoming).state)
+    assertEquals(1, stepRows(waiting).single().attempts)
+    assertTrue(dnd())
+  }
+
+  @Test fun `a structured plan runs an authorized routine and a dependent direct action`() {
+    val routine = ConfiguredRoutine("Concentración", listOf(PhoneCommand.Volume(VolumeOp.SET, 20),
+      PhoneCommand.Platform(PlatformAction.DND_ON)))
+    ConfiguredRoutineStore(File(app.noBackupFilesDir, "configured-routines.json")).save(listOf(routine))
+    val grants = InstinctRoutineGrants(app)
+    assertTrue(grants.set(routine, true))
+    val payload = """#insto plan-json {"version":1,"steps":[{"id":"r","kind":"routine","name":"Concentración","revision":"${InstinctRoutines.hash(routine)}"},{"id":"v","kind":"action","requires":["r"],"capability":"volume","params":{"percent":40}}]}"""
+    try {
+      val incoming = order(payload)
+      push(incoming)
+      assertEquals(PlanState.DONE, planOf(incoming).state)
+      assertTrue(dnd())
+      assertEquals(percent(40), volume())
+      assertEquals(3, stepRows(planOf(incoming)).size)
+      grants.set(routine, false)
+      val refused = order(payload)
+      push(refused)
+      assertNull(journal.plan(PlanIds.of(journal.forMessage(refused.id).single().executionId)))
+    } finally {
+      grants.set(routine, false)
+      File(app.noBackupFilesDir, "configured-routines.json").delete()
+    }
+  }
+
+  @Test fun `an uncertain step is never repeated and its dependents are skipped on resume`() {
+    val invoked = mutableListOf<Int>()
+    InstinctPlanEngine.execute = { context, command ->
+      val volume = command as PhoneCommand.Volume
+      invoked += volume.percent
+      if (volume.percent == 10) PhoneActionResult("Sin comprobación", outcome = PhoneActionOutcome.UNCERTAIN)
+      else PhoneActionExecutor(context).execute(command)
+    }
+    val payload = """#insto plan-json {"version":1,"steps":[
+      {"id":"a","kind":"action","capability":"volume","params":{"percent":10}},
+      {"id":"b","kind":"action","requires":["a"],"capability":"volume","params":{"percent":20}},
+      {"id":"c","kind":"action","capability":"volume","params":{"percent":30}}]}""".replace("\n", "")
+    val incoming = order(payload)
+    push(incoming)
+    val plan = planOf(incoming)
+    assertEquals(PlanState.SUSPENDED, plan.state)
+    InstinctPlanEngine.recover(app)
+    assertEquals(listOf(10), invoked)
+    InstinctPlanEngine.resume(app, plan.shortId)
+    assertEquals(listOf(10, 30), invoked)
+    assertEquals(PlanState.DONE, planOf(incoming).state)
+  }
+
   @Test fun `a plan runs each step after checking the previous one, with the phone locked, and reports only to the log`() {
     InstinctProposalCenter.keyguardLocked = { true }
     shadowOf(app.getSystemService(android.os.PowerManager::class.java)).setIsInteractive(false)

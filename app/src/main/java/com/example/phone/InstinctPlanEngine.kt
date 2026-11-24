@@ -1,11 +1,14 @@
 package com.example.phone
 
+import android.app.Activity
+import android.app.KeyguardManager
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import java.util.Calendar
+import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import org.json.JSONObject
@@ -36,7 +39,8 @@ object InstinctPlanEngine {
   const val SWITCHED_OFF = "se apagó «Recibir órdenes»; no se restauró nada."
   const val NEEDS_QUESTIONS = "necesita preguntarte y la categoría Preguntas está en Nunca."
   const val CHANGED = "cambió la configuración de Insto (contacto o WhatsApp); no se sigue."
-  private const val MAX_ITERATIONS = 64
+  private const val MAX_ITERATIONS = 192
+  private const val CALENDAR_PERMISSION = "Concedé permiso de lectura del calendario en Ajustes."
 
   /** Runs the plans off the caller; tests run them inline. */
   internal var background: (Runnable) -> Unit = { executor.execute(it) }
@@ -55,6 +59,8 @@ object InstinctPlanEngine {
   private val running: MutableSet<String> = ConcurrentHashMap.newKeySet()
   private val again: MutableSet<String> = ConcurrentHashMap.newKeySet()
   private val specs = ConcurrentHashMap<String, InstinctPlanSpec>()
+  private data class Foreground(val position: String, val activity: WeakReference<Activity>, val expiresAt: Long)
+  private val foreground = ConcurrentHashMap<String, Foreground>()
 
   private fun journal(context: Context) = InstinctExecutions.journal(context)
   private fun now() = InstinctExecutionJournal.clock()
@@ -64,21 +70,50 @@ object InstinctPlanEngine {
   // Grammar and admission
   // ---------------------------------------------------------------------------------------------------------------
 
-  /** Every action of [spec], validated again now; null when one is no longer valid. */
-  private fun commands(spec: InstinctPlanSpec): List<PhoneCommand>? {
+  private fun routine(app: Context, step: PlanStep.Routine): List<PhoneCommand>? =
+    InstinctRoutineGrants(app).access().resolve(step.name)
+      ?.takeIf { InstinctRoutines.hash(it) == step.revision }?.commands
+
+  /** Every branch, alternative and approved routine participates in admission and the initial policy decision. */
+  private fun commands(app: Context, spec: InstinctPlanSpec): List<PhoneCommand>? {
     val parser = PhoneCommandParser()
     val now = calendarAt(now())
-    return spec.actionLines.map { InstinctProposalValidator.backgroundAction(it, parser, now) ?: return null }
+    val commands = ArrayList<PhoneCommand>()
+    for ((index, step) in spec.steps.withIndex()) {
+      if (step is PlanStep.Routine) {
+        val expanded = routine(app, step) ?: return null
+        if (expanded.any { !LockScreenPolicy.runsLocked(it) } &&
+          (index != spec.steps.lastIndex || expanded.dropLast(1).any { !LockScreenPolicy.runsLocked(it) })) return null
+        commands += expanded
+      }
+      for (action in step.actions) {
+        commands += action.invocation?.command(preview = true)
+          ?: InstinctProposalValidator.backgroundAction(action.line, parser, now) ?: return null
+        action.fallback?.let { line -> commands += action.alternative?.command(preview = true)
+          ?: InstinctProposalValidator.backgroundAction(line, parser, now) ?: return null }
+      }
+    }
+    return commands.takeIf { !spec.structured || it.size <= InstinctStructuredPlan.MAX_ACTIONS }
   }
 
-  /** What a plan would need from the policy now: Refuse, Wait (one approval) or Run. Nothing is consumed. */
-  private fun refusal(context: Context, spec: InstinctPlanSpec, commands: List<PhoneCommand>): String? {
+  private fun refusal(context: Context, spec: InstinctPlanSpec, commands: List<PhoneCommand>, source: ProposalSource): String? {
+    if (spec.structured && source != ProposalSource.BUZON) return "Los planes JSON requieren el buzón firmado."
     val policy = InstinctAutonomySettings(context).policy()
-    if (policy.refuses(commands, routine = false)) return InstinctAutonomyPolicy.REFUSED
+    if (policy.refuses(commands, routine = spec.hasRoutines)) return InstinctAutonomyPolicy.REFUSED
     if (spec.steps.any { it is PlanStep.Decide } && policy.level(InstinctCategory.PREGUNTAS) == InstinctAutonomy.NUNCA)
       return NEEDS_QUESTIONS
+    for (action in spec.steps.flatMap { it.actions }) {
+      for (invocation in listOfNotNull(action.invocation, action.alternative)) {
+        val blocker = InstinctDeviceCapabilities.blockers(context, invocation.spec, JSONObject(invocation.parameters))
+        if (blocker != null && !blocker.pending) return blocker.reason
+      }
+    }
     return null
   }
+
+  private fun parse(line: String, calendar: Calendar, legacyValidate: (String) -> Boolean): InstinctPlanSpec.Parse =
+    if (InstinctStructuredPlan.isOrder(line)) InstinctStructuredPlan.parse(line, calendar)
+    else InstinctPlanSpec.parse(line, calendar, legacyValidate)
 
   internal data class Admission(val entry: AckEntry, val plan: String? = null)
 
@@ -90,8 +125,8 @@ object InstinctPlanEngine {
     fingerprint: String): Admission {
     val app = context.applicationContext
     val spec = check.spec ?: return Admission(AckEntry(AckKind.ERROR, check.order, "plan no válido: ${check.why ?: InstinctPlanSpec.INVALID}"))
-    val commands = commands(spec) ?: return Admission(AckEntry(AckKind.ERROR, check.order, InstinctPlanSpec.INVALID))
-    refusal(app, spec, commands)?.let { return Admission(AckEntry(AckKind.ERROR, check.order, it)) }
+    val commands = commands(app, spec) ?: return Admission(AckEntry(AckKind.ERROR, check.order, InstinctPlanSpec.INVALID))
+    refusal(app, spec, commands, source)?.let { return Admission(AckEntry(AckKind.ERROR, check.order, it)) }
     if (execution == null || fingerprint.isEmpty() || !InstinctExecutions.begin(app, execution, null))
       return Admission(AckEntry(AckKind.ERROR, check.order, InstinctProposalCenter.NOT_RECORDED))
     val id = PlanIds.of(execution)
@@ -114,13 +149,18 @@ object InstinctPlanEngine {
   internal fun probe(context: Context, check: PlanCheck, source: ProposalSource): InstinctProbe.Verdict {
     val app = context.applicationContext
     val spec = check.spec ?: return InstinctProbe.Verdict.Invalid("plan no válido: ${check.why ?: InstinctPlanSpec.INVALID}")
-    val commands = commands(spec) ?: return InstinctProbe.Verdict.Invalid(InstinctPlanSpec.INVALID)
-    refusal(app, spec, commands)?.let {
+    val commands = commands(app, spec) ?: return InstinctProbe.Verdict.Invalid(InstinctPlanSpec.INVALID)
+    refusal(app, spec, commands, source)?.let {
       return if (it == InstinctAutonomyPolicy.REFUSED) InstinctProbe.Verdict.Refused else InstinctProbe.Verdict.Invalid(it)
     }
     val label = "plan de ${spec.summary}"
-    return when (val gate = InstinctGatePreview.preview(commands, false, InstinctProposalCenter.snapshot(app, foreground = false, source))) {
-      InstinctAutonomyGate.Gate.Run -> InstinctProbe.Verdict.Alone(label)
+    val pending = if (spec.structured) {
+      spec.steps.flatMap { it.actions }.flatMap { listOfNotNull(it.invocation, it.alternative) }.firstNotNullOfOrNull {
+        InstinctDeviceCapabilities.blockers(app, it.spec, JSONObject(it.parameters))?.takeIf { block -> block.pending }?.reason
+      } ?: "Requiere un toque en primer plano.".takeIf { commands.any { command -> !LockScreenPolicy.runsLocked(command) } }
+    } else null
+    return when (val gate = InstinctGatePreview.preview(commands, spec.hasRoutines, InstinctProposalCenter.snapshot(app, foreground = spec.structured, source))) {
+      InstinctAutonomyGate.Gate.Run -> pending?.let { InstinctProbe.Verdict.Waits(label, it) } ?: InstinctProbe.Verdict.Alone(label)
       is InstinctAutonomyGate.Gate.Wait -> InstinctProbe.Verdict.Waits(label, gate.reason)
       is InstinctAutonomyGate.Gate.Refuse -> InstinctProbe.Verdict.Refused
     }
@@ -133,10 +173,12 @@ object InstinctPlanEngine {
     if (deadline <= now) return "ya venció."
     val parser = PhoneCommandParser()
     val calendar = calendarAt(now)
-    val spec = (InstinctPlanSpec.parse(line, calendar) { InstinctProposalValidator.backgroundAction(it, parser, calendar) != null }
+    val spec = (parse(line, calendar) { InstinctProposalValidator.backgroundAction(it, parser, calendar) != null }
       as? InstinctPlanSpec.Parse.Valid)?.spec ?: return InstinctPlanSpec.INVALID
-    val commands = commands(spec) ?: return InstinctPlanSpec.INVALID
-    refusal(app, spec, commands)?.let { return it }
+    if (spec.structured && !InstinctMailboxSettings(app).enabled()) return "activá el buzón firmado antes de reactivar el plan JSON."
+    if (!portableSpec(spec)) return "el plan refiere a datos ligados a otro teléfono."
+    val commands = commands(app, spec) ?: return InstinctPlanSpec.INVALID
+    refusal(app, spec, commands, ProposalSource.BUZON)?.let { return it }
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return InstinctProposalIntake.NO_CONTACT
     val id = PlanIds.of("restore:" + sha256("$line\u0000$deadline"))
     val plan = PlanRecord(id, null, spec.line, ProposalSource.BUZON, "", fingerprint, PlanState.PENDING, createdAt = now,
@@ -153,7 +195,7 @@ object InstinctPlanEngine {
     val journal = InstinctExecutions.existingJournal(context) ?: return emptyList()
     return runCatching {
       journal.plans(active = true).filter {
-        it.state in setOf(PlanState.PENDING, PlanState.CONFIRM, PlanState.WAITING) && it.block == 0 && it.sub == 0 && it.stash.isEmpty() &&
+        portableLine(it) && it.state in setOf(PlanState.PENDING, PlanState.CONFIRM, PlanState.WAITING, PlanState.BLOCKED) && it.block == 0 && it.sub == 0 && it.stash.isEmpty() &&
           journal.byOccurrence(it.id).none { row -> row.state != ExecutionState.RECEIVED && !InstinctQuestion.isRelated(row.line) }
       }.map { it.line to it.deadline }
     }.getOrDefault(emptyList())
@@ -181,7 +223,14 @@ object InstinctPlanEngine {
     rearm(app)
   }
 
-  private fun spec(plan: PlanRecord): InstinctPlanSpec? = specs[plan.id] ?: (InstinctPlanSpec.parse(plan.line, calendarAt(plan.createdAt)) { true }
+  private fun portableLine(plan: PlanRecord): Boolean = spec(plan)?.let(::portableSpec) == true
+
+  private fun portableSpec(spec: InstinctPlanSpec): Boolean =
+    spec.steps.flatMap { it.actions }.flatMap { listOfNotNull(it.invocation, it.alternative) }.none {
+      it.capability.startsWith("calendar_") || it.capability == "insto_clock_cancel"
+    }
+
+  private fun spec(plan: PlanRecord): InstinctPlanSpec? = specs[plan.id] ?: (parse(plan.line, calendarAt(plan.createdAt)) { true }
     as? InstinctPlanSpec.Parse.Valid)?.spec?.let { parsed -> parsed.copy(expiresAt = plan.deadline).also { specs[plan.id] = it } }
 
   private fun loop(app: Context, id: String) {
@@ -208,6 +257,10 @@ object InstinctPlanEngine {
         PlanState.CONFIRM -> approval(app, plan)
         PlanState.DECIDING -> decision(app, plan, spec)
         PlanState.WAITING -> waiting(app, plan)
+        PlanState.BLOCKED -> if (plan.trigger?.byEvent == true && plan.wakeAt != null) {
+          if (!InstinctDeviceCapabilities.granted(app, android.Manifest.permission.READ_CALENDAR)) return
+          journal.updatePlan(id, setOf(PlanState.BLOCKED)) { it.copy(state = PlanState.WAITING, reason = null) } != null
+        } else run(app, plan, spec)
         PlanState.RUNNING -> run(app, plan, spec)
         else -> false
       }
@@ -217,10 +270,10 @@ object InstinctPlanEngine {
 
   /** The plan as one order: «Nunca» refuses it, Confirmar or the brake ask once, Solo takes one unit of the brake. */
   private fun gate(app: Context, plan: PlanRecord, spec: InstinctPlanSpec): Boolean {
-    val commands = commands(spec) ?: return end(app, plan, PlanState.FAILED, InstinctPlanSpec.INVALID)
-    refusal(app, spec, commands)?.let { return end(app, plan, PlanState.FAILED, it) }
-    val snapshot = InstinctProposalCenter.snapshot(app, foreground = false, plan.source)
-    return when (val gate = InstinctGatePreview.decide(commands, false, snapshot) { InstinctProposalCenter.budget.tryAcquire() }) {
+    val commands = commands(app, spec) ?: return end(app, plan, PlanState.FAILED, InstinctPlanSpec.INVALID)
+    refusal(app, spec, commands, plan.source)?.let { return end(app, plan, PlanState.FAILED, it) }
+    val snapshot = InstinctProposalCenter.snapshot(app, foreground = spec.structured, plan.source)
+    return when (val gate = InstinctGatePreview.decide(commands, spec.hasRoutines, snapshot) { InstinctProposalCenter.budget.tryAcquire() }) {
       is InstinctAutonomyGate.Gate.Refuse -> end(app, plan, PlanState.FAILED, gate.reason)
       is InstinctAutonomyGate.Gate.Wait -> askApproval(app, plan, spec, gate.reason)
       InstinctAutonomyGate.Gate.Run -> journal(app).updatePlan(plan.id, setOf(PlanState.PENDING)) {
@@ -232,13 +285,33 @@ object InstinctPlanEngine {
   private fun run(app: Context, plan: PlanRecord, spec: InstinctPlanSpec): Boolean {
     if (plan.block >= spec.steps.size) return end(app, plan, PlanState.DONE, "completado.")
     val step = spec.steps[plan.block]
+    if (plan.sub == 0 && plan.branch == null && !plan.fallback && spec.dependencies[plan.block].orEmpty().isNotEmpty()) {
+      val history = journal(app).planSteps(plan.id).associateBy { it.position }
+      if (spec.dependencies.getValue(plan.block).any { history[blockPosition(it)]?.status != BLOCK_COMPLETE }) {
+        return next(app, plan, succeeded = false)
+      }
+    }
     return when (step) {
-      is PlanStep.Act, is PlanStep.Branch, is PlanStep.Decide -> {
+      is PlanStep.Act, is PlanStep.Branch, is PlanStep.Decide, is PlanStep.Routine -> {
         if (step is PlanStep.Branch && plan.branch == null) return choose(app, plan, step)
         if (step is PlanStep.Decide && plan.branch == null) return askDecision(app, plan, step)
-        val actions = step.branch(plan.branch)
-        if (plan.sub >= actions.size) next(app, plan) else action(app, plan, actions[plan.sub])
+        val actions = if (step is PlanStep.Routine) {
+          val commands = routine(app, step) ?: return end(app, plan, PlanState.FAILED, InstinctGatePreview.ROUTINE_CHANGED)
+          if (InstinctAutonomySettings(app).policy().level(InstinctCategory.RUTINAS) == InstinctAutonomy.NUNCA)
+            return end(app, plan, PlanState.FAILED, InstinctAutonomyPolicy.REFUSED)
+          if (plan.approval != PlanApproval.PERSON &&
+            InstinctAutonomySettings(app).policy().level(InstinctCategory.RUTINAS) == InstinctAutonomy.CONFIRMAR)
+            return askApproval(app, plan, spec, InstinctCategory.RUTINAS.label)
+          commands.map { PlanAction(PhoneCommandCodec.summary(it), routineCommand = it) }
+        } else step.branch(plan.branch)
+        if (plan.sub >= actions.size) {
+          val prefix = "${plan.block + 1}."
+          val uncertain = spec.structured && journal(app).planSteps(plan.id)
+            .any { it.position.startsWith(prefix) && it.status == "incierta" }
+          next(app, plan, succeeded = actions.isNotEmpty() && !uncertain)
+        } else action(app, plan, actions[plan.sub])
       }
+      is PlanStep.WaitAt -> startWait(app, plan, step, step.at, null, null)
       is PlanStep.Wait -> startWait(app, plan, step, now() + step.millis, null, null)
       is PlanStep.WaitUntil -> {
         val at = InstinctTriggers.untilTime(step.minuteOfDay / 60, step.minuteOfDay % 60, calendarAt(now()))
@@ -251,6 +324,7 @@ object InstinctPlanEngine {
         val targets = step.settings.ifEmpty { plan.stash.filterValues { !it.restored }.keys }
         val outcome = restoreSettings(app, plan, targets)
         record(app, plan, plan.position, step.text, "restaurado", outcome.summary)
+        markBlock(app, plan, succeeded = true)
         val moved = journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING)) {
           it.copy(stash = outcome.stash, block = it.block + 1, sub = 0, branch = null, fallback = false)
         }
@@ -259,9 +333,21 @@ object InstinctPlanEngine {
     }
   }
 
-  private fun next(app: Context, plan: PlanRecord): Boolean = journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING)) {
-    it.copy(block = it.block + 1, sub = 0, branch = null, fallback = false)
-  } != null
+  private const val BLOCK_COMPLETE = "completo"
+  private fun blockPosition(block: Int) = "b${block + 1}"
+
+  private fun markBlock(app: Context, plan: PlanRecord, succeeded: Boolean) {
+    if (!InstinctStructuredPlan.isOrder(plan.line)) return
+    journal(app).putPlanStep(PlanStepRecord(plan.id, blockPosition(plan.block), "dependencia",
+      if (succeeded) BLOCK_COMPLETE else "omitido", ""))
+  }
+
+  private fun next(app: Context, plan: PlanRecord, succeeded: Boolean = true): Boolean {
+    markBlock(app, plan, succeeded)
+    return journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING, PlanState.BLOCKED)) {
+      it.copy(state = PlanState.RUNNING, block = it.block + 1, sub = 0, branch = null, fallback = false, reason = null)
+    } != null
+  }
 
   /** One action of the plan, with its journal row. */
   private fun action(app: Context, plan: PlanRecord, action: PlanAction): Boolean {
@@ -270,7 +356,19 @@ object InstinctPlanEngine {
     val line = if (plan.fallback) action.fallback ?: return end(app, plan, PlanState.FAILED, InstinctPlanSpec.INVALID) else action.line
     val rowId = ExecutionIds.of(message, 0)
     val row = runCatching { journal.get(rowId) }.getOrElse { return end(app, plan, PlanState.FAILED, InstinctPlanSpec.INVALID) }
-    return when (val next = PlanStepPolicy.of(row, decode(row)?.let(ActionEffect::of))) {
+    val persisted = decode(row)
+    if (row?.state in setOf(ExecutionState.DISPATCHING, ExecutionState.VERIFYING) &&
+      persisted is PhoneCommand.Platform && persisted.action == PlatformAction.INSTINCT_CAPABILITY &&
+      persisted.argument in setOf("insto_timer", "insto_alarm")) {
+      val recovered = InstinctLocalClock.recover(app, rowId)
+      if (recovered != null) {
+        if (row?.state == ExecutionState.DISPATCHING) InstinctExecutions.move(app, rowId, ExecutionState.VERIFYING)
+        if (!InstinctExecutions.move(app, rowId, ExecutionState.VERIFIED, recovered.message, executionData = recovered.executionData))
+          return false
+        return done(app, plan, line, checkNotNull(journal.get(rowId)))
+      }
+    }
+    return when (val next = PlanStepPolicy.of(row, persisted?.let(ActionEffect::of))) {
       PlanStepPolicy.Next.Run -> runFresh(app, plan, action, line, message, row)
       PlanStepPolicy.Next.Verify -> readBack(app, plan, row!!)
       PlanStepPolicy.Next.Done -> done(app, plan, line, row!!)
@@ -288,8 +386,16 @@ object InstinctPlanEngine {
 
   private fun runFresh(app: Context, plan: PlanRecord, action: PlanAction, line: String, message: String, existing: ExecutionRecord?): Boolean {
     val journal = journal(app)
-    val command = InstinctProposalValidator.backgroundAction(line, PhoneCommandParser(), calendarAt(now()))
-      ?: return failed(app, plan, action, line, "la acción ya no es válida o necesita una pantalla.")
+    val invocation = if (plan.fallback) action.alternative else action.invocation
+    val structured = InstinctStructuredPlan.isOrder(plan.line)
+    val reference = invocation?.fromBlock?.let { block ->
+      val id = ExecutionIds.of(PlanIds.step(plan.id, block, 0, false), 0)
+      journal.get(id)?.takeIf { it.state == ExecutionState.VERIFIED }?.executionData?.let(::JSONObject)
+    }
+    val command = (if (invocation == null) action.routineCommand
+      ?: InstinctProposalValidator.backgroundAction(line, PhoneCommandParser(), calendarAt(now()))
+      else runCatching { invocation.command(reference) }.getOrNull())
+      ?: return failed(app, plan, action, line, "La consulta previa no identificó un único evento apto o la acción dejó de ser válida.")
     val row = existing ?: when (val admitted = runCatching {
       journal.admit(message, ExecutionTransport.PLAN, listOf(line), plan.message, deadline = plan.deadline, occurrence = plan.id, claim = false)
     }.getOrNull()) {
@@ -301,7 +407,8 @@ object InstinctPlanEngine {
     InstinctExecutions.move(app, row.executionId, ExecutionState.VALIDATED, from = setOf(ExecutionState.RECEIVED))
     if (InstinctProposalCenter.refusedByPolicy(app, command)) {
       InstinctExecutions.move(app, row.executionId, ExecutionState.CANCELLED, reason = InstinctAutonomyPolicy.REFUSED)
-      return failed(app, plan, action, line, InstinctAutonomyPolicy.REFUSED)
+      return if (structured) end(app, plan, PlanState.FAILED, InstinctAutonomyPolicy.REFUSED)
+      else failed(app, plan, action, line, InstinctAutonomyPolicy.REFUSED)
     }
     // Authorized by Solo when the plan started: a category moved to Confirmar since then, or quiet hours, ask now.
     if (plan.approval != PlanApproval.PERSON) when (val decision = InstinctProposalCenter.policy(app, command)) {
@@ -309,19 +416,47 @@ object InstinctPlanEngine {
       is AutonomyDecision.Refuse -> return failed(app, plan, action, line, decision.reason)
       AutonomyDecision.Run -> Unit
     }
-    InstinctProposalCenter.blocker(app, command, foreground = false)?.let { return failed(app, plan, action, line, it) }
+    if (invocation != null) {
+      InstinctDeviceCapabilities.blockers(app, invocation.spec, JSONObject(invocation.parameters))?.let {
+        return if (it.pending) block(app, plan, line, it.reason) else failed(app, plan, action, line, it.reason)
+      }
+    } else if (structured) {
+      routinePermission(app, command)?.let { return block(app, plan, line, it) }
+    }
+    val needsActivity = structured && !LockScreenPolicy.runsLocked(command)
+    val activity = if (needsActivity) foreground.remove(plan.id)?.takeIf {
+      it.position == plan.position && now() <= it.expiresAt
+    }?.activity?.get()?.takeIf { !it.isFinishing && !it.isDestroyed && it.hasWindowFocus() &&
+      it.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != true } else null
+    if (needsActivity && activity == null) return block(app, plan, line,
+      "${invocation?.review() ?: PhoneCommandCodec.summary(command)}. Desbloqueá el teléfono y tocá Continuar en Ajustes.")
+    if (!structured) InstinctProposalCenter.blocker(app, command, foreground = false)?.let { return failed(app, plan, action, line, it) }
+    if (plan.state == PlanState.BLOCKED && journal.updatePlan(plan.id, setOf(PlanState.BLOCKED)) {
+      it.copy(state = PlanState.RUNNING, reason = null)
+    } == null) return false
     InstinctExecutions.move(app, row.executionId, ExecutionState.READY, from = setOf(ExecutionState.VALIDATED, ExecutionState.RECEIVED))
     // «despachando» on disk before touching the phone; without it nothing runs.
     if (!InstinctExecutions.begin(app, row.executionId, command)) return end(app, plan, PlanState.FAILED, InstinctProposalCenter.NOT_RECORDED)
     val verifier = InstinctProposalCenter.outcomeVerifier(app)
     val before = runCatching { verifier.read(command) }.getOrNull()
-    val result = runCatching { execute(app, command) }.getOrElse {
+    val result = runCatching {
+      if (activity != null) PhoneActionExecutor(activity).execute(command, confirmed = true, executionId = row.executionId, foreground = true)
+      else if (command is PhoneCommand.Platform && command.action == PlatformAction.INSTINCT_CAPABILITY)
+        PhoneActionExecutor(app).execute(command, executionId = row.executionId)
+      else execute(app, command)
+    }.getOrElse {
       PhoneActionResult("La acción se interrumpió.", outcome = PhoneActionOutcome.UNCERTAIN)
     }
     when {
       result.outcome == PhoneActionOutcome.UNCERTAIN -> {
         InstinctExecutions.move(app, row.executionId, ExecutionState.UNCERTAIN, reason = result.message)
         return uncertain(app, plan, line, result.message)
+      }
+      structured && (result.outcome == PhoneActionOutcome.NEEDS_INPUT ||
+        result.outcome == PhoneActionOutcome.REJECTED && result.message == PhoneActionExecutor.LOCKED) -> {
+        InstinctReadiness.noteMissing(app, result)
+        if (!journal.pausePlanExecution(row.executionId)) return uncertain(app, plan, line, result.message)
+        return block(app, plan, line, result.message)
       }
       result.outcome == PhoneActionOutcome.REJECTED || InstinctAck.needsUser(result) -> {
         // A missing permission is noted for Settings; nothing is asked in the background, nothing is retried.
@@ -330,14 +465,17 @@ object InstinctPlanEngine {
         return failed(app, plan, action, line, result.message)
       }
     }
-    InstinctExecutions.move(app, row.executionId, ExecutionState.VERIFYING)
-    val observation = runCatching { verifier.verify(command, before, result) }
+    if (!InstinctExecutions.move(app, row.executionId, ExecutionState.VERIFYING)) return false
+    var observation = runCatching { verifier.verify(command, before, result) }
       .getOrDefault(Observation(OutcomeVerdict.NOT_OBSERVABLE, detail = ActionOutcomeRules.HANDED_OFF))
+    if (structured && !needsActivity && observation.verdict == OutcomeVerdict.NOT_OBSERVABLE)
+      observation = Observation(OutcomeVerdict.INDETERMINATE, detail = "Insto no pudo comprobar el resultado local.")
     val entry = ActionOutcomeRules.ack(line, result, observation)
     val state = ActionOutcomeRules.state(observation)
-    InstinctExecutions.move(app, row.executionId, state, result = entry.message,
+    if (!InstinctExecutions.move(app, row.executionId, state, result = entry.message,
       reason = observation.detail.takeIf { state == ExecutionState.FAILED || state == ExecutionState.UNCERTAIN },
-      attribution = observation.attribution.takeIf { state == ExecutionState.VERIFIED })
+      attribution = observation.attribution.takeIf { state == ExecutionState.VERIFIED },
+      executionData = result.executionData.takeIf { state == ExecutionState.VERIFIED })) return false
     return when (state) {
       ExecutionState.VERIFIED, ExecutionState.HANDED_OFF -> {
         InstinctTrust.record(app, command, if (plan.approval == PlanApproval.PERSON) TrustEvent.CONFIRMADA else TrustEvent.EJECUTADA)
@@ -348,12 +486,38 @@ object InstinctPlanEngine {
     }
   }
 
+  private fun routinePermission(app: Context, command: PhoneCommand): String? {
+    val capability = when (command) {
+      is PhoneCommand.Torch -> InstinctReadiness.Capability.CAMERA
+      is PhoneCommand.TemporaryMode -> InstinctReadiness.Capability.DND_ACCESS
+      is PhoneCommand.Media -> InstinctReadiness.Capability.NOTIFICATION_LISTENER
+      is PhoneCommand.Platform -> if (InstinctCategory.of(command) == InstinctCategory.SILENCIO)
+        InstinctReadiness.Capability.DND_ACCESS else null
+      else -> null
+    }
+    return capability?.takeUnless { InstinctReadiness.granted(app, it) }?.let { "Concedé ${it.label} en Ajustes." }
+  }
+
+  private fun block(app: Context, plan: PlanRecord, line: String, reason: String): Boolean {
+    if (plan.state != PlanState.BLOCKED || plan.reason != reason) {
+      val journal = journal(app)
+      val blocked = journal.updatePlan(plan.id, setOf(PlanState.RUNNING, PlanState.BLOCKED, PlanState.WAITING)) {
+        it.copy(state = PlanState.BLOCKED, reason = reason)
+      } ?: return false
+      record(app, blocked, plan.position, line, PlanState.BLOCKED.code, reason)
+      InstinctProposalCenter.notifyPlan(app, plan.id, "Plan ${plan.shortId} pendiente", reason)
+    }
+    return false
+  }
+
   /** Interrupted while it ran: read back, never run again (1.20.0's rule). */
   private fun readBack(app: Context, plan: PlanRecord, row: ExecutionRecord): Boolean {
     val command = decode(row)
-    val verdict = command?.let { c ->
+    var verdict = command?.let { c ->
       runCatching { InstinctProposalCenter.outcomeVerifier(app).verify(c, null, PhoneActionResult("", outcome = PhoneActionOutcome.COMPLETED)) }.getOrNull()?.verdict
     } ?: OutcomeVerdict.INDETERMINATE
+    if (InstinctStructuredPlan.isOrder(plan.line) && command != null && LockScreenPolicy.runsLocked(command) &&
+      verdict == OutcomeVerdict.NOT_OBSERVABLE) verdict = OutcomeVerdict.INDETERMINATE
     val line = row.line
     return when (val state = ExecutionRecoveryPolicy.afterVerify(row, verdict)) {
       ExecutionState.VERIFIED, ExecutionState.HANDED_OFF -> {
@@ -372,19 +536,26 @@ object InstinctPlanEngine {
     // What the plan itself left in a saved setting: a restoration compares against it.
     val touched = decode(row)?.let(PlanStepPolicy::touches).orEmpty()
     val stash = plan.stash.mapValues { (setting, s) ->
-      if (setting in touched && !s.restored) readSetting(app, setting)?.let { s.copy(applied = it) } ?: s else s
+      if (setting in touched && !s.restored && row.attribution == ExecutionAttribution.CAUSED) readSetting(app, setting)?.let { s.copy(applied = it) } ?: s else s
     }
     record(app, plan, plan.position, line, "ok", row.result ?: row.state.code, row.executionId)
-    return journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING)) {
+    val journal = journal(app)
+    val moved = journal.updatePlan(plan.id, setOf(PlanState.RUNNING)) {
       it.copy(sub = it.sub + 1, fallback = false, stash = stash)
-    } != null
+    }
+    if (moved == null && stash != plan.stash) {
+      journal.updatePlan(plan.id, setOf(PlanState.CANCELLED)) { if (it.closed) it else it.copy(stash = stash) }
+    }
+    return moved != null
   }
 
   /** Not done: the explicit alternative, if there is one and it was not the alternative already; otherwise the plan stops. */
   private fun failed(app: Context, plan: PlanRecord, action: PlanAction, line: String, reason: String): Boolean {
     record(app, plan, plan.position, line, "fallida", reason)
     if (!plan.fallback && action.fallback != null)
-      return journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING)) { it.copy(fallback = true) } != null
+      return journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING, PlanState.BLOCKED)) {
+        it.copy(state = PlanState.RUNNING, fallback = true, reason = null)
+      } != null
     return end(app, plan, PlanState.FAILED, "el paso ${plan.position} no se hizo: ${reason.trimEnd('.')}.")
   }
 
@@ -409,10 +580,13 @@ object InstinctPlanEngine {
     val state = runCatching { snapshot(app, step.conditions.mapTo(HashSet()) { it.signal }) }.getOrNull()
     val matches = step.conditions.map { condition -> state?.let(condition::matches) }
     // Without data or permission nothing is guessed.
+    if (null in matches && InstinctStructuredPlan.isOrder(plan.line) && step.conditions.any { it.signal == ContextSignal.CALENDAR } &&
+      !InstinctDeviceCapabilities.granted(app, android.Manifest.permission.READ_CALENDAR))
+      return block(app, plan, step.text, CALENDAR_PERMISSION)
     if (null in matches) return end(app, plan, PlanState.FAILED, "una condición del paso ${plan.block + 1} no tiene datos o falta un permiso; no se adivina.")
     val branch = if (matches.all { it == true }) 0 else 1
     record(app, plan, "${plan.block + 1}", step.text, "condición", if (branch == 0) "se cumple" else "no se cumple")
-    return journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING)) { it.copy(branch = branch, sub = 0) } != null
+    return journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING, PlanState.BLOCKED)) { it.copy(state = PlanState.RUNNING, branch = branch, sub = 0, reason = null) } != null
   }
 
   /** One question row of the existing questions, with a deterministic id: asking twice reuses it. */
@@ -445,12 +619,12 @@ object InstinctPlanEngine {
   private fun askApproval(app: Context, plan: PlanRecord, spec: InstinctPlanSpec, reason: String): Boolean {
     if (InstinctAutonomySettings(app).policy().level(InstinctCategory.PREGUNTAS) == InstinctAutonomy.NUNCA)
       return end(app, plan, PlanState.FAILED, "esperaría tu confirmación (${reason.trimEnd('.')}), pero $NEEDS_QUESTIONS")
-    val left = spec.steps.drop(plan.block).joinToString("; ") { it.text }
+    val left = spec.steps.drop(plan.block).joinToString("; ") { if (spec.structured) it.review() else it.text }
     val text = InstinctAck.cut(InstinctAck.flat("Instinct quiere seguir con el plan ${plan.shortId} (${reason.trimEnd('.')}): $left"), 300)
     val expires = minOf(plan.deadline, now() + ProposalBook.TTL_MILLIS)
     val question = InstinctQuestion(text, listOf(APPROVE, DECLINE), expires)
     val id = ask(app, plan, "a", "preguntar ¿Ejecutar el plan ${plan.shortId}? | $APPROVE | $DECLINE", question, preview = false) ?: return false
-    journal(app).updatePlan(plan.id, setOf(PlanState.PENDING, PlanState.RUNNING, PlanState.WAITING)) {
+    journal(app).updatePlan(plan.id, setOf(PlanState.PENDING, PlanState.RUNNING, PlanState.WAITING, PlanState.BLOCKED)) {
       it.copy(state = PlanState.CONFIRM, question = id, reason = reason)
     } ?: return true
     record(app, plan, "${plan.block + 1}", "confirmación", PlanState.CONFIRM.code, reason)
@@ -508,8 +682,8 @@ object InstinctPlanEngine {
   }
 
   private fun startWait(app: Context, plan: PlanRecord, step: PlanStep, at: Long?, trigger: PlanTrigger?, event: PlanEvent?): Boolean {
-    val moved = journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING)) {
-      it.copy(state = PlanState.WAITING, wakeAt = at, trigger = trigger, event = event ?: it.event)
+    val moved = journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING, PlanState.BLOCKED)) {
+      it.copy(state = PlanState.WAITING, wakeAt = at, trigger = trigger, event = event ?: it.event, reason = null)
     } ?: return true
     val until = at?.let { "hasta las ${InstinctDeferral.clock(it, calendarAt(it))}" } ?: trigger?.phrase.orEmpty()
     record(app, moved, plan.position, step.text, PlanState.WAITING.code, until)
@@ -520,6 +694,8 @@ object InstinctPlanEngine {
     val trigger = step.trigger
     if (!trigger.byEvent) return startWait(app, plan, step, null, trigger, null)
     val now = now()
+    if (InstinctStructuredPlan.isOrder(plan.line) && !InstinctDeviceCapabilities.granted(app, android.Manifest.permission.READ_CALENDAR))
+      return block(app, plan, step.text, CALENDAR_PERMISSION)
     val events = runCatching { InstinctScheduler.calendar(app, now) }.getOrNull()
       ?: return end(app, plan, PlanState.FAILED, "Insto no tiene permiso para leer el calendario.")
     // «al terminar» right after «al empezar»: the same event that started, if it is in progress.
@@ -547,6 +723,8 @@ object InstinctPlanEngine {
     if (now < wake) return false
     val event = plan.event?.takeIf { plan.trigger?.byEvent == true && it.trigger == plan.trigger }
     if (event != null) {
+      if (InstinctStructuredPlan.isOrder(plan.line) && !InstinctDeviceCapabilities.granted(app, android.Manifest.permission.READ_CALENDAR))
+        return block(app, plan, "espera de calendario", CALENDAR_PERMISSION)
       val candidates = runCatching { InstinctScheduler.calendar(app, now) }.getOrNull()
         ?: return end(app, plan, PlanState.FAILED, "Insto ya no puede leer el calendario.")
       val stored = if (event.trigger == PlanTrigger.EVENT_END) Trigger.EventEnd(event.eventId, event.instanceId, event.at)
@@ -562,6 +740,7 @@ object InstinctPlanEngine {
     }
     // A wait the phone delivered late (Doze, the phone off) does not go on alone: as a late deferred order, it asks.
     val late = plan.trigger?.let { !it.byEvent } != true && now - wake > InstinctDeferral.LATE_MILLIS && plan.approval != PlanApproval.PERSON
+    markBlock(app, plan, succeeded = true)
     val moved = journal(app).updatePlan(plan.id, setOf(PlanState.WAITING)) {
       it.copy(state = PlanState.RUNNING, block = it.block + 1, sub = 0, branch = null, fallback = false, wakeAt = null, trigger = null)
     } ?: return true
@@ -576,9 +755,10 @@ object InstinctPlanEngine {
     val journal = InstinctExecutions.existingJournal(app) ?: return
     background(Runnable {
       val waiting = runCatching { journal.plans(active = true) }.getOrDefault(emptyList())
-        .filter { it.state == PlanState.WAITING && it.wakeAt == null && it.trigger?.fires(event) == true }
+        .filter { it.state == PlanState.WAITING && it.wakeAt == null && it.trigger?.fires(event) == true ||
+          it.state == PlanState.BLOCKED && event == PhoneEvent.UNLOCK }
       waiting.forEach { plan ->
-        journal.updatePlan(plan.id, setOf(PlanState.WAITING)) { it.copy(wakeAt = now()) }
+        if (plan.state == PlanState.WAITING) journal.updatePlan(plan.id, setOf(PlanState.WAITING)) { it.copy(wakeAt = now()) }
         advance(app, plan.id)
       }
     })
@@ -598,12 +778,35 @@ object InstinctPlanEngine {
   internal fun readSetting(context: Context, setting: PlanSetting): Int? =
     InstinctUndoActions.capture(context.applicationContext, probeCommand(setting))?.before
 
+  /** Keep evidence of a later setting change even when it is changed back before the restore step. */
+  internal fun settingChanged(context: Context, settings: Set<PlanSetting>) {
+    val app = context.applicationContext
+    val journal = InstinctExecutions.existingJournal(app) ?: return
+    background(Runnable {
+      val values = settings.associateWith { readSetting(app, it) }
+      runCatching {
+        for (plan in journal.plans(active = true)) {
+          val changed = plan.stash.filter { (setting, saved) ->
+            val current = values[setting]
+            saved.applied != null && !saved.restored && !saved.diverged && current != null && current != saved.applied
+          }.keys
+          if (changed.isNotEmpty()) journal.updatePlan(plan.id, setOf(plan.state)) { current ->
+            current.copy(stash = current.stash.mapValues { (setting, saved) ->
+              if (setting in changed) saved.copy(diverged = true) else saved
+            })
+          }
+        }
+      }
+    })
+  }
+
   private fun save(app: Context, plan: PlanRecord, step: PlanStep.Save): Boolean {
     val values = step.settings.associateWith { readSetting(app, it) }
     val unreadable = values.filterValues { it == null }.keys
     if (unreadable.isNotEmpty())
       return end(app, plan, PlanState.FAILED, "no se pudo leer ${unreadable.joinToString(" ni ") { it.label }}; no se guardó nada.")
     record(app, plan, plan.position, step.text, "guardado", step.settings.joinToString(", ") { it.label })
+    markBlock(app, plan, succeeded = true)
     return journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING)) {
       it.copy(stash = it.stash + values.mapValues { (_, v) -> PlanStash(v!!) }, block = it.block + 1, sub = 0, branch = null)
     } != null
@@ -687,6 +890,7 @@ object InstinctPlanEngine {
     InstinctStatePublisher.afterOrder(app)
     runCatching { journal.closePlan(plan.id) }
     specs.remove(plan.id)
+    foreground.remove(plan.id)
   }
 
   private fun record(app: Context, plan: PlanRecord, position: String, text: String, status: String, detail: String, execution: String? = null) {
@@ -702,7 +906,7 @@ object InstinctPlanEngine {
     if (!InstinctLogSettings(app).configured()) return
     val journal = journal(app)
     val plan = runCatching { journal.plan(id) }.getOrNull() ?: return
-    val steps = runCatching { journal.planSteps(id) }.getOrDefault(emptyList()).filterNot { it.reported }
+    val steps = runCatching { journal.planSteps(id) }.getOrDefault(emptyList()).filterNot { it.reported || it.position.startsWith("b") }
     if (steps.isEmpty()) return
     val events = steps.mapNotNull { step ->
       InstinctLogEvent(sha256("${plan.id}\u0000${step.position}\u0000${step.status}\u0000${step.updatedAt}").take(32),
@@ -718,6 +922,18 @@ object InstinctPlanEngine {
   // ---------------------------------------------------------------------------------------------------------------
   // Queries and management
   // ---------------------------------------------------------------------------------------------------------------
+
+  internal fun continueInForeground(activity: Activity, short: String): String {
+    val app = activity.applicationContext
+    val plan = journal(app).planByShort(short) ?: return "No encontré ese plan."
+    if (plan.state != PlanState.BLOCKED) return "El plan ya cambió de estado."
+    foreground[plan.id] = Foreground(plan.position, WeakReference(activity), now() + 10_000)
+    start(app, plan.id)
+    return "Revisando el paso pendiente."
+  }
+
+  internal fun review(plan: PlanRecord): List<String> = if (plan.state.terminal) emptyList()
+    else spec(plan)?.takeIf { it.structured }?.steps?.map(PlanStep::review).orEmpty()
 
   private fun total(plan: PlanRecord): Int? = spec(plan)?.steps?.size
 
@@ -793,6 +1009,16 @@ object InstinctPlanEngine {
     background(Runnable { rearm(app) })
   }
 
+  fun prerequisitesChanged(context: Context) {
+    val app = context.applicationContext
+    val journal = InstinctExecutions.existingJournal(app) ?: return
+    background(Runnable {
+      runCatching { InstinctLocalClock.rearm(app) }
+      runCatching { journal.plans(active = true) }.getOrDefault(emptyList()).filter { it.state == PlanState.BLOCKED }
+        .forEach { advance(app, it.id) }
+    })
+  }
+
   /** One shared alarm: the next wait or deadline of any active plan. */
   fun rearm(context: Context) {
     val app = context.applicationContext
@@ -817,5 +1043,5 @@ object InstinctPlanEngine {
   }
 
   /** Tests only. */
-  internal fun reset() { running.clear(); again.clear(); specs.clear() }
+  internal fun reset() { running.clear(); again.clear(); specs.clear(); foreground.clear() }
 }

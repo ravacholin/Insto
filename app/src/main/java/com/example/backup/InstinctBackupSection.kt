@@ -7,6 +7,7 @@ import com.example.phone.ContextRuleSpec
 import com.example.phone.ContextualCheck
 import com.example.phone.InstinctDeferral
 import com.example.phone.InstinctPlanSpec
+import com.example.phone.InstinctStructuredPlan
 import com.example.phone.InstinctProposalValidator
 import com.example.phone.PhoneCommandParser
 import com.example.phone.InstinctLogConfig
@@ -200,8 +201,16 @@ class InstinctSection(private val access: InstinctBackupAccess) : BackupSection 
         val plan = array.getJSONObject(index)
         val line = plan.getString("line")
         val deadline = (plan.get("deadline") as? Number)?.toLong() ?: 0L
-        val valid = InstinctPlanSpec.parse(line, now) { InstinctProposalValidator.backgroundAction(it, parser, now) != null } is InstinctPlanSpec.Parse.Valid
-        require(valid && deadline > 0) { "Plan inválido en el respaldo." }
+        require(deadline > 0) { "Plan sin vencimiento válido." }
+        val parsing = if (InstinctStructuredPlan.isOrder(line)) {
+          // Backups may carry expired plans; activation discards them instead of invalidating the whole backup.
+          val parseAt = (now.clone() as java.util.Calendar).apply {
+            timeInMillis = minOf(now.timeInMillis, deadline - InstinctPlanSpec.MAX_EXPIRY_MILLIS)
+          }
+          InstinctStructuredPlan.parse(line, parseAt)
+        } else InstinctPlanSpec.parse(line, now) { InstinctProposalValidator.backgroundAction(it, parser, now) != null }
+        val valid = parsing is InstinctPlanSpec.Parse.Valid
+        require(valid) { "Plan inválido en el respaldo." }
         InstinctBackupPlan(line, deadline)
       }
     }

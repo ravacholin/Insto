@@ -108,6 +108,9 @@
     "una orden programada que se dispara con más de 15 minutos de atraso",
     "la acción necesita algo de la persona: un permiso, confirmar una hora que ya pasó o elegir entre varias apps"
   ],
+  "calendarios": [],
+  "calendarios_con_escritura": [],
+  "calendarios_habilitados": [],
   "canales": {
     "acuses": "nunca",
     "acuses_por": "whatsapp",
@@ -117,6 +120,634 @@
     "timbre": false,
     "whatsapp": true
   },
+  "capacidades": [
+    {
+      "bloqueado": true,
+      "categoria": "VOLUMEN",
+      "deshacer": "guardar y restaurar si sigue aplicado",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "volume",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "percent"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "",
+      "verificacion": "relectura local"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "LINTERNA",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "torch",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.CAMERA"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "",
+      "verificacion": "relectura local"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "SILENCIO",
+      "deshacer": "guardar y restaurar si sigue aplicado",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "silent_on",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.ACCESS_NOTIFICATION_POLICY"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "",
+      "verificacion": "relectura local"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "SILENCIO",
+      "deshacer": "guardar y restaurar si sigue aplicado",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "silent_off",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.ACCESS_NOTIFICATION_POLICY"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "",
+      "verificacion": "relectura local"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "SILENCIO",
+      "deshacer": "guardar y restaurar si sigue aplicado",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "vibrate_on",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "",
+      "verificacion": "relectura local"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "SILENCIO",
+      "deshacer": "guardar y restaurar si sigue aplicado",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "dnd_on",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.ACCESS_NOTIFICATION_POLICY"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "",
+      "verificacion": "relectura local"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "SILENCIO",
+      "deshacer": "guardar y restaurar si sigue aplicado",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "dnd_off",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.ACCESS_NOTIFICATION_POLICY"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "",
+      "verificacion": "relectura local"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "MUSICA",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "media",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "enum": [
+              "PLAY",
+              "PAUSE",
+              "STOP",
+              "NEXT",
+              "PREVIOUS",
+              "STATUS"
+            ],
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "requiere una sesión multimedia accesible",
+      "verificacion": "estado de reproducción cuando la sesión lo informa"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "CALENDARIO",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "calendar_query",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "beginMillis": {
+            "maximum": 253402300799999,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "calendarId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "endMillis": {
+            "maximum": 253402300799999,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "calendarId",
+          "beginMillis",
+          "endMillis"
+        ],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.READ_CALENDAR"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "calendario habilitado en el teléfono; cambios solo en eventos individuales sin invitados",
+      "verificacion": "lectura de CalendarContract"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "CALENDARIO",
+      "deshacer": "eliminar el alta si su revisión coincide",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "calendar_create",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "beginMillis": {
+            "maximum": 253402300799999,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "calendarId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "description": {
+            "maxLength": 500,
+            "type": "string"
+          },
+          "endMillis": {
+            "maximum": 253402300799999,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "calendarId",
+          "title",
+          "beginMillis",
+          "endMillis"
+        ],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "calendario habilitado en el teléfono; cambios solo en eventos individuales sin invitados",
+      "verificacion": "lectura de CalendarContract"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "CALENDARIO",
+      "deshacer": "reponer los valores si su revisión coincide",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "calendar_update",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "beginMillis": {
+            "maximum": 253402300799999,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "calendarId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "endMillis": {
+            "maximum": 253402300799999,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "eventId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "revision": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "calendarId",
+          "eventId",
+          "revision",
+          "beginMillis",
+          "endMillis"
+        ],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "calendario habilitado en el teléfono; cambios solo en eventos individuales sin invitados",
+      "verificacion": "lectura de CalendarContract"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "CALENDARIO",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "calendar_cancel",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "calendarId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "eventId": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "revision": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "calendarId",
+          "eventId",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "calendario habilitado en el teléfono; cambios solo en eventos individuales sin invitados",
+      "verificacion": "lectura de CalendarContract"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "RELOJ",
+      "deshacer": "cancelar por id antes de disparar",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "insto_timer",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "seconds": {
+            "maximum": 86400,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seconds"
+        ],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "",
+      "verificacion": "registro de programación y del disparo de Insto"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "RELOJ",
+      "deshacer": "cancelar por id antes de disparar",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "insto_alarm",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "maximum": 253402300799999,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "label": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "at"
+        ],
+        "type": "object"
+      },
+      "permisos": [
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "alarma de una sola vez",
+      "verificacion": "registro de programación y del disparo de Insto"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "RELOJ",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "insto_clock_cancel",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "clockId": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "clockId"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "releer si hay evidencia, suspender si es incierto",
+      "restriccion": "solo alarmas y temporizadores propios pendientes",
+      "verificacion": "registro de cancelación"
+    },
+    {
+      "bloqueado": false,
+      "categoria": "RELOJ",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "clock_timer",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "seconds": {
+            "maximum": 86400,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seconds"
+        ],
+        "type": "object"
+      },
+      "permisos": [
+        "com.android.alarm.permission.SET_ALARM"
+      ],
+      "recuperacion": "si se interrumpe la entrega, suspender",
+      "restriccion": "último paso; requiere un toque con el teléfono desbloqueado",
+      "verificacion": "entrega del intent"
+    },
+    {
+      "bloqueado": false,
+      "categoria": "RELOJ",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "clock_alarm",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "date": {
+            "maxLength": 10,
+            "type": "string"
+          },
+          "days": {
+            "items": {
+              "maximum": 7,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 7,
+            "type": "array"
+          },
+          "hour": {
+            "maximum": 23,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "label": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "minute": {
+            "maximum": 59,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hour",
+          "minute"
+        ],
+        "type": "object"
+      },
+      "permisos": [
+        "com.android.alarm.permission.SET_ALARM"
+      ],
+      "recuperacion": "si se interrumpe la entrega, suspender",
+      "restriccion": "último paso; requiere un toque con el teléfono desbloqueado",
+      "verificacion": "entrega del intent"
+    },
+    {
+      "bloqueado": false,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "open_app",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "package": {
+            "maxLength": 160,
+            "type": "string"
+          }
+        },
+        "required": [
+          "package"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "si se interrumpe la entrega, suspender",
+      "restriccion": "último paso; requiere un toque con el teléfono desbloqueado",
+      "verificacion": "entrega del intent"
+    },
+    {
+      "bloqueado": false,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "open_resource",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "maxLength": 2000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "si se interrumpe la entrega, suspender",
+      "restriccion": "último paso; requiere un toque con el teléfono desbloqueado",
+      "verificacion": "entrega del intent"
+    },
+    {
+      "bloqueado": false,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "youtube",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "si se interrumpe la entrega, suspender",
+      "restriccion": "último paso; requiere un toque con el teléfono desbloqueado",
+      "verificacion": "entrega del intent"
+    },
+    {
+      "bloqueado": false,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar catálogo del teléfono",
+      "id": "spotify",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "si se interrumpe la entrega, suspender",
+      "restriccion": "último paso; requiere un toque con el teléfono desbloqueado",
+      "verificacion": "entrega del intent"
+    }
+  ],
   "consultas": [
     {
       "orden": "ver catálogo",
@@ -252,8 +883,12 @@
       }
     ]
   },
-  "hash": "88b68187fb849062699f51869a0e6446dbd39859cb8b8caf30c3197561c7659d",
+  "hash": "8dd6ca9cf3930a04dec6b539dc413ed7987be14b5ed35fbee521aaf7458034da",
   "horas_de_silencio": null,
+  "integraciones": {
+    "appfunctions": "sin proveedor autorizado",
+    "omniremote": "sin interfaz local compatible"
+  },
   "limites": {
     "atraso_minutos_max": 15,
     "aviso_caracteres_max": 200,
@@ -292,6 +927,34 @@
     "regla_dias_max": 30,
     "reglas_contextuales": 12,
     "rutina_pasos_max": 6
+  },
+  "plan_json": {
+    "action": "{capability, params, fallback?: {capability,params}, eventFrom?: id de calendar_query}",
+    "branch": "{conditions: texto de condiciones de «cuando», then: [action], else?: [action]}",
+    "decision": "{question, options: [{label, actions:[action]}]}",
+    "disparadores": [
+      "EVENT_START",
+      "EVENT_END",
+      "HEADPHONES_ON",
+      "HEADPHONES_OFF",
+      "UNLOCK"
+    ],
+    "ejemplo": "#insto plan-json {\"version\":1,\"steps\":[{\"id\":\"reminder\",\"kind\":\"action\",\"capability\":\"insto_timer\",\"params\":{\"seconds\":1500,\"label\":\"Reunión\"}},{\"id\":\"start\",\"kind\":\"wait\",\"trigger\":\"EVENT_START\"},{\"id\":\"save\",\"kind\":\"save\",\"settings\":[\"DND\"]},{\"id\":\"focus\",\"kind\":\"action\",\"capability\":\"dnd_on\",\"params\":{}},{\"id\":\"end\",\"kind\":\"wait\",\"trigger\":\"EVENT_END\"},{\"id\":\"restore\",\"kind\":\"restore\",\"settings\":[\"DND\"]}]}",
+    "forma": "#insto plan-json <JSON compacto>",
+    "limites": {
+      "acciones": 32,
+      "bytes_linea": 8192,
+      "decisiones": 2,
+      "pasos": 24
+    },
+    "objetivo_ejemplo": "Prepará el teléfono para la reunión que empieza en media hora y dejalo como estaba al terminar.",
+    "paso": "{id, kind, requires?: [id anterior], ...}",
+    "raiz": "{version:1, expiresAt?: epochMs, steps: [...]}",
+    "routine": "{name, revision}",
+    "save_restore": "{settings: [VOLUME | RINGER | DND]}",
+    "transporte": "buzon_firmado",
+    "version": 1,
+    "wait": "{seconds} | {at: epochMs} | {trigger}"
   },
   "planes": {
     "ejemplos": [
@@ -370,6 +1033,6 @@
     "regla": "Creá, consultá y administrá reglas por el buzón firmado. Hasta tres condiciones unidas con «y», una acción permitida sin interfaz o «avisarme» y hasta 12 reglas durante un máximo de 30 días. Se disparan al cumplirse las condiciones, según los eventos que Android entregue, incluso sin conexión con Instinct. Conservan los permisos y la autonomía del teléfono."
   },
   "rutinas": [],
-  "version_insto": "1.23.0",
+  "version_insto": "1.24.0",
   "version_protocolo": 8
 }

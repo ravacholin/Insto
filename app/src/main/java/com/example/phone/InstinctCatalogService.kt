@@ -58,9 +58,11 @@ object InstinctCatalogPublisher {
   fun current(context: Context): InstinctCatalogJson {
     val app = context.applicationContext
     val channels = channels(app)
-    val enabledCalendars = if (InstinctDeviceCapabilities.granted(app, android.Manifest.permission.READ_CALENDAR))
-      runCatching { InstinctCalendarActions(app.contentResolver).calendars().map { it.id } }.getOrDefault(emptyList())
-        .intersect(InstinctCalendarAccess(app).enabled()).sorted() else emptyList()
+    val calendars = if (InstinctDeviceCapabilities.granted(app, android.Manifest.permission.READ_CALENDAR))
+      runCatching { InstinctCalendarActions(app.contentResolver).calendars() }.getOrDefault(emptyList()) else emptyList()
+    val calendarAccess = InstinctCalendarAccess(app)
+    val enabledCalendars = calendars.map { it.id }.intersect(calendarAccess.enabled()).sorted()
+    val writableCalendars = calendars.filter { it.writable }.map { it.id }.intersect(calendarAccess.enabled(write = true)).sorted()
     val availability = InstinctCapabilities.specs.mapValues { (_, spec) ->
       if (!channels.mailbox) return@mapValues "requiere el buzón firmado"
       val blocker = runCatching { InstinctDeviceCapabilities.blockers(app, spec) }.getOrElse {
@@ -69,13 +71,19 @@ object InstinctCatalogPublisher {
       when {
         blocker?.pending == true -> "pendiente: ${blocker.reason}"
         blocker != null -> "no disponible: ${blocker.reason}"
-        spec.id.startsWith("calendar_") && enabledCalendars.isEmpty() -> "no hay calendarios habilitados disponibles"
+        spec.id.startsWith("calendar_") && (if (spec.id == "calendar_query") enabledCalendars else writableCalendars).isEmpty() -> "no hay calendarios habilitados disponibles"
         !spec.runsLocked -> "requiere un toque"
         else -> "disponible"
       }
     }
-    return InstinctProtocolCatalog.json(InstinctRoutineGrants(app).access().enabledNames(), InstinctAutonomySettings(app).policy(),
-      channels, instoVersion(), availability = availability, calendarIds = enabledCalendars)
+    val routines = InstinctRoutineGrants(app).access()
+    val names = routines.enabledNames()
+    return InstinctProtocolCatalog.json(names, InstinctAutonomySettings(app).policy(), channels, instoVersion(),
+      availability = availability, calendarIds = enabledCalendars, calendarWriteIds = writableCalendars,
+      calendarLabels = calendars.filter { it.id in enabledCalendars }.associate {
+        it.id to InstinctAck.cut(InstinctAck.flat(it.label), 80).takeIf(InstinctAck::safe).orEmpty()
+      },
+      routineRevisions = names.mapNotNull { name -> routines.resolve(name)?.let { name to InstinctRoutines.hash(it) } }.toMap())
   }
 
   fun last(context: Context): Last = runCatching {
