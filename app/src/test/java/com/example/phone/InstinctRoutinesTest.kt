@@ -160,7 +160,8 @@ class InstinctRoutinesTest {
     val catalog = InstinctProtocolCatalog.text(emptyList())
     val orders = catalog.lines().filter { it.startsWith("#insto ") && it != "#insto <orden>" }.map { it.removePrefix("#insto ") }
     val queries = ProposalCheck.QueryKind.entries.map { it.form }
-    val questionsAndRules = listOf(InstinctProtocolCatalog.QUESTION_EXAMPLE, InstinctProtocolCatalog.DECISION_EXAMPLE, ContextRuleSpec.EXAMPLE)
+    val questionsAndRules = listOf(InstinctProtocolCatalog.QUESTION_EXAMPLE, InstinctProtocolCatalog.DECISION_EXAMPLE) +
+      InstinctPlanSpec.EXAMPLES + ContextRuleSpec.EXAMPLE
     assertEquals(InstinctProposalValidator.examples + questionsAndRules + queries, orders)
   }
 

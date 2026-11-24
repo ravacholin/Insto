@@ -105,6 +105,12 @@ internal data class ContextRuleSpec(
       return ContextRuleSpec(line.trim(), conditions, action, days)
     }
 
+    /** «<condición> [y <condición> [y <condición>]]», already normalized for clocks: the same forms as «cuando». */
+    internal fun conditions(expression: String): List<ContextCondition>? {
+      val conditions = expression.trim().split(" y ").takeIf { it.size in 1..3 }?.map { condition(it.trim()) ?: return null } ?: return null
+      return conditions.takeIf { it.distinctBy { c -> c.signal }.size == it.size }
+    }
+
     private fun condition(text: String): ContextCondition? {
       normalizedPhrases[text]?.let { return it }
       battery.matchEntire(text)?.let {

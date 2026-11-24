@@ -116,6 +116,7 @@ fun InstinctProposalSettingsSection(contact: PinnedContact?, flavor: WhatsAppFla
       InstinctMailboxSection(replyMode, revision) { revision++ }
       InstinctScheduledList(revision) { revision++ }
       InstinctContextRulesList(revision) { revision++ }
+      InstinctPlansList(revision) { revision++ }
       InstinctRoutineSwitches(revision) { revision++ }
       InstinctCatalogActions(replyMode, channel, revision) { revision++ }
       ProposalDiagnostics(contact, revision) { revision++ }
@@ -336,6 +337,34 @@ private fun InstinctContextRulesList(revision: Int, onChange: () -> Unit) {
             feedback = withContext(Dispatchers.IO) { scheduler.describe(context, rule.shortId) }
           }
         }) { Text("Diagnóstico de ${rule.shortId}") }
+      }
+    }
+    feedback?.let { SettingsDescription(it) }
+  }
+}
+
+/** Plans of several steps (1.23.0): their state, «Cancelar» while active and «Reanudar» when suspended. */
+@Composable
+private fun InstinctPlansList(revision: Int, onChange: () -> Unit) {
+  val context = LocalContext.current
+  val engine = com.example.phone.InstinctPlanEngine
+  val scope = rememberCoroutineScope()
+  var plans by remember { mutableStateOf(emptyList<com.example.phone.PlanRecord>()) }
+  var feedback by remember { mutableStateOf<String?>(null) }
+  LaunchedEffect(revision) { plans = withContext(Dispatchers.IO) { engine.plans(context) } }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_plans")) {
+    Text("Planes de Instinct", style = MaterialTheme.typography.bodyLarge)
+    if (plans.isEmpty()) SettingsDescription("No hay planes. Instinct los pide con «#insto plan: …».")
+    else {
+      TextButton(onClick = onChange) { Text("Actualizar planes") }
+      plans.forEach { plan ->
+        SettingsDescription(com.example.phone.PlanText.line(plan, null) + " · " + plan.line.removePrefix("plan").trimStart(':', ' ').take(120))
+        if (!plan.state.terminal) TextButton(onClick = {
+          scope.launch { feedback = withContext(Dispatchers.IO) { engine.cancel(context, plan.shortId) }; onChange() }
+        }, modifier = Modifier.testTag("instinct_plan_cancel")) { Text("Cancelar ${plan.shortId}") }
+        if (plan.state == com.example.phone.PlanState.SUSPENDED) TextButton(onClick = {
+          scope.launch { feedback = withContext(Dispatchers.IO) { engine.resume(context, plan.shortId) }; onChange() }
+        }, modifier = Modifier.testTag("instinct_plan_resume")) { Text("Reanudar ${plan.shortId}") }
       }
     }
     feedback?.let { SettingsDescription(it) }

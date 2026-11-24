@@ -130,6 +130,7 @@ object InstinctScheduler {
     val app = context.applicationContext
     if (!InstinctProposalSettings(app).isEnabled()) return
     if (event == PhoneEvent.UNLOCK) InstinctContextScheduler.signal(app, unlock = true)
+    InstinctPlanEngine.onPhoneEvent(app, event)
     val matching = runCatching { store(app).pending() }.getOrDefault(emptyList()).filter { InstinctTriggers.fires(it.trigger, event) }
     matching.forEach { order -> launch { fire(app, order.id, order.token, Cause.STATE) } }
   }
@@ -416,12 +417,22 @@ class InstinctScheduleReceiver : BroadcastReceiver() {
         }
       }
       InstinctContextScheduler.ACTION_TICK -> contextRules(context)
+      InstinctPlanEngine.ACTION_TICK -> plans(context)
       Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_TIME_CHANGED,
       Intent.ACTION_TIMEZONE_CHANGED, AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
         runCatching { InstinctScheduler.rearm(context, zoneChanged = intent.action == Intent.ACTION_TIMEZONE_CHANGED) }
-        if (InstinctExecutions.existingJournal(context) != null) contextRules(context)
+        if (InstinctExecutions.existingJournal(context) != null) { contextRules(context); plans(context) }
       }
     }
+  }
+
+  /** A plan's wait or deadline, or a boot: every active plan goes on from its row (1.23.0). */
+  private fun plans(context: Context) {
+    val pending = goAsync()
+    InstinctStatePublisher.background(Runnable {
+      try { runCatching { InstinctPlanEngine.recover(context.applicationContext) } }
+      finally { pending?.finish() }
+    })
   }
 
   private fun contextRules(context: Context) {

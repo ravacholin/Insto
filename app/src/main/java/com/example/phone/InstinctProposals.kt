@@ -62,6 +62,11 @@ sealed interface ProposalCheck {
     RULE_DELETE("eliminar regla", readOnly = false, form = "eliminar regla <id>"),
     /** One execution by the short id «ver ejecuciones» gives (1.20.0). Read-only. */
     EXECUTION_STATUS("estado de ejecución", form = "estado de ejecución <id>"),
+    /** Plans of several steps (1.23.0): the latest, one by id, cancel one, resume a suspended one. */
+    PLANS("ver planes"),
+    PLAN_STATUS("estado de plan", form = "estado de plan <id>"),
+    PLAN_CANCEL("cancelar plan", readOnly = false, form = "cancelar plan <id>"),
+    PLAN_RESUME("reanudar plan", readOnly = false, form = "reanudar plan <id>"),
   }
 }
 
@@ -88,6 +93,7 @@ object InstinctProposalValidator {
     }
   }
 
+  private val planId = Regex("^(estado de plan|cancelar plan|reanudar plan) (p?[0-9a-f]{${PlanIds.SHORT}})$")
   private val executionStatus = Regex("^estado de ejecucion (e?[0-9a-f]{${ExecutionIds.SHORT}})$")
   private val silenceActions = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON,
     PlatformAction.DND_ON, PlatformAction.DND_OFF)
@@ -106,6 +112,10 @@ object InstinctProposalValidator {
     ProposalCheck.QueryKind.entries.firstOrNull { it != ProposalCheck.QueryKind.CANCEL_ONE && it != ProposalCheck.QueryKind.PROBE &&
       it.form == it.phrase && PhoneCommandParser.normalize(it.phrase) == folded }?.let { return ProposalCheck.Query(order, it) }
     executionStatus.matchEntire(folded)?.let { return ProposalCheck.Query(order, ProposalCheck.QueryKind.EXECUTION_STATUS, it.groupValues[1]) }
+    planId.matchEntire(folded)?.let { match ->
+      val kind = ProposalCheck.QueryKind.entries.first { PhoneCommandParser.normalize(it.phrase) == match.groupValues[1] }
+      return ProposalCheck.Query(order, kind, PlanIds.parseShort(match.groupValues[2]))
+    }
     ruleId.matchEntire(folded)?.let { match ->
       val kind = ProposalCheck.QueryKind.entries.first { PhoneCommandParser.normalize(it.phrase) == match.groupValues[1] }
       return ProposalCheck.Query(order, kind, match.groupValues[2])
@@ -114,6 +124,8 @@ object InstinctProposalValidator {
     probe(order)?.let { inner ->
       return if (inner.isBlank()) ProposalCheck.Invalid(order, ProposalCheck.Reason.EMPTY) else ProposalCheck.Query(order, ProposalCheck.QueryKind.PROBE, inner)
     }
+    // «plan: …» (1.23.0): an explicit grammar; every action goes through this same validator, one by one.
+    if (InstinctPlanSpec.isOrder(order)) return InstinctPlanEngine.check(order, { backgroundAction(it, parse, now, routines) != null }, now)
     if (ContextRuleSpec.isOrder(order)) {
       val spec = ContextRuleSpec.parse(order) ?: return ProposalCheck.Invalid(order, ProposalCheck.Reason.CONTEXT_RULE)
       val notice = InstinctNotice.text(spec.action)?.let(InstinctNotice::valid) == true
@@ -248,7 +260,7 @@ object InstinctProposalValidator {
    * Allowlist v1 for single commands and routine steps. Everything not named is forbidden, in particular calls
    * ([PhoneCommand.Dial] and every [PlatformAction.CALL_DIRECT]), messages, files and sharing, [PhoneCommand.SavePlace]
    * and workflows. A routine is never allowed here: only [allowedRoutine] lets an enabled one through. A proposal is
-   * always one command: plans of several steps are never built from proposals.
+   * always one command; a plan (1.23.0) is several of these, each one validated here and run without a screen.
    */
   fun allowed(command: PhoneCommand): Boolean = when (command) {
     is PhoneCommand.Alarm, is PhoneCommand.Timer, is PhoneCommand.Volume, is PhoneCommand.Torch,

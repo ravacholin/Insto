@@ -49,6 +49,7 @@ class InstinctProposalSettings(context: Context) {
       InstinctProposalCenter.discardAll(app)
       InstinctScheduler.cancelAll(app)
       InstinctContextScheduler.stop(app)
+      InstinctPlanEngine.stopAll(app)
       InstinctProposalCenter.undos.clear()
       InstinctQuestionNotifications.recoverSoon(app)
     }
@@ -441,6 +442,12 @@ object InstinctProposalCenter {
       when (check) {
         is ProposalCheck.Question -> Unit // Handled above, outside the acknowledgement ledger.
         is ProposalCheck.Invalid -> answered(InstinctAck.invalid(check))
+        // 1.23.0: the order's row ends as «accepted»; the plan runs in its own row, its progress goes to the log.
+        is PlanCheck -> {
+          val admission = InstinctPlanEngine.admit(app, check, execution, source, message, fingerprint)
+          answered(admission.entry)
+          admission.plan?.let { InstinctPlanEngine.start(app, it) }
+        }
         is ContextualCheck -> {
           val failure = when {
             source != ProposalSource.BUZON -> InstinctContextScheduler.ONLY_SIGNED
@@ -666,6 +673,10 @@ object InstinctProposalCenter {
     ProposalCheck.QueryKind.RULE_DISABLE -> InstinctContextScheduler.change(context, argument.orEmpty(), false).detail
     ProposalCheck.QueryKind.RULE_DELETE -> InstinctContextScheduler.change(context, argument.orEmpty(), null).detail
     ProposalCheck.QueryKind.EXECUTIONS -> runCatching { InstinctExecutionQueries.list(context, showQuestions) }.getOrDefault(JOURNAL_UNREADABLE)
+    ProposalCheck.QueryKind.PLANS -> runCatching { InstinctPlanEngine.describe(context) }.getOrDefault(JOURNAL_UNREADABLE)
+    ProposalCheck.QueryKind.PLAN_STATUS -> runCatching { InstinctPlanEngine.status(context, argument.orEmpty()) }.getOrDefault(JOURNAL_UNREADABLE)
+    ProposalCheck.QueryKind.PLAN_CANCEL -> runCatching { InstinctPlanEngine.cancel(context, argument.orEmpty()) }.getOrDefault(JOURNAL_UNREADABLE)
+    ProposalCheck.QueryKind.PLAN_RESUME -> runCatching { InstinctPlanEngine.resume(context, argument.orEmpty()) }.getOrDefault(JOURNAL_UNREADABLE)
     ProposalCheck.QueryKind.EXECUTION_STATUS -> runCatching { InstinctExecutionQueries.status(context, argument.orEmpty(), showQuestions) }.getOrDefault(JOURNAL_UNREADABLE)
   }
 
@@ -685,6 +696,7 @@ object InstinctProposalCenter {
     val minute = InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock())
     val verdict = when (check) {
       is ProposalCheck.Question -> InstinctQuestionNotifications.probe(app, source, check.question)
+      is PlanCheck -> InstinctPlanEngine.probe(app, check, source)
       is ContextualCheck -> when {
         source != ProposalSource.BUZON -> InstinctProbe.Verdict.Invalid(InstinctContextScheduler.ONLY_SIGNED)
         else -> InstinctContextScheduler.blocker(app, check.spec)?.let { InstinctProbe.Verdict.Invalid(it) }
@@ -1282,6 +1294,18 @@ object InstinctProposalCenter {
     }
     return message
   }
+
+  /** About a plan (1.23.0): one notification per plan, replaced as it goes, in the actions channel. Never WhatsApp. */
+  internal fun notifyPlan(context: Context, planId: String, title: String, text: String) {
+    if (!canNotify(context, ACTIONS_CHANNEL_ID)) return
+    val notification = builder(context, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info)
+      .setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text))
+      .setVisibility(Notification.VISIBILITY_PRIVATE)
+      .setPublicVersion(builder(context, ACTIONS_CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Instinct usó Insto").build())
+      .setAutoCancel(true).build()
+    runCatching { context.getSystemService(NotificationManager::class.java).notify(PLAN_BASE + (planId.hashCode() and 0xFFFF), notification) }
+  }
+  private const val PLAN_BASE = 80_000
 
   /** About a scheduled order: programmed, dropped, uncertain. Informative, in the actions channel. */
   internal fun notifyScheduled(context: Context, order: ScheduledOrder, title: String, text: String) {

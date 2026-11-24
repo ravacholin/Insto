@@ -70,7 +70,9 @@ interface InstinctOrderClaims {
 /** Where an execution came from. The same allowlist, validator and policies apply to all of them. */
 enum class ExecutionTransport(val code: String) {
   PUSH("timbre"), POLL("buzón"), WHATSAPP("whatsapp"), SCHEDULE("programada"), TRIGGER("disparador"),
-  RECURRENCE("recurrente"), DECISION("decisión"), CONTEXT("regla local"), RESTORE("restauración"), LEGACY("1.19.0");
+  RECURRENCE("recurrente"), DECISION("decisión"), CONTEXT("regla local"), RESTORE("restauración"), LEGACY("1.19.0"),
+  /** One action or question of a plan of several steps (1.23.0). */
+  PLAN("plan");
 
   companion object { fun of(name: String?): ExecutionTransport? = entries.firstOrNull { it.name == name } }
 }
