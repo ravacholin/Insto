@@ -22,6 +22,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- «Callar alarma con la voz» (1.25.0): listening while an alarm rings, and its full-screen offer. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
 
@@ -46,6 +49,7 @@
         <intent><action android:name="android.media.action.VIDEO_CAMERA" /></intent>
         <intent><action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" /></intent>
         <package android:name="com.google.android.deskclock" />
+        <package android:name="com.android.deskclock" />
         <intent><action android:name="android.intent.action.SET_ALARM" /></intent>
         <intent><action android:name="android.intent.action.SET_TIMER" /></intent>
         <intent><action android:name="android.intent.action.SHOW_ALARMS" /></intent>
@@ -151,6 +155,21 @@
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
         </receiver>
+        <!-- «Callar alarma con la voz» (1.25.0). The screen comes up over the lock screen; the service is started only
+             from it while it is visible. -->
+        <activity
+            android:name=".alarmvoice.AlarmVoiceStopActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:taskAffinity="${applicationId}.alarmvoice"
+            android:theme="@style/Theme.MyApplication"
+            android:turnScreenOn="true" />
+        <service
+            android:name=".alarmvoice.AlarmVoiceStopService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
         <activity android:name=".phone.CallActionActivity" android:exported="false" />
         <activity android:name=".phone.CaptureActionActivity" android:exported="false" />
         <activity android:name=".phone.FileActionActivity" android:exported="false" />

@@ -11,8 +11,8 @@ android {
     applicationId = "com.aistudio.pingassist.qvrtkm"
     minSdk = 24
     targetSdk = 36
-    versionCode = 33
-    versionName = "1.24.0"
+    versionCode = 34
+    versionName = "1.25.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -88,6 +88,9 @@ dependencies {
   implementation("com.google.code.gson:gson:2.13.2")
   implementation(libs.unifiedpush.connector)
   implementation(libs.tink)
+  // «Callar alarma con la voz» (1.25.0): on-device keyword recognition. The Spanish model is downloaded, not bundled.
+  implementation(libs.vosk.android) { artifact { type = "aar" } }
+  implementation(libs.jna) { artifact { type = "aar" } }
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.test.core)
   testImplementation(libs.androidx.test.ext.junit)

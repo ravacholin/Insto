@@ -74,12 +74,15 @@ def main():
         "backup/ConfigurationBackupManager.kt", "backup/BackupSections.kt", "backup/InstinctBackupSection.kt", "backup/BackupInventory.kt",
         "whatsapp/PhoneNumberUtils.kt", "speech/AudioTranscriber.kt",
         "speech/GroqTranscriber.kt", "speech/VocabularyHints.kt",
-        "session/SessionLifecycle.kt", "session/ActionExecutionLedger.kt")]
+        "session/SessionLifecycle.kt", "session/ActionExecutionLedger.kt",
+        # «Callar alarma con la voz» (1.25.0): detection, «Detener» choice and keyword matching, without Android.
+        "alarmvoice/AlarmVoiceLogic.kt")]
     tests = [ROOT / "app/src/test/java/com/example/audio" / name for name in (
         "VoiceSessionPolicyTest.kt", "VoiceCaptureTraceTest.kt")]
     tests += [ROOT / "app/src/test/java/com/example/context/SharedTextContextTest.kt"]
     # Session identity and state machine; the ledger test also uses Android-backed auto-send types (Gradle only).
     tests += [ROOT / "app/src/test/java/com/example/session/SessionLifecycleTest.kt"]
+    tests += [ROOT / "app/src/test/java/com/example/alarmvoice/AlarmVoiceLogicTest.kt"]
     tests += [ROOT / "app/src/test/java/com/example" / name for name in (
         "AutoSendGuardTest.kt", "ShareConfirmationPolicyTest.kt",
         "speech/GroqTranscriberTest.kt", "speech/VocabularyHintsTest.kt")]
