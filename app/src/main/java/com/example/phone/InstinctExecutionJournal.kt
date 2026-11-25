@@ -40,11 +40,13 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
             id TEXT PRIMARY KEY, line TEXT NOT NULL, expires_at INTEGER NOT NULL, enabled INTEGER NOT NULL,
             matched INTEGER NOT NULL, candidate_at INTEGER, last_at INTEGER, status TEXT NOT NULL)""")
           createPlans(opened)
-          val hasExecutionData = opened.rawQuery("PRAGMA table_info(executions)", null).use { columns ->
+          val executionColumns = opened.rawQuery("PRAGMA table_info(executions)", null).use { columns ->
             val name = columns.getColumnIndexOrThrow("name")
-            generateSequence { if (columns.moveToNext()) columns.getString(name) else null }.any { it == "execution_data" }
+            buildSet { while (columns.moveToNext()) add(columns.getString(name)) }
           }
-          if (!hasExecutionData) opened.execSQL("ALTER TABLE executions ADD COLUMN execution_data TEXT")
+          if ("execution_data" !in executionColumns) opened.execSQL("ALTER TABLE executions ADD COLUMN execution_data TEXT")
+          if ("dispatch_baseline" !in executionColumns) opened.execSQL("ALTER TABLE executions ADD COLUMN dispatch_baseline TEXT")
+          if ("first_dispatch_at" !in executionColumns) opened.execSQL("ALTER TABLE executions ADD COLUMN first_dispatch_at INTEGER")
           opened.execSQL("""CREATE TABLE IF NOT EXISTS instinct_clock (
             id TEXT PRIMARY KEY, at INTEGER NOT NULL, elapsed_at INTEGER, boot INTEGER NOT NULL, label TEXT NOT NULL,
             state TEXT NOT NULL, updated_at INTEGER NOT NULL)""")
@@ -162,12 +164,12 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
    * was claimed before. Throws when the transaction fails: then nothing is claimed and nothing must run.
    */
   fun admit(messageId: String, transport: ExecutionTransport, lines: List<String>, logMessage: String = "",
-    deadline: Long? = null, parent: String? = null, occurrence: String? = null, claim: Boolean = true): Admission = transaction { db ->
+    deadline: Long? = null, parent: String? = null, occurrence: String? = null, claim: Boolean = true, receivedAt: Long? = null): Admission = transaction { db ->
     val id = messageId.lowercase()
     if (claim && !claimIn(db, id, transport)) return@transaction Admission.Repeated
     val now = clock()
     val records = lines.mapIndexed { index, line ->
-      ExecutionRecord(ExecutionIds.of(id, index), id, index, transport, line, now, now, ExecutionState.RECEIVED,
+      ExecutionRecord(ExecutionIds.of(id, index), id, index, transport, line, receivedAt?.coerceAtMost(now) ?: now, now, ExecutionState.RECEIVED,
         logMessage = logMessage, owner = owner, deadline = deadline, parent = parent, occurrence = occurrence)
     }
     for (record in records) {
@@ -369,16 +371,30 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
   // ---------------------------------------------------------------------------------------------------------------
 
   /** Inserts [plan] unless it exists (the same order twice) or [InstinctPlanSpec.MAX_ACTIVE] plans are active. */
-  internal fun insertPlan(plan: PlanRecord): PlanInsert = transaction { db ->
+  internal fun insertPlan(plan: PlanRecord, acceptance: String? = null): PlanInsert = transaction { db ->
     if (planIn(db, plan.id) != null) return@transaction PlanInsert.EXISTS
     val active = db.rawQuery("SELECT COUNT(*) FROM plans WHERE state IN (${PlanState.ACTIVE.joinToString(",") { "'${it.name}'" }})", null)
       .use { it.moveToFirst(); it.getInt(0) }
     if (active >= InstinctPlanSpec.MAX_ACTIVE) return@transaction PlanInsert.FULL
+    if (acceptance != null) {
+      val root = plan.root?.let { getIn(db, it) } ?: return@transaction PlanInsert.UNAVAILABLE
+      if (!ExecutionTransitions.allowed(root.state, ExecutionState.DISPATCHING)) return@transaction PlanInsert.UNAVAILABLE
+      val now = clock()
+      check(db.update("executions", ContentValues().apply {
+        put("state", ExecutionState.VERIFIED.name)
+        put("owner", owner)
+        put("updated_at", now)
+        put("first_dispatch_at", root.firstDispatchAt ?: now)
+        put("attempts", root.attempts + 1)
+        put("result", acceptance.take(MAX_TEXT))
+        put("reported", AckKind.OK.name)
+      }, "execution_id = ?", arrayOf(root.executionId)) == 1)
+    }
     db.insertOrThrow("plans", null, planValues(plan))
     PlanInsert.ADDED
   }
 
-  internal enum class PlanInsert { ADDED, EXISTS, FULL }
+  internal enum class PlanInsert { ADDED, EXISTS, FULL, UNAVAILABLE }
 
   internal fun plan(id: String): PlanRecord? = planIn(database(), id)
 
@@ -483,8 +499,8 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     if (!ExecutionTransitions.allowed(current.state, to)) return@transaction false
     if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.DECISION &&
       clock() >= (current.deadline ?: 0)) return@transaction false
-    if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.PLAN &&
-      current.occurrence?.let { planIn(db, it)?.state != PlanState.RUNNING } != false) return@transaction false
+    if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.PLAN && !runningPlan(db, current))
+      return@transaction false
     if (to == ExecutionState.DISPATCHING && current.transport == ExecutionTransport.CONTEXT &&
       !contextEnabled(db, current, clock())) return@transaction false
     db.update("executions", ContentValues().apply {
@@ -497,7 +513,10 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
       proposalId?.let { put("proposal_id", it) }
       occurrence?.let { put("occurrence", it) }
       if (current.transport !in LOCAL) reported?.let { put("reported", it.name) }
-      if (to == ExecutionState.DISPATCHING) put("attempts", current.attempts + 1)
+      if (to == ExecutionState.DISPATCHING) {
+        put("attempts", current.attempts + 1)
+        put("first_dispatch_at", current.firstDispatchAt ?: clock())
+      }
     }, "execution_id = ?", arrayOf(executionId)) == 1
   }
 
@@ -507,6 +526,49 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
    */
   fun beginDispatch(executionId: String, command: String?): Boolean =
     runCatching { transition(executionId, ExecutionState.DISPATCHING, command = command) }.getOrDefault(false)
+
+  /** Atomic write-ahead claim of an original dispatch or the single permitted retry of this plan step. */
+  internal fun beginPlanDispatch(row: ExecutionRecord, command: String, baseline: String?, retry: Boolean): Boolean = transaction { db ->
+    val current = getIn(db, row.executionId) ?: return@transaction false
+    if (!runningPlan(db, current) || current.attempts != row.attempts) return@transaction false
+    if (retry) {
+      if (current.state != ExecutionState.UNCERTAIN || current.attempts != 1 ||
+        baseline == null || current.dispatchBaseline != baseline || current.command != command) return@transaction false
+    } else if (!ExecutionTransitions.allowed(current.state, ExecutionState.DISPATCHING)) return@transaction false
+    db.update("executions", ContentValues().apply {
+      val now = clock()
+      put("state", ExecutionState.DISPATCHING.name)
+      put("owner", owner)
+      put("updated_at", now)
+      put("attempts", current.attempts + 1)
+      put("first_dispatch_at", current.firstDispatchAt ?: now)
+      put("command", command)
+      put("dispatch_baseline", baseline)
+    }, "execution_id = ?", arrayOf(row.executionId)) == 1
+  }
+
+  /** Observation may settle an uncertain plan step without reopening any other kind of terminal execution. */
+  internal fun verifyPlanDispatch(row: ExecutionRecord, result: String, data: String?): Boolean = transaction { db ->
+    val current = getIn(db, row.executionId) ?: return@transaction false
+    if (!runningPlan(db, current) || current.state != row.state || current.attempts != row.attempts ||
+      current.state !in setOf(ExecutionState.DISPATCHING, ExecutionState.VERIFYING, ExecutionState.UNCERTAIN)) return@transaction false
+    db.update("executions", ContentValues().apply {
+      put("state", ExecutionState.VERIFIED.name)
+      put("owner", owner)
+      put("updated_at", clock())
+      put("result", result.take(MAX_TEXT))
+      putNull("reason")
+      put("attribution", ExecutionAttribution.SATISFIED.name)
+      data?.let { put("execution_data", it) }
+    }, "execution_id = ?", arrayOf(row.executionId)) == 1
+  }
+
+  private fun runningPlan(db: SQLiteDatabase, row: ExecutionRecord): Boolean {
+    if (row.transport != ExecutionTransport.PLAN) return false
+    val plan = row.occurrence?.let { planIn(db, it) } ?: return false
+    return plan.state == PlanState.RUNNING && plan.owner == owner && clock() < plan.deadline &&
+      row.messageId == PlanIds.step(plan.id, plan.block, plan.sub, plan.fallback)
+  }
 
   /** Marks the acknowledgement sent for [executionId]. */
   fun markReported(executionId: String, kind: AckKind) {
@@ -572,7 +634,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
     return ExecutionRecord(s("execution_id") ?: return null, s("message_id").orEmpty(), (l("idx") ?: 0).toInt(), transport,
       s("line").orEmpty(), l("received_at") ?: 0, l("updated_at") ?: 0, state, s("command"), s("result"), s("reason"),
       s("occurrence"), s("parent"), (l("attempts") ?: 0).toInt(), s("log_message").orEmpty(), s("owner").orEmpty(), l("deadline"),
-      s("reported"), ExecutionAttribution.of(s("attribution")), l("proposal_id"), s("execution_data"))
+      s("reported"), ExecutionAttribution.of(s("attribution")), l("proposal_id"), s("execution_data"), s("dispatch_baseline"), l("first_dispatch_at"))
   }
 
   /** The executor returned NEEDS_INPUT before side effects. A killed process cannot take this path. */
@@ -632,7 +694,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
   companion object {
     const val FILE = "instinct-executions.db"
     private val LOCAL = setOf(ExecutionTransport.DECISION, ExecutionTransport.CONTEXT)
-    private const val VERSION = 5
+    private const val VERSION = 6
     private const val MAX_TEXT = 600
     private const val META_SEEN = "legacy_seen_imported"
     private const val META_LEGACY_CORRUPT = "legacy_seen_unreadable"
@@ -658,7 +720,7 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
 }
 
 /** The journal as the one claim registry every transport shares. */
-class JournalClaims(private val journal: InstinctExecutionJournal) : InstinctOrderClaims {
+class JournalClaims(private val journal: InstinctExecutionJournal, private val receivedAt: Long? = null) : InstinctOrderClaims {
   override fun contains(id: String): Boolean = journal.containsClaim(id)
   override fun claimAll(ids: Collection<String>): Set<String> = journal.claimIds(ids, ExecutionTransport.POLL)
 
@@ -666,7 +728,7 @@ class JournalClaims(private val journal: InstinctExecutionJournal) : InstinctOrd
   override fun claimOrders(orders: List<MailboxOrder>, transport: ExecutionTransport): Set<String> = orders.mapNotNullTo(LinkedHashSet()) { order ->
     val lines = InstinctProposalProtocol.orders(order.lines.joinToString("\n"))
     when (journal.admit(order.id, transport, lines, InstinctMailboxSignature.messageId(order.id),
-      deadline = InstinctMailboxSignature.instant(order.at)?.plus(InstinctMailboxSignature.MAX_AGE_MILLIS))) {
+      deadline = InstinctMailboxSignature.instant(order.at)?.plus(InstinctMailboxSignature.MAX_AGE_MILLIS), receivedAt = receivedAt)) {
       is InstinctExecutionJournal.Admission.Admitted -> order.id.lowercase()
       InstinctExecutionJournal.Admission.Repeated -> null
     }

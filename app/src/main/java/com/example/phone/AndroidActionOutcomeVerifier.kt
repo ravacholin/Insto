@@ -5,9 +5,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -21,7 +24,8 @@ import android.os.Looper
 class AndroidActionOutcomeVerifier(private val context: Context) : ActionOutcomeVerifier {
   override fun read(command: PhoneCommand): DeviceReading? = when (command) {
     is PhoneCommand.Volume -> context.getSystemService(AudioManager::class.java)?.let {
-      DeviceReading(volume = it.getStreamVolume(AudioManager.STREAM_MUSIC), volumeMax = it.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+      DeviceReading(volume = it.getStreamVolume(AudioManager.STREAM_MUSIC), volumeMax = it.getStreamMaxVolume(AudioManager.STREAM_MUSIC),
+        audioRoute = if (command.operation == VolumeOp.SET) volumeRoute(it) else null)
     }
     is PhoneCommand.Torch -> DeviceReading(torch = TorchState.read(context))
     is PhoneCommand.Platform -> DeviceReading(
@@ -35,6 +39,15 @@ class AndroidActionOutcomeVerifier(private val context: Context) : ActionOutcome
     }
     is PhoneCommand.Media -> DeviceReading(playing = playing(command.packageName))
     else -> null
+  }
+
+  private fun volumeRoute(audio: AudioManager): String? {
+    if (Build.VERSION.SDK_INT < 33 || audio.isVolumeFixed) return null
+    return runCatching {
+      val outputs = audio.getAudioDevicesForAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
+      val speaker = outputs.singleOrNull()?.takeIf { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+      speaker?.let { sha256("${it.type}:${it.id}:${it.address}") }
+    }.getOrNull()
   }
 
   /** The active session's playback (the named app's, else the first one); null without notification access. */

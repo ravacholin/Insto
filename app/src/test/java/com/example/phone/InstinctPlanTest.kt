@@ -125,12 +125,26 @@ class InstinctPlanTest {
     assertEquals(PlanStepPolicy.Next.Run, PlanStepPolicy.of(null, null))
     assertEquals(PlanStepPolicy.Next.Run, PlanStepPolicy.of(row(ExecutionState.VALIDATED), null))
     assertEquals(PlanStepPolicy.Next.Verify, PlanStepPolicy.of(row(ExecutionState.DISPATCHING), ActionEffect.IDEMPOTENT_SET))
-    assertTrue(PlanStepPolicy.of(row(ExecutionState.DISPATCHING), ActionEffect.NON_IDEMPOTENT) is PlanStepPolicy.Next.Uncertain)
-    assertTrue(PlanStepPolicy.of(row(ExecutionState.DISPATCHING), ActionEffect.EXTERNAL_HANDOFF) is PlanStepPolicy.Next.Uncertain)
+    assertEquals(PlanStepPolicy.Next.Verify, PlanStepPolicy.of(row(ExecutionState.DISPATCHING), ActionEffect.NON_IDEMPOTENT))
+    assertEquals(PlanStepPolicy.Next.Verify, PlanStepPolicy.of(row(ExecutionState.DISPATCHING), ActionEffect.EXTERNAL_HANDOFF))
     assertEquals(PlanStepPolicy.Next.Verify, PlanStepPolicy.of(row(ExecutionState.VERIFYING), null))
     assertEquals(PlanStepPolicy.Next.Done, PlanStepPolicy.of(row(ExecutionState.VERIFIED), null))
-    assertTrue(PlanStepPolicy.of(row(ExecutionState.UNCERTAIN), null) is PlanStepPolicy.Next.Uncertain)
+    assertEquals(PlanStepPolicy.Next.Verify, PlanStepPolicy.of(row(ExecutionState.UNCERTAIN), null))
     assertTrue(PlanStepPolicy.of(row(ExecutionState.FAILED), null) is PlanStepPolicy.Next.Failed)
+  }
+
+  @Test fun `only a matching absolute volume baseline can authorize one replay`() {
+    val command = PhoneCommand.Volume(VolumeOp.SET, 20)
+    val observation = DeviceReading(volume = 10, volumeMax = 15, audioRoute = "speaker")
+    val row = ExecutionRecord("e1", "m", 0, ExecutionTransport.PLAN, "volumen", 0, 0,
+      ExecutionState.UNCERTAIN, attempts = 1, dispatchBaseline = "speaker:15:10")
+    assertTrue(PlanStepPolicy.canRetry(row, PlanStepPolicy.baseline(command, observation)))
+    assertFalse(PlanStepPolicy.canRetry(row, PlanStepPolicy.baseline(command, observation.copy(volume = 7))))
+    assertFalse(PlanStepPolicy.canRetry(row, PlanStepPolicy.baseline(command, observation.copy(volumeMax = 30))))
+    assertFalse(PlanStepPolicy.canRetry(row, PlanStepPolicy.baseline(command, observation.copy(audioRoute = "headset"))))
+    assertFalse(PlanStepPolicy.canRetry(row, PlanStepPolicy.baseline(PhoneCommand.Volume(VolumeOp.UP), observation)))
+    assertFalse(PlanStepPolicy.canRetry(row.copy(attempts = 2), "speaker:15:10"))
+    assertFalse(PlanStepPolicy.canRetry(row.copy(dispatchBaseline = null), "speaker:15:10"))
   }
 
   @Test fun `a restoration never overwrites a later change`() {

@@ -162,4 +162,17 @@ class InstinctPushInboxTest {
     assertEquals(InstinctPushMessage.Kind.Ring, classified.kind)
     assertNull(InstinctDoorbellPayload.parse(big))
   }
+
+  @Test fun `a reference requires encryption and binds the exact order bytes`() {
+    val id = "00000000-0000-4000-8000-000000000042"
+    val at = "2026-11-21T09:30:00-03:00"
+    val signed = MailboxOrder(id, at, listOf("#insto plan-json á"), "a".repeat(64))
+    val fingerprint = sha256("insto-v4\n$id\n$at\n#insto plan-json á")
+    val bytes = """{"v":1,"id":"$id","sha256":"$fingerprint"}""".toByteArray(Charsets.UTF_8)
+    val reference = (InstinctPushMessage.classify(bytes, true, true).kind as InstinctPushMessage.Kind.Reference).reference
+    assertTrue(reference.matches(signed))
+    assertFalse(reference.matches(signed.copy(lines = listOf("#insto plan-json a"))))
+    assertFalse(reference.matches(signed.copy(id = "00000000-0000-4000-8000-000000000043")))
+    assertEquals(InstinctPushMessage.Kind.Ring, InstinctPushMessage.classify(bytes, false, false).kind)
+  }
 }

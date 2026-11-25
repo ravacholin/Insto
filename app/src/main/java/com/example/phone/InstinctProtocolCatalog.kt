@@ -275,7 +275,7 @@ object InstinctProtocolCatalog {
   private const val CONTEXT_RULE = "Creá, consultá y administrá reglas por el buzón firmado. Hasta tres condiciones unidas con «y», una acción permitida sin interfaz o «avisarme» y hasta 12 reglas durante un máximo de 30 días. Se disparan al cumplirse las condiciones, según los eventos que Android entregue, incluso sin conexión con Instinct. Conservan los permisos y la autonomía del teléfono."
 
 
-  const val PLAN_RULE = "Un plan es una sola orden en una línea: hasta ${InstinctPlanSpec.MAX_ACTIONS} acciones sin interfaz (contando alternativas y opciones), ${InstinctPlanSpec.MAX_STEPS} pasos, una decisión y ${InstinctPlanSpec.MAX_ACTIVE} planes activos. Insto ejecuta cada paso después de comprobar el anterior. Si una acción falla, el plan se detiene, salvo que hayas escrito «si falla <acción>». Si el resultado es incierto, no se repite: el plan queda suspendido hasta «reanudar plan <id>» o «cancelar plan <id>». Lo que «guardar» guarda se restaura con «restaurar», o al cancelarse, fallar o vencer el plan, salvo que la persona lo haya cambiado después. Vence a las 12 horas, o con «hasta las HH:MM» (máximo 24 horas). La autonomía se aplica al plan entero: con Confirmar la persona lo aprueba una vez; con Nunca se rechaza."
+  const val PLAN_RULE = "Un plan es una sola orden en una línea: hasta ${InstinctPlanSpec.MAX_ACTIONS} acciones sin interfaz (contando alternativas y opciones), ${InstinctPlanSpec.MAX_STEPS} pasos, una decisión y ${InstinctPlanSpec.MAX_ACTIVE} planes activos. Insto ejecuta cada paso después de comprobar el anterior. Si una acción falla, el plan se detiene, salvo que hayas escrito «si falla <acción>». Si falta confirmar el resultado, Insto consulta el estado real. Cuando se cumple, sigue. Solo reintenta una vez el volumen absoluto cuando puede comprobar que el parlante integrado, el nivel y la escala siguen como antes. Si la duda sigue, suspende el plan y pide revisión. «reanudar plan <id>» omite el paso incierto y sus dependientes explícitos; «cancelar plan <id>» termina el plan. Lo que «guardar» guarda se restaura con «restaurar», o al cancelarse, fallar o vencer el plan, salvo que la persona lo haya cambiado después. Vence a las 12 horas, o con «hasta las HH:MM» (máximo 24 horas). La autonomía se aplica al plan entero: con Confirmar la persona lo aprueba una vez; con Nunca se rechaza."
   const val PLAN_RESULT = "El acuse de la orden dice «Plan <id> aceptado». El progreso y el resultado final van a la bitácora como eventos de tipo «plan» (orden: «plan <id> · <paso> · <texto>», detalle: estado y resultado), nunca al chat. «ver planes» y «estado de plan <id>» los muestran."
 
   const val TRIGGER_RULE = "Para algo que depende de un momento del día o del teléfono, preferí dejar un disparador antes que vigilar el estado y mandar la orden después."
@@ -307,6 +307,7 @@ object InstinctProtocolCatalog {
     channels: InstinctCatalogChannels = InstinctCatalogChannels(), instoVersion: String,
     availability: Map<String, String> = emptyMap(), calendarIds: List<Long> = emptyList(),
     calendarWriteIds: List<Long> = emptyList(), calendarLabels: Map<Long, String> = emptyMap(), routineRevisions: Map<String, String> = emptyMap(),
+    capabilityTargets: Map<String, List<String>> = emptyMap(),
     parse: (String) -> PhoneRoute = PhoneCommandParser()::parse): InstinctCatalogJson {
     fun category(order: String) = (parse(order) as? PhoneRoute.Local)?.command?.let(InstinctCategory::of)?.label
     val quiet = autonomy.quiet
@@ -318,13 +319,17 @@ object InstinctProtocolCatalog {
       "capacidades" to InstinctCapabilities.specs.values.map { spec ->
         InstinctCatalogCanonical.toKotlin(spec.catalog(
           if (autonomy.level(spec.category) == InstinctAutonomy.NUNCA) "nunca"
-          else availability[spec.id] ?: "consultar catálogo del teléfono"))
+          else availability[spec.id] ?: if (spec.adapter == InstinctCapabilities.Adapter.OMNIREMOTE)
+            InstinctCapabilities.OMNIREMOTE_UNAVAILABLE else "consultar catálogo del teléfono",
+          targets = capabilityTargets[spec.id].orEmpty().takeIf { autonomy.level(spec.category) != InstinctAutonomy.NUNCA }.orEmpty()))
       },
       "calendarios_habilitados" to calendarIds,
       "calendarios_con_escritura" to calendarWriteIds,
       "calendarios" to calendarIds.map { mapOf("id" to it, "nombre" to calendarLabels[it].orEmpty(), "escritura" to (it in calendarWriteIds)) },
       "plan_json" to InstinctStructuredPlan.contract,
-      "integraciones" to mapOf("omniremote" to "sin interfaz local compatible", "appfunctions" to "sin proveedor autorizado"),
+      "integraciones" to mapOf(
+        "omniremote" to if (capabilityTargets.keys.any { it.startsWith("omniremote_") }) "ver capacidades y destinos" else "sin interfaz local compatible",
+        "appfunctions" to "sin proveedor autorizado"),
       "acciones" to InstinctProposalValidator.immediateExamples.map { mapOf("orden" to it, "categoria" to category(it)) },
       "formas" to mapOf(
         "diferidas" to InstinctProposalValidator.deferredExamples.map { mapOf("orden" to it) },
@@ -409,6 +414,7 @@ object InstinctProtocolCatalog {
         "acuses_por" to channels.ackChannel.name.lowercase(),
       ),
       "firma_buzon" to InstinctMailboxSignature.VERSION,
+      "entrega_buzon" to listOf("push_directo_si_entra", "referencia_cifrada_id_sha256", "sondeo_de_respaldo"),
       "reglas" to listOf(TRIGGER_RULE, InstinctProbe.RULE),
     )
     val canonical = InstinctCatalogCanonical.write(value)

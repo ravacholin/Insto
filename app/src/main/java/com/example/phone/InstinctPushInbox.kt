@@ -32,6 +32,7 @@ object InstinctPushMessage {
     data object Ring : Kind
     /** A signed order, still to be verified. */
     data class Order(val order: MailboxOrder) : Kind
+    data class Reference(val reference: MailboxOrderReference) : Kind
   }
 
   /**
@@ -58,6 +59,7 @@ object InstinctPushMessage {
       // Anyone who knows the endpoint can send clear text: at most it asks for a poll.
       return Classified(Kind.Ring, encrypted = false, downgraded = !looksEncrypted(content), undecryptable = looksEncrypted(content))
     }
+    if (decrypted) InstinctDoorbellPayload.reference(content)?.let { return Classified(Kind.Reference(it), encrypted = true) }
     val order = InstinctDoorbellPayload.parse(content)
     if (order != null) return Classified(Kind.Order(order), encrypted = decrypted, plainLegacy = !decrypted)
     val plain = InstinctDoorbellPayload.plain(content)
@@ -86,11 +88,13 @@ data class PushEntry(
   val encrypted: Boolean = false,
   val claimed: Boolean = false,
   val attempts: Int = 0,
+  val reference: MailboxOrderReference? = null,
 ) {
-  enum class Kind { RING, ORDER }
+  enum class Kind { RING, ORDER, REFERENCE }
 
   fun json(): JSONObject = JSONObject().put("seq", seq).put("kind", kind.name).put("at", receivedAt).put("encrypted", encrypted)
     .put("claimed", claimed).put("attempts", attempts).apply {
+      reference?.let { put("reference", JSONObject().put("v", 1).put("id", it.id).put("sha256", it.fingerprint)) }
       order?.let { put("order", JSONObject().put("id", it.id).put("at", it.at).put("lines", JSONArray(it.lines)).put("sig", it.sig)) }
     }
 
@@ -101,8 +105,12 @@ data class PushEntry(
         val lines = m.getJSONArray("lines")
         MailboxOrder(m.getString("id"), m.getString("at"), (0 until minOf(lines.length(), 16)).map { lines.getString(it) }, m.getString("sig"))
       }
-      if (kind == Kind.ORDER && order == null) return null
-      PushEntry(o.getLong("seq"), kind, o.getLong("at"), order, o.optBoolean("encrypted"), o.optBoolean("claimed"), o.optInt("attempts"))
+      val reference = o.optJSONObject("reference")?.let {
+        InstinctDoorbellPayload.reference(it.toString().toByteArray(Charsets.UTF_8))
+      }
+      if (kind == Kind.ORDER && order == null || kind == Kind.REFERENCE && (reference == null || !o.optBoolean("encrypted"))) return null
+      PushEntry(o.getLong("seq"), kind, o.getLong("at"), order, o.optBoolean("encrypted"), o.optBoolean("claimed"),
+        o.optInt("attempts"), reference)
     }.getOrNull()
   }
 }
@@ -132,16 +140,22 @@ class InstinctPushInbox(private val file: File, private val clock: () -> Long = 
 
   fun size(): Int = entries().size
 
-  fun add(kind: PushEntry.Kind, order: MailboxOrder? = null, encrypted: Boolean = false): Added = synchronized(lock) {
+  fun add(kind: PushEntry.Kind, order: MailboxOrder? = null, encrypted: Boolean = false,
+    reference: MailboxOrderReference? = null, receivedAt: Long = clock()): Added = synchronized(lock) {
+    if (kind == PushEntry.Kind.REFERENCE && (reference == null || !encrypted)) return@synchronized Added.Failed
     val all = fresh(read())
     when {
       kind == PushEntry.Kind.RING && all.any { it.kind == PushEntry.Kind.RING } -> return@synchronized Added.Coalesced
       kind == PushEntry.Kind.ORDER && order != null && all.any { it.order?.id.equals(order.id, ignoreCase = true) } ->
         return@synchronized Added.Duplicate
+      reference != null && all.any { entry ->
+        entry.reference?.id.equals(reference.id, ignoreCase = true) ||
+          entry.order?.id.equals(reference.id, ignoreCase = true)
+      } -> return@synchronized Added.Duplicate
     }
     if (all.size >= InstinctPushPolicy.INBOX_CAPACITY) {
       // Full: a ring still gets in (folded), so the poll reads whatever did not fit.
-      if (kind == PushEntry.Kind.ORDER && all.none { it.kind == PushEntry.Kind.RING }) {
+      if (kind != PushEntry.Kind.RING && all.none { it.kind == PushEntry.Kind.RING }) {
         val ring = PushEntry(nextSeq(all), PushEntry.Kind.RING, clock())
         // The oldest unclaimed order makes room: it is still in the sheet, and the ring reads it from there.
         val oldest = all.firstOrNull { !it.claimed } ?: return@synchronized Added.Full
@@ -149,7 +163,8 @@ class InstinctPushInbox(private val file: File, private val clock: () -> Long = 
       }
       return@synchronized Added.Full
     }
-    val entry = PushEntry(nextSeq(all), kind, clock(), order?.takeIf { kind == PushEntry.Kind.ORDER }, encrypted)
+    val entry = PushEntry(nextSeq(all), kind, receivedAt, order?.takeIf { kind == PushEntry.Kind.ORDER }, encrypted,
+      reference = reference?.takeIf { kind == PushEntry.Kind.REFERENCE })
     if (write(all + entry)) Added.Queued(entry) else Added.Failed
   }
 

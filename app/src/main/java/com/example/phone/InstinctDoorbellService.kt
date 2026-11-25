@@ -266,7 +266,7 @@ object InstinctDoorbell {
    * MESSAGE, on the receiving thread, after the library checked the token and tried to decrypt it. Classified, then
    * stored in the inbox **before** returning: the library acknowledges it only after this. The content is never logged.
    */
-  internal fun onMessage(context: Context, content: ByteArray, decrypted: Boolean) {
+  internal fun onMessage(context: Context, content: ByteArray, decrypted: Boolean, receivedAt: Long) {
     val app = context.applicationContext
     val s = settings(app)
     val classified = InstinctPushMessage.classify(content.takeIf { it.size <= MAX_MESSAGE_BYTES }, decrypted, s.state().encryptionConfirmed)
@@ -280,7 +280,7 @@ object InstinctDoorbell {
           else -> it.lastError
         })
     }
-    accept(app, classified.kind, classified.encrypted, classified.malformed)
+    accept(app, classified.kind, classified.encrypted, classified.malformed, receivedAt)
   }
 
   /** REGISTRATION_FAILED: the library keeps its token; the reason, for the diagnosis. */
@@ -304,7 +304,8 @@ object InstinctDoorbell {
    * [InstinctPushDispatcher]. Receiving is not running: the order still goes through the signature, the window, the
    * record of seen ids and the same intake as a poll. With the mailbox off nothing is stored.
    */
-  internal fun accept(context: Context, kind: InstinctPushMessage.Kind, encrypted: Boolean, malformed: Boolean = false) {
+  internal fun accept(context: Context, kind: InstinctPushMessage.Kind, encrypted: Boolean, malformed: Boolean = false,
+    receivedAt: Long = InstinctMailbox.clock()) {
     val app = context.applicationContext
     settings(app).update {
       it.copy(rings = it.rings + 1, lastRingAt = clock(), badPayloads = it.badPayloads + if (malformed) 1 else 0)
@@ -314,8 +315,9 @@ object InstinctDoorbell {
     InstinctMailbox.rearm(app)
     val inbox = InstinctPushDispatcher.inbox(app)
     val added = when (kind) {
-      InstinctPushMessage.Kind.Ring -> inbox.add(PushEntry.Kind.RING, encrypted = encrypted)
-      is InstinctPushMessage.Kind.Order -> inbox.add(PushEntry.Kind.ORDER, kind.order, encrypted)
+      InstinctPushMessage.Kind.Ring -> inbox.add(PushEntry.Kind.RING, encrypted = encrypted, receivedAt = receivedAt)
+      is InstinctPushMessage.Kind.Order -> inbox.add(PushEntry.Kind.ORDER, kind.order, encrypted, receivedAt = receivedAt)
+      is InstinctPushMessage.Kind.Reference -> inbox.add(PushEntry.Kind.REFERENCE, encrypted = encrypted, reference = kind.reference, receivedAt = receivedAt)
     }
     when (added) {
       is InstinctPushInbox.Added.Queued -> schedule(app, KIND_DRAIN, InstinctPushPolicy.RESCUE_DELAY_MILLIS)

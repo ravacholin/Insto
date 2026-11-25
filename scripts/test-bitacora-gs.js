@@ -5,6 +5,7 @@
 'use strict';
 const assert = require('assert');
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const vm = require('vm');
 
@@ -12,12 +13,27 @@ const SOURCE = fs.readFileSync(path.join(__dirname, '..', 'docs', 'instinct-bita
 
 function fakeSheet() {
   const rows = [];
+  const reads = [];
+  const writes = [];
   return {
-    rows,
+    rows, reads, writes,
     getRange(row, col, numRows, numCols) {
       if (typeof row === 'string') return { setNumberFormat() {} };
       return {
+        createTextFinder(text) {
+          return {
+            matchEntireCell() { return this; },
+            matchCase() { return this; },
+            findNext() {
+              const index = rows.slice(row - 1, row - 1 + numRows)
+                .findIndex(r => String(r[col - 1]).toLowerCase() === text.toLowerCase());
+              return index < 0 ? null : {getRow: () => row + index};
+            },
+          };
+        },
+        getValue() { return this.getValues()[0][0]; },
         getValues() {
+          reads.push([row, col, numRows || 1, numCols || 1]);
           const out = [];
           for (let r = 0; r < (numRows || 1); r++) {
             const source = rows[row - 1 + r] || [];
@@ -34,6 +50,12 @@ function fakeSheet() {
           });
         },
       };
+    },
+    getRangeList(cells) {
+      return {setValue(value) {
+        writes.push(Array.from(cells));
+        for (const cell of cells) rows[Number(cell.slice(1)) - 1][5] = value;
+      }};
     },
     appendRow(values) { rows.push(values.slice()); },
     deleteRows(row, n) { rows.splice(row - 1, n); },
@@ -57,6 +79,7 @@ function load(options) {
   };
   const context = {
     SpreadsheetApp: {
+      flush() {},
       getActiveSpreadsheet() {
         return {
           getSheetByName(name) { return sheets[name] || null; },
@@ -84,6 +107,9 @@ function load(options) {
       },
     },
     Utilities: {
+      DigestAlgorithm: { SHA_256: 'sha256' },
+      Charset: { UTF_8: 'utf8' },
+      computeDigest(algorithm, text, charset) { return Array.from(crypto.createHash(algorithm).update(text, charset).digest()); },
       // Como el de Google: base64 «web safe» a bytes con signo.
       base64DecodeWebSafe(text) { return Array.from(Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/'), 'base64')).map((b) => (b > 127 ? b - 256 : b)); },
     },
@@ -285,6 +311,45 @@ test('un plan JSON largo se conserva firmado y puede usar el timbre simple', () 
   const oversize = {...body, id:'00000000-0000-4000-8000-000000000105', lines:[json + 'x'.repeat(8192)]};
   assert.deepStrictEqual(s.post(oversize), {ok:false, error:'tamano'});
   assert.strictEqual(s.get({ token: T, action: 'ordenes' }).ordenes.length, 1);
+});
+
+test('un cliente compatible recibe solo una referencia cifrada y recupera una sola fila', () => {
+  const s = load({relay: true});
+  s.post({ token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: true, referencia: true,
+    cifrado: {timbre: 'a'.repeat(200), p256dh: 'b'.repeat(87), auth: 'c'.repeat(22)} });
+  s.post(order(ID));
+  assert.strictEqual(JSON.parse(s.fetches[0].options.payload).payload.includes('lineas'), false);
+  assert.deepStrictEqual(JSON.parse(JSON.parse(s.fetches[0].options.payload).payload).lines, ['#insto ver estado']);
+  for (let i = 1; i <= 10; i++) s.post(order('10000000-0000-4000-8000-0000000000' + String(i).padStart(2, '0')));
+  const id = '00000000-0000-4000-8000-000000000155';
+  const body = {...order(id), lines: ['#insto plan-json ' + 'á'.repeat(2200)]};
+  s.post(body);
+  const box = Object.values(s.sheets).find(sheet => sheet.rows.some(row => row.includes(id)));
+  box.reads.length = 0;
+  const digest = crypto.createHash('sha256').update(['insto-v4', id, body.at, ...body.lines].join('\n')).digest('hex');
+  assert.deepStrictEqual(JSON.parse(JSON.parse(s.fetches.at(-1).options.payload).payload), {v: 1, id, sha256: digest});
+  assert.deepStrictEqual(s.get({token: 'incorrecto', action: 'orden', id}), {ok: false, error: 'token'});
+  assert.strictEqual(s.get({token: T, action: 'orden', id}).ordenes.length, 1);
+  assert.deepStrictEqual(s.get({token: T, action: 'orden', id}).ordenes[0].lineas, body.lines);
+  assert.deepStrictEqual(box.reads, [[13, 1, 1, 6], [13, 1, 1, 6]]);
+  assert.ok(!s.get({token: T, action: 'ordenes'}).ordenes.some(order => order.orden_id === id));
+  assert.strictEqual(s.get({token: T, action: 'orden', id: ID}).ordenes[0].orden_id, ID);
+  s.post({token: T, action: 'tomadas', ids: [id]});
+  assert.deepStrictEqual(s.get({token: T, action: 'orden', id}).ordenes, []);
+  assert.strictEqual(s.post({token: T, action: 'tomadas', ids: [id]}).tomadas, 0);
+  assert.deepStrictEqual(box.writes, [['F13']]);
+});
+
+test('registrar un cliente anterior vuelve al timbre cifrado simple para órdenes largas', () => {
+  const s = load({relay: true});
+  const settings = { token: T, action: 'timbre', endpoint: ENDPOINT, conOrden: true,
+    cifrado: {timbre: 'a'.repeat(200), p256dh: 'b'.repeat(87), auth: 'c'.repeat(22)} };
+  s.post({...settings, referencia: true});
+  s.post(settings);
+  s.post({...order(ID), lines: ['#insto plan-json ' + 'a'.repeat(4200)]});
+  assert.strictEqual(s.fetches.length, 1);
+  assert.strictEqual(s.fetches[0].url, ENDPOINT);
+  assert.strictEqual(s.fetches[0].options.headers['Content-Encoding'], 'aes128gcm');
 });
 
 test('una orden demasiado grande (o con más de 3 líneas) toca el timbre sin la orden', () => {

@@ -41,9 +41,16 @@ internal class InstinctCalendarAccess(private val context: Context) {
   companion object { private val lock = Any() }
 }
 
-/** A missing prerequisite is distinct from a failed or uncertain action. Null means the action can be dispatched. */
+/** Discovery, authorization, dispatch and read-back for the capabilities compiled into Insto. */
 internal object InstinctDeviceCapabilities {
   data class Block(val reason: String, val pending: Boolean)
+  data class Discovery(val blocker: Block?, val targets: List<String> = emptyList())
+
+  private val registry = mapOf(
+    InstinctCapabilities.Adapter.ANDROID_LOCAL to AndroidLocalCapabilities,
+    InstinctCapabilities.Adapter.ANDROID_INTENT to AndroidIntentCapabilities,
+    InstinctCapabilities.Adapter.OMNIREMOTE to OmniremoteAdapter(),
+  )
 
   fun granted(context: Context, permission: String): Boolean = when (permission) {
     Manifest.permission.SCHEDULE_EXACT_ALARM -> Build.VERSION.SDK_INT < 31 ||
@@ -56,38 +63,17 @@ internal object InstinctDeviceCapabilities {
     else -> context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
   }
 
+  fun discover(context: Context, spec: InstinctCapabilities.Spec): Discovery =
+    blockers(context, spec)?.let { Discovery(it) }
+      ?: Discovery(null, registry.getValue(spec.adapter).targets(context, spec))
+
   fun blockers(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject? = null): Block? {
-    if (spec.id.startsWith("calendar_")) {
-      val grants = InstinctCalendarAccess(context).enabled(write = spec.id != "calendar_query")
-      val calendar = params?.optLong("calendarId")
-      if (grants.isEmpty() || calendar != null && calendar !in grants) {
-        return Block("El calendario no está habilitado para Instinct en este teléfono.", pending = false)
-      }
-    }
+    val adapter = registry.getValue(spec.adapter)
+    val blocker = adapter.blocker(context, spec, params)
+    if (blocker != null && !blocker.pending) return blocker
     val missing = spec.permissions.firstOrNull { !granted(context, it) }
-    if (missing != null) return Block("Falta el permiso ${missing.substringAfterLast('.')} en Ajustes.", pending = true)
-    if (spec.id.startsWith("insto_") && spec.id != "insto_clock_cancel" && !InstinctLocalClock.notificationsEnabled(context)) {
-      return Block("Activá el canal «Insto · alarmas y temporizadores» en Ajustes.", pending = true)
-    }
-    if (spec.id == "torch" && !context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH)) {
-      return Block("Este teléfono no tiene linterna.", pending = false)
-    }
-    if (spec.id == "media" && !InstinctReadiness.granted(context, InstinctReadiness.Capability.NOTIFICATION_LISTENER)) {
-      return Block("Habilitá el acceso a notificaciones para controlar la música.", pending = true)
-    }
-    val handler = when (spec.id) {
-      "clock_timer" -> PhoneActionExecutor.clockIntent(PhoneCommand.Timer(1))
-      "clock_alarm" -> PhoneActionExecutor.clockIntent(PhoneCommand.Alarm(0, 0))
-      "open_app" -> params?.let {
-        return if (context.packageManager.getLaunchIntentForPackage(it.getString("package")) == null)
-          Block("La aplicación elegida no se puede abrir.", false) else null
-      }
-      "open_resource" -> Intent(Intent.ACTION_VIEW, Uri.parse(params?.getString("url") ?: "https://example.org"))
-        .addCategory(Intent.CATEGORY_BROWSABLE)
-      else -> null
-    }
-    return if (handler != null && handler.resolveActivity(context.packageManager) == null)
-      Block("No hay una aplicación compatible instalada.", false) else null
+    return if (missing != null) Block("Falta el permiso ${missing.substringAfterLast('.')} en Ajustes.", pending = true)
+    else blocker
   }
 
   fun execute(context: Context, command: PhoneCommand.Platform, executionId: String?, foreground: Boolean): PhoneActionResult {
@@ -95,29 +81,93 @@ internal object InstinctDeviceCapabilities {
     if (executionId == null) return rejected("La acción requiere una ejecución registrada de Instinct.")
     blockers(context, spec, params)?.let { return PhoneActionResult(it.reason,
       outcome = if (it.pending) PhoneActionOutcome.NEEDS_INPUT else PhoneActionOutcome.REJECTED) }
-    return when {
-      spec.id.startsWith("calendar_") -> InstinctCalendarActions(context.contentResolver).execute(spec.id, params)
-      spec.id.startsWith("insto_") -> InstinctLocalClock.execute(context, executionId, spec.id, params)
-      !foreground -> PhoneActionResult("Abrí Insto para continuar con esta acción.", outcome = PhoneActionOutcome.NEEDS_INPUT)
-      else -> {
-        val intent = when (spec.id) {
-          "open_app" -> context.packageManager.getLaunchIntentForPackage(params.getString("package"))
-          "open_resource" -> Intent(Intent.ACTION_VIEW, Uri.parse(params.getString("url"))).addCategory(Intent.CATEGORY_BROWSABLE)
-          else -> null
-        } ?: return rejected("No hay una aplicación compatible instalada.")
-        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        PhoneActionResult("Solicitud entregada a la aplicación.", outcome = PhoneActionOutcome.HANDOFF)
-      }
-    }
+    if (!spec.runsLocked && !foreground)
+      return PhoneActionResult("Abrí Insto para continuar con esta acción.", outcome = PhoneActionOutcome.NEEDS_INPUT)
+    return registry.getValue(spec.adapter).execute(context, spec, params, executionId)
   }
 
-  private fun rejected(message: String) = PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED)
+  /** Recovery can observe a provider only while its current authorization still permits the read. */
+  fun observe(context: Context, command: PhoneCommand.Platform, executionId: String): PhoneActionResult? {
+    val (spec, params) = InstinctCapabilities.platform(command)
+    if (blockers(context, spec, params) != null) return null
+    return registry.getValue(spec.adapter).observe(context, spec, params, executionId)?.takeIf { it.verifiedLocally }
+  }
 }
 
-/** No compatible local interface is registered today. A real integration must supply both dispatch and observation. */
-internal interface OmniremoteAdapter {
-  fun devices(): List<String>
-  fun supports(device: String, control: Control): Boolean
-  fun execute(device: String, control: Control): PhoneActionResult
-  enum class Control { POWER_ON, POWER_OFF, VOLUME_UP, VOLUME_DOWN, MUTE }
+internal interface InstinctCapabilityAdapter {
+  fun blocker(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject?): InstinctDeviceCapabilities.Block? = null
+  fun targets(context: Context, spec: InstinctCapabilities.Spec): List<String> = emptyList()
+  fun execute(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult
+  fun observe(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult? = null
 }
+
+private object AndroidLocalCapabilities : InstinctCapabilityAdapter {
+  override fun blocker(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject?): InstinctDeviceCapabilities.Block? {
+    if (spec.category == InstinctCategory.CALENDARIO) {
+      val grants = InstinctCalendarAccess(context).enabled(write = spec.id != "calendar_query")
+      val calendar = params?.optLong("calendarId")
+      if (grants.isEmpty() || calendar != null && calendar !in grants)
+        return InstinctDeviceCapabilities.Block("El calendario no está habilitado para Instinct en este teléfono.", pending = false)
+    }
+    if (spec.id in setOf("insto_alarm", "insto_timer") && !InstinctLocalClock.notificationsEnabled(context))
+      return InstinctDeviceCapabilities.Block("Activá el canal «Insto · alarmas y temporizadores» en Ajustes.", pending = true)
+    if (spec.id == "torch" && !context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH))
+      return InstinctDeviceCapabilities.Block("Este teléfono no tiene linterna.", pending = false)
+    if (spec.id == "media" && !InstinctReadiness.granted(context, InstinctReadiness.Capability.NOTIFICATION_LISTENER))
+      return InstinctDeviceCapabilities.Block("Habilitá el acceso a notificaciones para controlar la música.", pending = true)
+    return null
+  }
+
+  override fun execute(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult =
+    when (spec.category) {
+      InstinctCategory.CALENDARIO -> InstinctCalendarActions(context.contentResolver).execute(spec.id, params)
+      InstinctCategory.RELOJ -> InstinctLocalClock.execute(context, executionId, spec.id, params)
+      else -> rejected("Capacidad local no registrada.")
+    }
+
+  override fun observe(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult? =
+    when (spec.id) {
+      // Use the step ID for a creation and the target ID for a cancellation.
+      "insto_timer", "insto_alarm" -> InstinctLocalClock.recover(context, executionId)
+      "insto_clock_cancel" -> InstinctLocalClock.observeCancellation(context, params.getString("clockId"))
+      "calendar_update", "calendar_cancel" -> InstinctCalendarActions(context.contentResolver).observe(spec.id, params)
+      else -> null
+    }
+}
+
+private object AndroidIntentCapabilities : InstinctCapabilityAdapter {
+  override fun blocker(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject?): InstinctDeviceCapabilities.Block? {
+    val handler = when (spec.id) {
+      "clock_timer" -> PhoneActionExecutor.clockIntent(PhoneCommand.Timer(1))
+      "clock_alarm" -> PhoneActionExecutor.clockIntent(PhoneCommand.Alarm(0, 0))
+      "open_app" -> {
+        if (params == null) return null
+        context.packageManager.getLaunchIntentForPackage(params.getString("package"))
+      }
+      "open_resource" -> resource(params?.getString("url") ?: "https://example.org")
+      // Both searches can use the platform's HTTPS handler when their native app is absent.
+      "youtube" -> resource("https://www.youtube.com")
+      "spotify" -> resource("https://open.spotify.com")
+      else -> return InstinctDeviceCapabilities.Block("Capacidad de Android no registrada.", false)
+    }
+    return if (handler?.resolveActivity(context.packageManager) == null)
+      InstinctDeviceCapabilities.Block("No hay una aplicación compatible instalada.", false) else null
+  }
+
+  override fun execute(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult {
+    val intent = when (spec.id) {
+      "open_app" -> context.packageManager.getLaunchIntentForPackage(params.getString("package"))
+      "open_resource" -> resource(params.getString("url"))
+      else -> null
+    } ?: return rejected("No hay una aplicación compatible instalada.")
+    context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    return PhoneActionResult("Solicitud entregada a la aplicación.", outcome = PhoneActionOutcome.HANDOFF)
+  }
+
+  private fun resource(url: String) = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
+}
+
+internal fun unavailableOmniremote() = InstinctDeviceCapabilities.Block(
+  "Falta un contrato local compatible de Omniremote.", pending = false)
+
+private fun rejected(message: String) = PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED)

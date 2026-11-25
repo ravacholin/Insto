@@ -63,12 +63,17 @@ object InstinctCatalogPublisher {
     val calendarAccess = InstinctCalendarAccess(app)
     val enabledCalendars = calendars.map { it.id }.intersect(calendarAccess.enabled()).sorted()
     val writableCalendars = calendars.filter { it.writable }.map { it.id }.intersect(calendarAccess.enabled(write = true)).sorted()
-    val availability = InstinctCapabilities.specs.mapValues { (_, spec) ->
-      if (!channels.mailbox) return@mapValues "requiere el buzón firmado"
-      val blocker = runCatching { InstinctDeviceCapabilities.blockers(app, spec) }.getOrElse {
-        InstinctDeviceCapabilities.Block("No se pudo comprobar la disponibilidad.", false)
+    val discovery = if (channels.mailbox) InstinctCapabilities.specs.mapValues { (_, spec) ->
+      runCatching { InstinctDeviceCapabilities.discover(app, spec) }.getOrElse {
+        InstinctDeviceCapabilities.Discovery(InstinctDeviceCapabilities.Block("No se pudo comprobar la disponibilidad.", false))
       }
+    } else emptyMap()
+    val availability = InstinctCapabilities.specs.mapValues { (id, spec) ->
+      val blocker = discovery[id]?.blocker
       when {
+        spec.adapter == InstinctCapabilities.Adapter.OMNIREMOTE && blocker == null && !channels.mailbox ->
+          InstinctCapabilities.OMNIREMOTE_UNAVAILABLE
+        !channels.mailbox -> "requiere el buzón firmado"
         blocker?.pending == true -> "pendiente: ${blocker.reason}"
         blocker != null -> "no disponible: ${blocker.reason}"
         spec.id.startsWith("calendar_") && (if (spec.id == "calendar_query") enabledCalendars else writableCalendars).isEmpty() -> "no hay calendarios habilitados disponibles"
@@ -83,6 +88,7 @@ object InstinctCatalogPublisher {
       calendarLabels = calendars.filter { it.id in enabledCalendars }.associate {
         it.id to InstinctAck.cut(InstinctAck.flat(it.label), 80).takeIf(InstinctAck::safe).orEmpty()
       },
+      capabilityTargets = discovery.mapValues { it.value.targets }.filterValues { it.isNotEmpty() },
       routineRevisions = names.mapNotNull { name -> routines.resolve(name)?.let { name to InstinctRoutines.hash(it) } }.toMap())
   }
 

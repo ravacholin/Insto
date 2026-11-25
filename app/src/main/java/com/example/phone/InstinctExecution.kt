@@ -30,7 +30,7 @@ enum class ExecutionState(val code: String) {
   VERIFIED("verificada"),
   /** Handed to Android or another app (the Clock, a search, an app opened, a media session): its final effect is not observable. */
   HANDED_OFF("entregada"),
-  /** It may or may not have happened. Never repeated by itself. */
+  /** It may or may not have happened. Plans can reconcile this state using durable evidence. */
   UNCERTAIN("incierta"),
   /** It did not happen: refused, invalid, or the expected state was not reached. */
   FAILED("fallida"),
@@ -69,7 +69,7 @@ interface InstinctOrderClaims {
 
 /** Where an execution came from. The same allowlist, validator and policies apply to all of them. */
 enum class ExecutionTransport(val code: String) {
-  PUSH("timbre"), POLL("buzón"), WHATSAPP("whatsapp"), SCHEDULE("programada"), TRIGGER("disparador"),
+  PUSH("timbre"), PUSH_REFERENCE("timbre por referencia"), POLL("buzón"), WHATSAPP("whatsapp"), SCHEDULE("programada"), TRIGGER("disparador"),
   RECURRENCE("recurrente"), DECISION("decisión"), CONTEXT("regla local"), RESTORE("restauración"), LEGACY("1.19.0"),
   /** One action or question of a plan of several steps (1.23.0). */
   PLAN("plan");
@@ -78,9 +78,9 @@ enum class ExecutionTransport(val code: String) {
 }
 
 /**
- * What one action does to the phone, for recovery: only [READ_ONLY] could ever be repeated safely, and recovery never
- * repeats anything else. [IDEMPOTENT_SET] sets a state that can be read back; [NON_IDEMPOTENT] changes something each
- * time it runs (a relative volume step, a routine); [EXTERNAL_HANDOFF] hands over to another app.
+ * What an action does to the phone. [IDEMPOTENT_SET] sets a state that can be read back; [NON_IDEMPOTENT] changes
+ * something each time it runs (a relative volume step, a routine); [EXTERNAL_HANDOFF] hands over to another app.
+ * An automatic plan retry needs stricter, command-specific evidence in addition to this classification.
  */
 enum class ActionEffect {
   READ_ONLY, IDEMPOTENT_SET, NON_IDEMPOTENT, EXTERNAL_HANDOFF;
@@ -145,8 +145,11 @@ data class ExecutionRecord(
   /** The in-memory proposal of the process that owns it. */
   val proposalId: Long? = null,
   val executionData: String? = null,
+  val dispatchBaseline: String? = null,
+  val firstDispatchAt: Long? = null,
 ) {
   val shortId: String get() = ExecutionIds.short(executionId)
+  val dispatchLatencyMillis: Long? get() = firstDispatchAt?.minus(receivedAt)?.takeIf { it >= 0 }
   override fun toString() = "ExecutionRecord($executionId, $state, $transport)"
 }
 
@@ -238,7 +241,8 @@ object ExecutionText {
     val what = InstinctAck.flat(record.line.removePrefix(InstinctProposalProtocol.PREFIX).trim()).take(60)
     val why = (record.reason ?: record.result)?.let { " · " + InstinctAck.flat(it).trimEnd('.').take(90) }.orEmpty()
     val attribution = record.attribution?.takeIf { record.state == ExecutionState.VERIFIED }?.let { " · ${it.label}" }.orEmpty()
-    return "$status: $what$why$attribution"
+    val latency = record.dispatchLatencyMillis?.let { " · recepción a despacho: $it ms" }.orEmpty()
+    return "$status: $what$why$attribution$latency"
   }
 
   fun list(records: List<ExecutionRecord>, now: Long, clock: (Long) -> String): String =
