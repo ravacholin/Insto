@@ -480,6 +480,10 @@ private fun AssistantSetupSheet(
         InstinctProposalSettingsSection(prefs.pinnedContact, prefs.preferredFlavor)
       }
 
+      SettingsCategory("Callar alarma con la voz", expandedCategory == "alarmvoice", { toggleCategory("alarmvoice") }) {
+        AlarmVoiceSettingsSection()
+      }
+
       SettingsCategory("Conducción y horarios", expandedCategory == "driving", { toggleCategory("driving") }) {
         SettingsSwitch("Modo de voz en el auto o con Bluetooth", prefs.contextRule.switchToVoiceInCarOrBluetooth,
           onToggleCarBtAutoVoice, "Da prioridad a la grabación de voz cuando detecta el modo auto o audio Bluetooth.")

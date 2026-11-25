@@ -16,5 +16,7 @@ open class InstoApplication:Application() {
   runCatching {TemporaryModeManager(this).markUnobserved()}
   // The first start after an update publishes the catalog if its hash changed (1.18.0); the job decides, off this thread.
   runCatching {com.example.phone.InstinctCatalogPublisher.changed(this)}
+  // «Callar alarma con la voz» (1.25.0): an alarm volume left lowered by a process that died is restored.
+  runCatching {com.example.alarmvoice.AlarmVolumeDucker.restoreLeftover(this)}
  }
 }

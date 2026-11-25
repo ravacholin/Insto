@@ -18,6 +18,9 @@ orgJson = "20260814"
 unifiedpushConnector = "3.3.6"
 # The same Tink the connector already brings at runtime: Insto compiles against it to seal its own plain doorbell.
 tink = "1.24.0"
+# Vosk (Apache 2.0) for «Callar alarma con la voz» (1.25.0); JNA as an AAR, as Vosk's Android build requires.
+vosk = "0.3.47"
+jna = "5.13.0"
 
 
 [libraries]
@@ -47,6 +50,8 @@ androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 tink = { group = "com.google.crypto.tink", name = "tink", version.ref = "tink" }
+vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 unifiedpush-connector = { group = "org.unifiedpush.android", name = "connector", version.ref = "unifiedpushConnector" }
 
 
