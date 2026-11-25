@@ -74,6 +74,7 @@ object InstinctPushCrypto {
  */
 @Suppress("DEPRECATION")
 class InstinctPushReceiver : MessagingReceiver() {
+  private val receivedAt = ThreadLocal<Long>()
   override fun getKeyManager(context: Context): KeyManager = InstinctDoorbell.keyManager(context)
 
   override fun onReceive(context: Context, intent: Intent) {
@@ -83,7 +84,11 @@ class InstinctPushReceiver : MessagingReceiver() {
   /** [onReceive] with the finisher given: `goAsync()` on the phone, a counter in the tests. Returns at once. */
   internal fun receive(context: Context, intent: Intent, async: () -> PushFinisher?) {
     val app = context.applicationContext
-    InstinctPushIntake.receive(app, async) { super.onReceive(app, intent) }
+    val arrival = InstinctMailbox.clock()
+    InstinctPushIntake.receive(app, async) {
+      receivedAt.set(arrival)
+      try { super.onReceive(app, intent) } finally { receivedAt.remove() }
+    }
   }
 
   override fun onNewEndpoint(context: Context, endpoint: PushEndpoint, instance: String) {
@@ -91,7 +96,7 @@ class InstinctPushReceiver : MessagingReceiver() {
   }
 
   override fun onMessage(context: Context, message: PushMessage, instance: String) {
-    InstinctDoorbell.onMessage(context, message.content, message.decrypted)
+    InstinctDoorbell.onMessage(context, message.content, message.decrypted, receivedAt.get() ?: InstinctMailbox.clock())
   }
 
   override fun onRegistrationFailed(context: Context, reason: FailedReason, instance: String) {

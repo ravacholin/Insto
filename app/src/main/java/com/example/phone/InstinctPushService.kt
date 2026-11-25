@@ -73,7 +73,7 @@ object InstinctPushDispatcher {
   private var busy = 0
   private var kickPending = false
   private val drainLock = Any()
-  /** Ring entries whose poll runs now, in this process. */
+  /** Signals whose HTTP request runs now, in this process. */
   private val inFlight = HashSet<Long>()
   /** Order entries this process claimed and is handing over; one claimed but not here comes from a dead process. */
   private val handing = HashSet<Long>()
@@ -119,11 +119,72 @@ object InstinctPushDispatcher {
       when (entry.kind) {
         PushEntry.Kind.ORDER -> order(app, inbox, entry)
         PushEntry.Kind.RING -> ring(app, inbox, entry)
+        PushEntry.Kind.REFERENCE -> reference(app, inbox, entry)
       }
     }
     // 1.20.0: the same job also continues or settles what the execution journal holds unfinished.
     runCatching { InstinctExecutionRecoveryManager.recover(app) }
     if (inbox.size() == 0 && !InstinctExecutionRecoveryManager.pending(app)) InstinctDoorbell.cancel(app, InstinctDoorbell.KIND_DRAIN)
+  }
+
+  private fun reference(app: Context, inbox: InstinctPushInbox, entry: PushEntry) {
+    val started = synchronized(inFlight) { inFlight.add(entry.seq) }
+    if (!started) return
+    synchronized(idle) { busy++ }
+    val fetch = Runnable {
+      try { fetchReference(app, inbox, entry) } finally {
+        synchronized(inFlight) { inFlight.remove(entry.seq) }
+        done()
+      }
+    }
+    try {
+      InstinctMailbox.background(fetch)
+    } catch (_: RejectedExecutionException) {
+      synchronized(inFlight) { inFlight.remove(entry.seq) }
+      done()
+      InstinctDoorbell.schedule(app, InstinctDoorbell.KIND_DRAIN, InstinctPushPolicy.RESCUE_DELAY_MILLIS)
+    }
+  }
+
+  private fun fetchReference(app: Context, inbox: InstinctPushInbox, entry: PushEntry) {
+    val reference = checkNotNull(entry.reference)
+    val log = InstinctLogSettings(app)
+    val url = log.url()
+    val token = log.token()
+    if (url == null || token == null || InstinctMailboxSettings(app).blocker() != null) {
+      inbox.remove(entry.seq)
+      return
+    }
+    if (runCatching { InstinctMailbox.seen(app).contains(reference.id) }.getOrDefault(false)) {
+      inbox.remove(entry.seq)
+      return
+    }
+    val fetched = runCatching { InstinctMailbox.client().fetchOrder(url, token, reference.id) }
+      .getOrElse { InstinctMailboxClient.Fetch.Failed(InstinctLogClient.Failure.NETWORK.label) }
+    when (fetched) {
+      is InstinctMailboxClient.Fetch.Failed -> {
+        if (entry.attempts + 1 >= InstinctPushPolicy.MAX_CLAIM_ATTEMPTS) inbox.remove(entry.seq)
+        else {
+          inbox.bumpAttempts(entry.seq)
+          InstinctDoorbell.schedule(app, InstinctDoorbell.KIND_DRAIN, InstinctPushPolicy.RESCUE_DELAY_MILLIS)
+        }
+      }
+      is InstinctMailboxClient.Fetch.Orders -> {
+        if (url != log.url() || token != log.token()) {
+          inbox.remove(entry.seq)
+          return
+        }
+        val candidate = fetched.orders.singleOrNull()
+        if (candidate == null || !reference.matches(candidate)) {
+          if (fetched.orders.isNotEmpty()) InstinctDoorbell.settings(app).update {
+            it.copy(badPayloads = it.badPayloads + 1, lastError = "la orden recuperada no coincide con el timbre")
+          }
+          inbox.remove(entry.seq)
+          return
+        }
+        order(app, inbox, entry.copy(order = candidate))
+      }
+    }
   }
 
   private fun order(app: Context, inbox: InstinctPushInbox, entry: PushEntry) {
@@ -152,14 +213,15 @@ object InstinctPushDispatcher {
     // Revalidated now, whatever happened before: the mailbox may have been turned off, the key changed.
     val key = InstinctMailboxSettings(app).key()
     if (InstinctMailboxSettings(app).blocker() != null || key == null) { inbox.remove(entry.seq); return }
-    val seen = InstinctMailbox.seen(app)
+    val seen = InstinctMailbox.seen(app, entry.receivedAt)
     when (InstinctMailboxSignature.verify(key, order, InstinctMailbox.clock(), seen::contains)) {
       InstinctMailboxSignature.Verdict.VALID -> {
         // 1.20.0: claiming the id and recording each of its orders are one transaction in the journal.
-        val won = try { seen.claimOrders(listOf(order), ExecutionTransport.PUSH) } catch (_: Throwable) {
+        val transport = if (entry.reference == null) ExecutionTransport.PUSH else ExecutionTransport.PUSH_REFERENCE
+        val won = try { seen.claimOrders(listOf(order), transport) } catch (_: Throwable) {
           // The journal could not be written: the order does not run without its record. Retried, then left to the poll.
           bell.update { it.copy(storageFailures = it.storageFailures + 1, lastError = "no se pudo guardar el registro de órdenes vistas") }
-          if (entry.attempts + 1 >= InstinctPushPolicy.MAX_CLAIM_ATTEMPTS) { inbox.remove(entry.seq); InstinctDoorbell.ringFallback(app) }
+          if (entry.attempts + 1 >= InstinctPushPolicy.MAX_CLAIM_ATTEMPTS) { inbox.remove(entry.seq); if (entry.reference == null) InstinctDoorbell.ringFallback(app) }
           else { inbox.bumpAttempts(entry.seq); InstinctDoorbell.schedule(app, InstinctDoorbell.KIND_DRAIN, InstinctPushPolicy.RESCUE_DELAY_MILLIS) }
           return
         }
@@ -170,12 +232,15 @@ object InstinctPushDispatcher {
         synchronized(handing) { handing += entry.seq }
         try {
           inbox.markClaimed(entry.seq)
-          bell.update { it.copy(directOrders = it.directOrders + 1, lastDirectAt = InstinctDoorbell.clock()) }
+          bell.update {
+            if (entry.reference == null) it.copy(directOrders = it.directOrders + 1, lastDirectAt = InstinctDoorbell.clock())
+            else it.copy(referencedOrders = it.referencedOrders + 1)
+          }
           runCatching { InstinctProposalIntake.onMailbox(app, order) }
           // Safe now: whatever onMailbox did not finish is in the journal, and recovery continues it.
+          InstinctDoorbell.afterDirect(app, order)
           inbox.remove(entry.seq)
         } finally { synchronized(handing) { handing -= entry.seq } }
-        InstinctDoorbell.afterDirect(app, order)
       }
       // A poll (or an earlier push) took it first: it ran there.
       InstinctMailboxSignature.Verdict.REPEATED -> {
@@ -186,7 +251,7 @@ object InstinctPushDispatcher {
       InstinctMailboxSignature.Verdict.BAD_SIGNATURE, InstinctMailboxSignature.Verdict.EXPIRED -> {
         bell.update { it.copy(badPayloads = it.badPayloads + 1, lastError = "una orden del timbre no pasó la firma o venció") }
         inbox.remove(entry.seq)
-        InstinctDoorbell.ringFallback(app)
+        if (entry.reference == null) InstinctDoorbell.ringFallback(app)
       }
     }
   }

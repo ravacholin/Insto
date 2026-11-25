@@ -13,6 +13,8 @@ internal object InstinctCapabilities {
   private const val EXACT = "android.permission.SCHEDULE_EXACT_ALARM"
   private const val NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS"
 
+  enum class Adapter { ANDROID_LOCAL, ANDROID_INTENT, OMNIREMOTE }
+
   data class Spec(
     val id: String,
     val category: InstinctCategory,
@@ -24,10 +26,12 @@ internal object InstinctCapabilities {
     val undo: String,
     val restriction: String,
     val decode: (JSONObject) -> PhoneCommand?,
+    val adapter: Adapter,
   ) {
-    fun catalog(availability: String): JSONObject = JSONObject()
+    fun catalog(availability: String, targets: List<String> = emptyList()): JSONObject = JSONObject()
       .put("id", id).put("categoria", category.name).put("parametros", parameters.schema(includeType = false))
       .put("permisos", JSONArray(permissions)).put("bloqueado", runsLocked).put("disponibilidad", availability)
+      .apply { if (targets.isNotEmpty()) put("destinos", JSONArray(targets)) }
       .put("verificacion", verification).put("recuperacion", recovery).put("deshacer", undo).put("restriccion", restriction)
   }
 
@@ -51,9 +55,9 @@ internal object InstinctCapabilities {
     id: String, category: InstinctCategory, required: String, vararg fields: Pair<String, CapabilityCatalog.Field>,
     permissions: List<String> = emptyList(), locked: Boolean = true,
     verification: String = "relectura local", recovery: String = "releer si hay evidencia, suspender si es incierto",
-    undo: String = "ninguno", restriction: String = "", decode: (JSONObject) -> PhoneCommand? = { null },
+    undo: String = "ninguno", restriction: String = "", adapter: Adapter = Adapter.ANDROID_LOCAL, decode: (JSONObject) -> PhoneCommand? = { null },
   ) = Spec(id, category, CapabilityCatalog.Spec(id, linkedMapOf(*fields), required.split(' ').filter(String::isNotEmpty).toSet()),
-    permissions, locked, verification, recovery, undo, restriction, decode)
+    permissions, locked, verification, recovery, undo, restriction, decode, adapter)
 
   private fun silence(id: String, action: PlatformAction, dnd: Boolean = false) =
     spec(id, InstinctCategory.SILENCIO, "", permissions = if (dnd) listOf("android.permission.ACCESS_NOTIFICATION_POLICY") else emptyList(),
@@ -70,7 +74,15 @@ internal object InstinctCapabilities {
     spec(id, category, required, *fields, locked = false, verification = "entrega del intent",
       recovery = "si se interrumpe la entrega, suspender", restriction = "último paso; requiere un toque con el teléfono desbloqueado",
       permissions = if (category == InstinctCategory.RELOJ) listOf("com.android.alarm.permission.SET_ALARM") else emptyList(),
-      decode = decode)
+      adapter = Adapter.ANDROID_INTENT, decode = decode)
+
+  private fun television(id: String, parameter: Pair<String, CapabilityCatalog.Field>) =
+    spec(id, InstinctCategory.APPS, "device ${parameter.first}", "device" to text(120), parameter,
+      verification = "relectura del televisor por el proveedor autorizado",
+      restriction = "requiere contrato local compatible de Omniremote y un televisor autorizado",
+      adapter = Adapter.OMNIREMOTE)
+
+  const val OMNIREMOTE_UNAVAILABLE = "no disponible: falta un contrato local compatible de Omniremote"
 
   val specs = listOf(
     spec("volume", InstinctCategory.VOLUMEN, "percent", "percent" to number(0, 100),
@@ -113,6 +125,9 @@ internal object InstinctCapabilities {
     external("open_resource", InstinctCategory.APPS, "url", "url" to text(2000)),
     external("youtube", InstinctCategory.APPS, "query", "query" to text(200)) { PhoneCommand.YouTubeSearch(it.getString("query")) },
     external("spotify", InstinctCategory.APPS, "query", "query" to text(200)) { PhoneCommand.SpotifySearch(it.getString("query")) },
+    television("omniremote_power", "on" to flag),
+    television("omniremote_volume", "percent" to number(0, 100)),
+    television("omniremote_mute", "muted" to flag),
   ).associateBy(Spec::id)
 
   /** Decode only after validating strict types, bounds and the capability's cross-field invariants. */
@@ -133,12 +148,12 @@ internal object InstinctCapabilities {
         else -> false
       }) { "Parámetro inválido: $field" }
     }
-    if (params.has("endMillis")) {
+    if (id in setOf("calendar_query", "calendar_create", "calendar_update")) {
       val span = params.getLong("endMillis") - params.getLong("beginMillis")
       require(span in 1..31L * 86_400_000)
     }
-    if (params.has("revision")) require(hash.matches(params.getString("revision")))
-    if (params.has("clockId")) require(Regex("e[0-9a-f]{20}").matches(params.getString("clockId")))
+    if (id in setOf("calendar_update", "calendar_cancel")) require(hash.matches(params.getString("revision")))
+    if (id == "insto_clock_cancel") require(Regex("e[0-9a-f]{20}").matches(params.getString("clockId")))
     if (id == "open_app") require(pkg.matches(params.getString("package")))
     if (id == "open_resource") {
       val uri = URI.create(params.getString("url"))

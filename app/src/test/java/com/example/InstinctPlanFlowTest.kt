@@ -58,6 +58,13 @@ class InstinctPlanFlowTest {
     InstinctScheduler.calendar = { _, _ -> events }
     InstinctPlanEngine.background = { it.run() }
     InstinctPlanEngine.alarms = { _, _ -> }
+    InstinctProposalCenter.outcomeVerifier = { context ->
+      val actual = AndroidActionOutcomeVerifier(context)
+      object : ActionOutcomeVerifier {
+        override fun read(command: PhoneCommand): DeviceReading? =
+          actual.read(command)?.let { if (command is PhoneCommand.Volume) it.copy(audioRoute = "speaker") else it }
+      }
+    }
     InstinctPlanEngine.execute = { context, command ->
       ran += command
       // Robolectric has no media session: Android takes the command and its effect cannot be observed.
@@ -107,6 +114,7 @@ class InstinctPlanFlowTest {
   }
 
   @After fun tearDown() {
+    InstinctProposalCenter.outcomeVerifier = { AndroidActionOutcomeVerifier(it) }
     InstinctExecutionJournal.owner = live
     InstinctCategory.entries.forEach { InstinctAutonomySettings(app).set(it, InstinctAutonomy.SOLO) }
     box.setEnabled(false)
@@ -218,12 +226,83 @@ class InstinctPlanFlowTest {
     }
   }
 
+  @Test fun `a television capability without a provider is refused before any plan action`() {
+    val incoming = order("""#insto plan-json {"version":1,"steps":[
+      {"id":"phone","kind":"action","capability":"volume","params":{"percent":10}},
+      {"id":"tv","kind":"action","capability":"omniremote_power","params":{"device":"tv-living","on":true}}]}""".replace("\n", ""))
+    push(incoming)
+    assertTrue(journal.plans().isEmpty())
+    assertTrue(ran.isEmpty())
+    assertTrue(journal.forMessage(incoming.id).single().reason.orEmpty().contains("Omniremote"))
+  }
+
+  @Test fun `the television adapter exposes authorized devices and requires an independent read to verify`() {
+    val spec = InstinctCapabilities.specs.getValue("omniremote_volume")
+    val params = JSONObject().put("device", "living-tv").put("percent", 32)
+    val provider = object : OmniremoteAdapter.Provider {
+      override val transport = OmniremoteAdapter.Transport.LOCAL_API
+      var allowed = true
+      var current = 10
+      override fun authorized(context: android.content.Context) = allowed
+      override fun televisions(context: android.content.Context) = listOf(
+        OmniremoteAdapter.Television("living-tv", setOf(OmniremoteAdapter.Control.VOLUME)))
+      override fun set(context: android.content.Context, id: String, setting: OmniremoteAdapter.Setting, executionId: String) =
+        PhoneActionResult("entregado", verifiedLocally = true)
+      override fun read(context: android.content.Context, id: String, control: OmniremoteAdapter.Control) =
+        OmniremoteAdapter.Setting.Volume(current)
+    }
+    val adapter = OmniremoteAdapter(listOf(provider))
+    assertEquals(listOf("living-tv"), adapter.targets(app, spec))
+    assertEquals(PhoneActionOutcome.UNCERTAIN, adapter.execute(app, spec, params, "e1").outcome)
+    provider.current = 32
+    assertTrue(adapter.observe(app, spec, params, "e1")?.verifiedLocally == true)
+    provider.allowed = false
+    assertTrue(adapter.targets(app, spec).isEmpty())
+    assertEquals(PhoneActionOutcome.REJECTED, adapter.execute(app, spec, params, "e1").outcome)
+  }
+
+  @Test fun `an uncertain absolute set that took effect lets dependents proceed without replay`() {
+    InstinctPlanEngine.execute = { context, command ->
+      ran += command
+      val result = PhoneActionExecutor(context).execute(command)
+      if (command == PhoneCommand.Volume(VolumeOp.SET, 20))
+        result.copy(outcome = PhoneActionOutcome.UNCERTAIN) else result
+    }
+    val incoming = order("""#insto plan-json {"version":1,"steps":[
+      {"id":"volume","kind":"action","capability":"volume","params":{"percent":20}},
+      {"id":"next","kind":"action","requires":["volume"],"capability":"volume","params":{"percent":30}}]}""".replace("\n", ""))
+    push(incoming)
+    InstinctPlanEngine.recover(app)
+    val plan = planOf(incoming)
+    assertEquals(PlanState.DONE, plan.state)
+    assertEquals(listOf(PhoneCommand.Volume(VolumeOp.SET, 20), PhoneCommand.Volume(VolumeOp.SET, 30)), ran)
+    assertEquals(ExecutionAttribution.SATISFIED, stepRows(plan).first { it.attribution == ExecutionAttribution.SATISFIED }.attribution)
+  }
+
+  @Test fun `an unchanged absolute set receives one recorded retry across repeated recovery`() {
+    InstinctPlanEngine.execute = { _, command ->
+      ran += command
+      PhoneActionResult("Android no confirmó.", outcome = PhoneActionOutcome.UNCERTAIN)
+    }
+    val incoming = order("#insto plan: poner el volumen al 20 por ciento; bajar el volumen")
+    push(incoming)
+    repeat(3) { InstinctPlanEngine.recover(app) }
+    val plan = planOf(incoming)
+    assertEquals(PlanState.SUSPENDED, plan.state)
+    assertEquals(2, stepRows(plan).single().attempts)
+    assertEquals(2, ran.size)
+    assertEquals(10, volume())
+  }
+
   @Test fun `an uncertain step is never repeated and its dependents are skipped on resume`() {
     val invoked = mutableListOf<Int>()
     InstinctPlanEngine.execute = { context, command ->
       val volume = command as PhoneCommand.Volume
       invoked += volume.percent
-      if (volume.percent == 10) PhoneActionResult("Sin comprobación", outcome = PhoneActionOutcome.UNCERTAIN)
+      if (volume.percent == 10) {
+        audio.setStreamVolume(AudioManager.STREAM_MUSIC, percent(50), 0)
+        PhoneActionResult("Sin comprobación", outcome = PhoneActionOutcome.UNCERTAIN)
+      }
       else PhoneActionExecutor(context).execute(command)
     }
     val payload = """#insto plan-json {"version":1,"steps":[
@@ -349,6 +428,36 @@ class InstinctPlanFlowTest {
     assertEquals(ExecutionAttribution.SATISFIED, recovered.attribution)
     assertTrue(ran.none { it is PhoneCommand.Volume })
     assertEquals(1, ran.count { it is PhoneCommand.Media })
+  }
+
+  @Test fun `recovery claims the one retry even when several runners wake the same plan`() {
+    val incoming = order("#insto plan: esperar 5 minutos; poner el volumen al 20 por ciento")
+    push(incoming)
+    val id = planOf(incoming).id
+    InstinctExecutionJournal.owner = "proceso-muerto"
+    val plan = requireNotNull(journal.updatePlan(id) {
+      it.copy(state = PlanState.RUNNING, block = 1, sub = 0, wakeAt = null)
+    })
+    val command = PhoneCommand.Volume(VolumeOp.SET, 20)
+    val row = (journal.admit(PlanIds.step(id, 1, 0, false), ExecutionTransport.PLAN,
+      listOf("poner el volumen al 20 por ciento"), plan.message, occurrence = id,
+      claim = false) as InstinctExecutionJournal.Admission.Admitted).records.single()
+    val baseline = PlanStepPolicy.baseline(command, InstinctProposalCenter.outcomeVerifier(app).read(command))
+    assertTrue(journal.beginPlanDispatch(row, PhoneCommandCodec.encode(command).toString(), baseline, retry = false))
+    assertTrue(journal.transition(row.executionId, ExecutionState.UNCERTAIN))
+    InstinctExecutionJournal.resetAll()
+    InstinctPlanEngine.reset()
+    InstinctExecutionJournal.owner = live
+
+    val workers = java.util.concurrent.Executors.newFixedThreadPool(4)
+    try {
+      List(4) { workers.submit { InstinctPlanEngine.advance(app, id) } }.forEach { it.get(10, java.util.concurrent.TimeUnit.SECONDS) }
+    } finally {
+      workers.shutdownNow()
+    }
+    assertEquals(PlanState.DONE, planOf(incoming).state)
+    assertEquals(2, journal.get(row.executionId)?.attempts)
+    assertEquals(listOf(command), ran)
   }
 
   @Test fun `an interrupted action that cannot be read back suspends the plan as uncertain`() {

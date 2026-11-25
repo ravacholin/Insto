@@ -392,7 +392,7 @@ object PlanStepPolicy {
   sealed interface Next {
     /** Never touched the phone: validated again and run. */
     data object Run : Next
-    /** Interrupted while setting a readable state: read back, never run again. */
+    /** A dispatch with an incomplete observation: reconcile against current state. */
     data object Verify : Next
     data object Done : Next
     data class Failed(val reason: String) : Next
@@ -402,13 +402,34 @@ object PlanStepPolicy {
 
   fun of(row: ExecutionRecord?, effect: ActionEffect?): Next = when (row?.state) {
     null, ExecutionState.RECEIVED, ExecutionState.VALIDATED, ExecutionState.READY, ExecutionState.WAITING -> Next.Run
-    ExecutionState.DISPATCHING -> if (effect == ActionEffect.IDEMPOTENT_SET) Next.Verify else Next.Uncertain(ExecutionRecoveryPolicy.INTERRUPTED)
-    ExecutionState.VERIFYING -> Next.Verify
+    ExecutionState.DISPATCHING -> if (effect == ActionEffect.READ_ONLY) Next.Uncertain(ExecutionRecoveryPolicy.READ_INTERRUPTED) else Next.Verify
+    ExecutionState.VERIFYING, ExecutionState.UNCERTAIN -> Next.Verify
     ExecutionState.VERIFIED, ExecutionState.HANDED_OFF -> Next.Done
-    ExecutionState.UNCERTAIN -> Next.Uncertain(row.reason ?: ExecutionRecoveryPolicy.INTERRUPTED)
     ExecutionState.FAILED, ExecutionState.CANCELLED, ExecutionState.EXPIRED ->
       Next.Failed(row.reason ?: row.result ?: row.state.code)
     else -> Next.Uncertain(ExecutionRecoveryPolicy.INTERRUPTED)
+  }
+
+  /** A single replay is only allowed for the same absolute music stream setting and unchanged observed state. */
+  fun baseline(command: PhoneCommand, reading: DeviceReading?): String? {
+    if (command !is PhoneCommand.Volume || command.operation != VolumeOp.SET) return null
+    val route = reading?.audioRoute ?: return null
+    val maximum = reading.volumeMax?.takeIf { it > 0 } ?: return null
+    val current = reading.volume?.takeIf { it in 0..maximum } ?: return null
+    return "$route:$maximum:$current"
+  }
+
+  fun canRetry(row: ExecutionRecord, baseline: String?): Boolean =
+    row.attempts == 1 && baseline != null && row.dispatchBaseline == baseline
+
+  /** Commands with a stored target that can actually be compared to a reading. */
+  fun canObserve(command: PhoneCommand): Boolean = when (command) {
+    is PhoneCommand.Volume -> command.operation == VolumeOp.SET
+    is PhoneCommand.Torch -> true
+    is PhoneCommand.Media -> command.packageName != null && command.operation in setOf(MediaOp.PLAY, MediaOp.PAUSE)
+    is PhoneCommand.Platform -> command.action in setOf(
+      PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON, PlatformAction.DND_ON, PlatformAction.DND_OFF)
+    else -> false
   }
 
   /** The settings an action can change, read again after it so a restoration knows what the plan itself left. */

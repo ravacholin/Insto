@@ -84,6 +84,10 @@ internal object InstinctLocalClock {
       executionData = JSONObject().put("clockId", id).toString())
   }
 
+  fun observeCancellation(context: Context, id: String): PhoneActionResult? =
+    journal(context).clockEntries(id).singleOrNull()?.takeIf { it.state == InstinctClockState.CANCELLED }
+      ?.let { PhoneActionResult("El aviso de Insto figura cancelado.", verifiedLocally = true) }
+
   fun rearm(context: Context) = synchronized(lock) {
     val now = System.currentTimeMillis()
     val canSchedule = InstinctDeviceCapabilities.granted(context, android.Manifest.permission.SCHEDULE_EXACT_ALARM)

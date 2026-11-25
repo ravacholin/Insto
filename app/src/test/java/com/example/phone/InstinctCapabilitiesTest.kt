@@ -21,4 +21,13 @@ class InstinctCapabilitiesTest {
     }
     assertEquals(InstinctCategory.APPS, spec.category)
   }
+  @Test fun `registered television operations have bounded typed inputs and round trip in the journal`() {
+    val target = JSONObject().put("device", "tv-living").put("percent", 32)
+    val command = InstinctCapabilities.command("omniremote_volume", target)
+    assertEquals(command, PhoneCommandCodec.decode(PhoneCommandCodec.encode(command)))
+    assertEquals(InstinctCategory.APPS, InstinctCategory.of(command))
+    assertTrue(runCatching { InstinctCapabilities.command("omniremote_volume", target.put("percent", 101)) }.isFailure)
+    assertTrue(runCatching { InstinctCapabilities.command("omniremote_power",
+      JSONObject().put("device", "tv-living").put("on", "true")) }.isFailure)
+  }
 }

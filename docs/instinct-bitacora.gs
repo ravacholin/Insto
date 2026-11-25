@@ -130,6 +130,18 @@ function iso_(value) {
 }
 
 /** Una orden firmada de Instinct. Se guarda tal cual; quien verifica la firma es Insto. */
+const ORDER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DOORBELL_REFERENCE = 'insto_doorbell_reference';
+const MAILBOX_LAST_PRUNE = 'insto_mailbox_last_prune';
+
+/** Busca el ID exacto en la columna B, sin traer las líneas de las demás órdenes. */
+function findOrderRow_(sheet, id, last) {
+  if (last < 2) return null;
+  const cell = sheet.getRange(2, 2, last - 1, 1).createTextFinder(id)
+    .matchEntireCell(true).matchCase(!ORDER_ID.test(id)).findNext();
+  return cell ? cell.getRow() : null;
+}
+
 function postOrder_(body) {
   if (typeof body.id !== 'string' || !body.id || typeof body.at !== 'string' || typeof body.sig !== 'string' ||
     !Array.isArray(body.lines) || !body.lines.length) return json_({ ok: false, error: 'orden' });
@@ -147,19 +159,29 @@ function postOrder_(body) {
   lock.waitLock(10000);
   try {
     const sheet = mailbox_();
-    pruneMailbox_(sheet);
-    const last = sheet.getLastRow();
-    const known = last > 1 ? sheet.getRange(2, 2, last - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
-    if (known.indexOf(body.id) < 0) {
-      // La columna de líneas es un array JSON, que siempre empieza con "[" y no se interpreta como fórmula.
-      sheet.appendRow([cell_(new Date().toISOString()), cell_(body.id), cell_(body.at), serialized, cell_(body.sig), '']);
+    if (findOrderRow_(sheet, body.id, sheet.getLastRow()) === null) {
+      const now = Date.now();
+      const props = props_();
+      const lastPrune = Number(props.getProperty(MAILBOX_LAST_PRUNE) || 0);
+      if (now - lastPrune >= 3600000 || now < lastPrune) {
+        pruneMailbox_(sheet);
+        props.setProperty(MAILBOX_LAST_PRUNE, String(now));
+      }
+      // La columna de líneas es un array JSON y se guarda completa.
+      sheet.appendRow([cell_(new Date(now).toISOString()), cell_(body.id), cell_(body.at), serialized, cell_(body.sig), '']);
+      SpreadsheetApp.flush();
       isNew = true;
     }
   } finally {
     lock.releaseLock();
   }
-  // Solo una orden nueva toca el timbre; una repetida no. Un fallo nunca cambia la respuesta.
-  if (isNew) { try { ring_(false, withOrder_() ? orderPayload_(body) : null); } catch (_) { } }
+  // Solo una orden nueva toca el timbre. El sondeo cubre los fallos de entrega.
+  if (isNew) {
+    try {
+      const direct = withOrder_();
+      ring_(false, direct ? orderPayload_(body) : null, direct ? body : null);
+    } catch (_) { }
+  }
   return json_({ ok: true, id: body.id });
 }
 
@@ -209,8 +231,8 @@ function utf8Bytes_(text) {
 
 /**
  * La orden firmada como cuerpo del timbre, tal cual llegó: {"v":1,"id":…,"at":…,"lines":[…],"sig":…}. Null si Insto no la
- * podría aceptar así (más de 3 líneas o una línea de más de 300 caracteres) o si ocupa más de 3500 bytes: entonces el
- * timbre es «insto-timbre» y la orden se lee de la planilla, como siempre.
+ * podría aceptar así o si ocupa más de 3500 bytes. En ese caso se usa la referencia cifrada cuando se negoció;
+ * para el resto sigue disponible el timbre simple.
  */
 function orderPayload_(body) {
   if (body.lines.length > MAX_LINES) return null;
@@ -220,18 +242,26 @@ function orderPayload_(body) {
   return utf8Bytes_(payload) <= DOORBELL_MAX_PAYLOAD_BYTES ? payload : null;
 }
 
+/** Huella del mismo texto UTF-8 que Insto comprueba con HMAC al recuperar la orden. */
+function orderReference_(body) {
+  const canonical = ['insto-v4', body.id, body.at].concat(body.lines).join('\n');
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, canonical, Utilities.Charset.UTF_8);
+  const sha256 = digest.map(function (byte) { return ('0' + (byte & 255).toString(16)).slice(-2); }).join('');
+  return JSON.stringify({ v: 1, id: body.id, sha256: sha256 });
+}
+
 /**
  * Toca el timbre. Con el timbre cifrado de Insto 1.19.0: la orden ([payload]) cifrada por el relé si está configurado,
  * si no (o si el relé falla) el timbre cifrado simple; como mucho 30 por minuto. Sin él (Insto 1.18.0 o anterior), como
  * siempre: «insto-timbre» o la orden firmada, en claro, como mucho uno cada 5 segundos. Sin «force» se respetan los
  * límites. Devuelve el código HTTP, 0 si no se tocó (sin endpoint o por los límites) o -1 si el pedido falló.
  */
-function ring_(force, payload) {
-  return ringDetail_(force, payload).code;
+function ring_(force, payload, order) {
+  return ringDetail_(force, payload, order).code;
 }
 
 /** Como ring_, con el error de Google cuando el pedido falla (por ejemplo, sin autorización para UrlFetchApp). */
-function ringDetail_(force, payload) {
+function ringDetail_(force, payload, order) {
   const props = props_();
   const endpoint = props.getProperty(DOORBELL_ENDPOINT);
   if (!endpoint) return { code: 0 };
@@ -239,8 +269,10 @@ function ringDetail_(force, payload) {
   const sealed = props.getProperty(DOORBELL_SEALED);
   if (sealed) {
     if (!force && !withinMinute_(props, now)) return { code: 0 };
-    if (payload && relayReady_(props)) {
-      const relayed = relay_(endpoint, payload, props);
+    const canReference = order && !payload && props.getProperty(DOORBELL_REFERENCE) === '1' && ORDER_ID.test(order.id);
+    const keys = (payload || canReference) ? relayKeys_(props) : null;
+    if (keys) {
+      const relayed = relay_(endpoint, payload || orderReference_(order), keys);
       if (relayed.code >= 200 && relayed.code < 300) return relayed;
     }
     return postSealed_(endpoint, sealed);
@@ -270,18 +302,20 @@ function withinMinute_(props, now) {
 }
 
 /** El relé está listo: URL https, un secreto de al menos 32 caracteres y las claves públicas de Insto guardadas. */
-function relayReady_(props) {
-  return /^https:\/\/[^\s]+$/.test(RELAY_URL) && RELAY_SECRET.length >= 32 &&
-    !!props.getProperty(DOORBELL_P256DH) && !!props.getProperty(DOORBELL_AUTH);
+function relayKeys_(props) {
+  if (!/^https:\/\/[^\s]+$/.test(RELAY_URL) || RELAY_SECRET.length < 32) return null;
+  const p256dh = props.getProperty(DOORBELL_P256DH);
+  const auth = props.getProperty(DOORBELL_AUTH);
+  return p256dh && auth ? { p256dh: p256dh, auth: auth } : null;
 }
 
 /** La orden firmada al relé, que la cifra (RFC 8291) y la publica. El relé no puede cambiarla: la firma lo impide. */
-function relay_(endpoint, payload, props) {
+function relay_(endpoint, payload, keys) {
   try {
     const response = UrlFetchApp.fetch(RELAY_URL, {
       method: 'post', contentType: 'application/json; charset=utf-8', muteHttpExceptions: true,
       headers: { Authorization: 'Bearer ' + RELAY_SECRET },
-      payload: JSON.stringify({ endpoint: endpoint, p256dh: props.getProperty(DOORBELL_P256DH), auth: props.getProperty(DOORBELL_AUTH),
+      payload: JSON.stringify({ endpoint: endpoint, p256dh: keys.p256dh, auth: keys.auth,
         payload: payload, ttl: parseInt(DOORBELL_TTL, 10), urgency: 'high' }),
     });
     let answer = null;
@@ -356,11 +390,12 @@ function releDiagnosis_() {
   if (RELAY_SECRET.length < 32) return 'RELAY_SECRET tiene menos de 32 caracteres. Pegá la misma clave que guardaste con «wrangler secret put».';
   const endpoint = props.getProperty(DOORBELL_ENDPOINT);
   if (!endpoint) return 'El script no tiene el endpoint del timbre. En Insto, apagá y encendé el timbre.';
-  if (!props.getProperty(DOORBELL_P256DH) || !props.getProperty(DOORBELL_AUTH))
+  const keys = relayKeys_(props);
+  if (!keys)
     return 'Insto todavía no le pasó sus claves de cifrado al script. En Insto, apagá y encendé «Incluir la orden en el timbre».';
   if (props.getProperty(DOORBELL_WITH_ORDER) !== '1')
     return 'El relé está bien configurado, pero «Incluir la orden en el timbre» está apagado en Insto. Encendelo.';
-  const r = relay_(endpoint, DOORBELL_PAYLOAD, props);
+  const r = relay_(endpoint, DOORBELL_PAYLOAD, keys);
   if (r.code >= 200 && r.code < 300) return 'El relé anda: el timbre salió cifrado por el relé (HTTP ' + r.code + '). ' +
     'Si Insto sigue diciendo «Sin relé», en Insto apagá y encendé «Incluir la orden en el timbre» para que el script se lo confirme.';
   const why = {
@@ -388,12 +423,16 @@ function postDoorbell_(body) {
     props_().setProperty(DOORBELL_WITH_ORDER, body.conOrden ? '1' : '0');
     out.conOrden = body.conOrden;
   }
-  if (endpoint) props_().setProperty(DOORBELL_ENDPOINT, endpoint);
+  const props = props_();
+  const supportsReference = endpoint && sealing && body.cifrado && body.referencia === true;
+  if (supportsReference && props.getProperty(DOORBELL_REFERENCE) !== '1') props.setProperty(DOORBELL_REFERENCE, '1');
+  if (!supportsReference && props.getProperty(DOORBELL_REFERENCE) !== null) props.deleteProperty(DOORBELL_REFERENCE);
+  if (endpoint) props.setProperty(DOORBELL_ENDPOINT, endpoint);
   else { props_().deleteProperty(DOORBELL_ENDPOINT); saveSealed_(null); }
   // Solo a quien habla de cifrado (Insto 1.19.0): un Insto anterior recibe exactamente la respuesta de siempre.
   if (sealing) {
     out.cifrado = !!props_().getProperty(DOORBELL_SEALED);
-    out.rele = out.cifrado && relayReady_(props_());
+    out.rele = out.cifrado && relayKeys_(props) !== null;
     out.cadaOrden = true;
   }
   return json_(out);
@@ -459,25 +498,47 @@ function getCatalog_() {
 
 /** Marca como tomadas las órdenes que Insto ya leyó (válidas o no), para que no vuelvan. */
 function postTaken_(body) {
-  const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+  const ids = Array.isArray(body.ids) ? Array.from(new Set(body.ids.map(String).filter(Boolean)
+    .map(function (id) { return ORDER_ID.test(id) ? id.toLowerCase() : id; }))) : [];
+  if (!ids.length) return json_({ ok: true, tomadas: 0 });
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
     const sheet = mailbox_();
-    pruneMailbox_(sheet);
     const last = sheet.getLastRow();
-    let n = 0;
-    if (last > 1 && ids.length) {
-      // Solo las columnas orden_id y tomada; se reescribe solo «tomada», no la hoja entera.
-      const rows = sheet.getRange(2, 2, last - 1, 5).getValues();
-      const now = new Date().toISOString();
-      const taken = rows.map(function (r) {
-        if (!r[4] && ids.indexOf(String(r[0])) >= 0) { n++; return [now]; }
-        return [r[4]];
-      });
-      if (n) sheet.getRange(2, 6, last - 1, 1).setValues(taken);
+    const cells = [];
+    for (const id of ids) {
+      const row = findOrderRow_(sheet, id, last);
+      if (row !== null && !sheet.getRange(row, 6).getValue()) cells.push('F' + row);
     }
-    return json_({ ok: true, tomadas: n });
+    if (cells.length) {
+      sheet.getRangeList(cells).setValue(new Date().toISOString());
+      SpreadsheetApp.flush();
+    }
+    return json_({ ok: true, tomadas: cells.length });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function pendingOrder_(r) {
+  if (r[5]) return null;
+  try {
+    const lineas = JSON.parse(String(r[3]).replace(/^'/, ''));
+    return { recibido: iso_(r[0]), orden_id: String(r[1]), at: String(r[2]), lineas: lineas, firma: String(r[4]) };
+  } catch (_) { return null; }
+}
+
+/** El timbre de referencia lee a lo sumo la fila pedida, aun si está fuera de la primera página. */
+function getOrder_(p) {
+  if (typeof p.id !== 'string' || !ORDER_ID.test(p.id)) return json_({ ok: false, error: 'orden' });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MAILBOX);
+    const row = sheet ? findOrderRow_(sheet, p.id, sheet.getLastRow()) : null;
+    const order = row === null ? null : pendingOrder_(sheet.getRange(row, 1, 1, MAILBOX_HEADERS.length).getValues()[0]);
+    return json_({ ok: true, ordenes: order ? [order] : [] });
   } finally {
     lock.releaseLock();
   }
@@ -492,11 +553,8 @@ function getOrders_(p) {
   if (last > 1) {
     const rows = sheet.getRange(2, 1, last - 1, MAILBOX_HEADERS.length).getValues();
     for (let i = 0; i < rows.length && ordenes.length < limit; i++) {
-      const r = rows[i];
-      if (r[5]) continue;
-      let lineas = [];
-      try { lineas = JSON.parse(String(r[3]).replace(/^'/, '')); } catch (_) { continue; }
-      ordenes.push({ recibido: iso_(r[0]), orden_id: String(r[1]), at: String(r[2]), lineas: lineas, firma: String(r[4]) });
+      const order = pendingOrder_(rows[i]);
+      if (order) ordenes.push(order);
     }
   }
   return json_({ ok: true, ordenes: ordenes });
@@ -556,6 +614,7 @@ function doGet(e) {
   if (p.token !== TOKEN) return json_({ ok: false, error: 'token' });
   if (p.action === 'estado') return json_({ ok: true, estado: lastState_() });
   if (p.action === 'ordenes') return getOrders_(p);
+  if (p.action === 'orden') return getOrder_(p);
   if (p.action === 'catalogo') return getCatalog_();
   // Sin «action»: los eventos desde «since», exactamente como en 1.15.0.
   const since = p.since ? new Date(p.since).getTime() : 0;

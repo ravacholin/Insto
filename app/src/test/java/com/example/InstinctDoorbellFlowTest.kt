@@ -61,6 +61,8 @@ class InstinctDoorbellFlowTest {
   private val takeJobs = mutableListOf<Long?>()
   private val cancelled = mutableListOf<String>()
   private var gets = 0
+  private val targeted = mutableListOf<String>()
+  private var extraFetchMillis = 0L
   private var online = true
   private val audio get() = app.getSystemService(AudioManager::class.java)
   private val box get() = InstinctMailboxSettings(app)
@@ -104,8 +106,13 @@ class InstinctDoorbellFlowTest {
     }
     val fake = FakeHttp { ex ->
       if (ex.request.method == "GET") {
-        gets++
-        FakeHttp.Reply(200, JSONObject().put("ok", true).put("ordenes", JSONArray(inbox.filter { it.id !in taken }.map {
+        val parameters = ex.request.url
+        val id = parameters.queryParameter("id").takeIf { parameters.queryParameter("action") == "orden" }
+        if (id == null) gets++ else targeted += id
+        wall += extraFetchMillis
+        FakeHttp.Reply(200, JSONObject().put("ok", true).put("ordenes", JSONArray(inbox.filter {
+          it.id !in taken && (id == null || id.equals(it.id, ignoreCase = true))
+        }.map {
           JSONObject().put("orden_id", it.id).put("at", it.at).put("lineas", JSONArray(it.lines)).put("firma", it.sig)
         })).toString())
       } else {
@@ -363,6 +370,45 @@ class InstinctDoorbellFlowTest {
     assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC))
     assertEquals(listOf("ok"), acks("poner el volumen al 40 por ciento"))
   }
+
+  @Test fun `an encrypted reference retrieves exactly one signed order and records time to execution`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    val other = order("#insto poner el volumen al 90 por ciento")
+    val wanted = order("#insto poner el volumen al 40 por ciento")
+    inbox += listOf(other, wanted)
+    extraFetchMillis = 321
+    val reference = referencePayload(wanted)
+    ringWith(token, reference)
+    ringWith(token, reference)
+    assertEquals(listOf(wanted.id), targeted)
+    assertEquals(0, gets)
+    assertEquals(listOf(wanted.id), taken)
+    val journal = InstinctExecutionJournal.of(app)
+    assertTrue(journal.forMessage(other.id).isEmpty())
+    val execution = journal.forMessage(wanted.id).single()
+    assertEquals(ExecutionTransport.PUSH_REFERENCE, execution.transport)
+    assertEquals(321L, execution.dispatchLatencyMillis)
+    assertEquals(1, execution.attempts)
+  }
+
+  @Test fun `a matching reference cannot authorize a forged order and a changed digest never takes the order`() {
+    val token = register()
+    InstinctDoorbell.setWithOrder(app, true)
+    val forged = order("#insto poner el volumen al 40 por ciento").copy(sig = "0".repeat(64))
+    val changed = order("#insto poner el volumen al 20 por ciento")
+    inbox += listOf(forged, changed)
+    ringWith(token, referencePayload(forged))
+    ringWith(token, referencePayload(changed.copy(lines = listOf("#insto poner el volumen al 90 por ciento"))))
+    assertEquals(listOf(forged.id, changed.id), targeted)
+    assertEquals(0, gets)
+    assertTrue(taken.isEmpty())
+    assertFalse(InstinctMailbox.seen(app).contains(forged.id))
+    assertFalse(InstinctMailbox.seen(app).contains(changed.id))
+  }
+
+  private fun referencePayload(order: MailboxOrder): ByteArray = JSONObject().put("v", 1).put("id", order.id)
+    .put("sha256", sha256(InstinctMailboxSignature.canonical(order.id, order.at, order.lines))).toString().toByteArray()
 
   @Test fun `with a script older than 1_19_0 a direct order is followed by a poll about 60 seconds later`() {
     scriptSeals = false

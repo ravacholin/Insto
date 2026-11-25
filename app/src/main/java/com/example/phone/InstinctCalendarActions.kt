@@ -47,6 +47,19 @@ internal class InstinctCalendarActions(private val resolver: ContentResolver) {
     }
   }
 
+  /** A known event ID is observable after an interruption. A creation has no ID until the provider replies. */
+  fun observe(capability: String, params: JSONObject): PhoneActionResult? {
+    val calendar = params.getLong("calendarId")
+    if (DeviceCalendar(resolver).accessLevel(calendar) == null) return null
+    val event = event(params.getLong("eventId"))
+    return when {
+      capability == "calendar_cancel" && event == null -> verified("El evento ya no figura en el calendario.")
+      capability == "calendar_update" && event != null && event.calendar == calendar && event.safeToChange && matches(event, params) ->
+        verified("El evento tiene los valores pedidos.", event.reference())
+      else -> null
+    }
+  }
+
   private fun query(calendar: Long, params: JSONObject): PhoneActionResult {
     val uri = Instances.CONTENT_URI.buildUpon().apply {
       ContentUris.appendId(this, params.getLong("beginMillis"))

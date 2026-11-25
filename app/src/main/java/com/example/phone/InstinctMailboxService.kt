@@ -121,7 +121,8 @@ object InstinctMailbox {
    * `instinct-mailbox-seen.json` once (the file is kept) and records each claimed order's lines in the same
    * transaction.
    */
-  fun seen(context: Context): InstinctOrderClaims = JournalClaims(InstinctExecutionJournal.of(context))
+  fun seen(context: Context, receivedAt: Long? = null): InstinctOrderClaims =
+    JournalClaims(InstinctExecutionJournal.of(context), receivedAt)
 
   /** The job, armed while the mailbox can poll; cancelled otherwise. */
   fun rearm(context: Context) {
@@ -181,7 +182,8 @@ object InstinctMailbox {
     }
     // Verified and marked seen on disk before anything else: a valid order is dispatched at most once. If the record
     // cannot be written nothing runs and nothing is marked taken: the next poll reads them again.
-    val outcome = try { InstinctMailboxPoll.process(orders, key, clock(), seen(app)) } catch (_: Exception) {
+    val receivedAt = clock()
+    val outcome = try { InstinctMailboxPoll.process(orders, key, receivedAt, seen(app, receivedAt)) } catch (_: Exception) {
       return status(app, Result.Failed(STORAGE_FAILURE))
     }
     // 1.19.0: run first, then tell the sheet. Every id read, also the refused ones, is marked taken so it never comes

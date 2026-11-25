@@ -290,3 +290,11 @@ y `adb` conectado por si hace falta mirar Logcat (Insto no escribe contenido ni 
     la demora: `Urgency: high` debería hacer que ntfy la entregue.
 
 Anotá en cada paso la hora de envío y la de «Última recepción push» para medir la latencia real.
+
+## 12. Recuperación dirigida de órdenes grandes
+
+Si está activado «Incluir la orden en el timbre» y el relé cifrado está configurado, el script envía la orden completa cuando cabe en 3500 bytes. Si el cliente anunció soporte y la orden no cabe, envía `{"v":1,"id":"<uuid>","sha256":"<hex>"}`. La huella se calcula sobre el texto UTF-8 canónico de `insto-v4`. RFC 8291 cifra ambos cuerpos y el relé transporta el aviso con el mismo contrato.
+
+Insto persiste el aviso y consulta `GET ?token=…&action=orden&id=…`. El script busca el ID exacto en la columna del buzón y lee solo la fila solicitada si existe. Responde con el formato `ordenes` habitual, con cero o una fila. Insto verifica la huella, el HMAC original y la vigencia antes de reclamar el ID junto con sus líneas. Push directo, referencia y sondeo comparten el registro. La confirmación `tomadas` escribe las celdas pendientes en un solo lote. Se conserva el timbre simple para clientes anteriores o cuando falla el relé, y el sondeo periódico como respaldo.
+
+La latencia de recepción a primer despacho queda registrada por orden. La ruta figura como «timbre», «timbre por referencia» o «buzón» en el diario. Para el sondeo la muestra empieza con la respuesta en el teléfono. La espera del sistema entre el envío y que la señal llegue al teléfono requiere una medición externa.

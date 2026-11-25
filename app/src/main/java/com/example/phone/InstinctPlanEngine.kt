@@ -21,7 +21,7 @@ import org.json.JSONObject
  *   is read back by [InstinctProposalCenter.outcomeVerifier], exactly like an order that arrives alone;
  * - autonomy, quiet hours, the anti-loop brake and «Nunca» come from [InstinctGatePreview] and
  *   [InstinctProposalCenter]: a plan is one order for the brake and, when its categories ask for it, one confirmation
- *   for the whole plan. Granted permissions are never asked again and nothing that needs a screen is ever run;
+ *   for the whole plan. Screen-dependent actions require a visible, unlocked activity; permission requests stay in Settings;
  * - an approval and a «decidir» are rows of the existing questions ([InstinctQuestionNotifications]), with their
  *   buttons, privacy on the lock screen, quiet hours and recovery;
  * - waits for an event or a trigger reuse [InstinctTriggers] and the calendar reader of [InstinctScheduler];
@@ -29,7 +29,7 @@ import org.json.JSONObject
  * - progress goes to the log ([InstinctLog]) as events of kind «plan», never to the WhatsApp chat.
  *
  * The plan's row in SQLite is the only truth: a process death resumes from it. An action that may have happened is
- * never run again: a readable setting is read back and anything else suspends the plan as uncertain.
+ * reconciled against the device. Only a bounded, evidence-backed replay can dispatch it again.
  */
 object InstinctPlanEngine {
   const val ACTION_TICK = "com.example.phone.ACTION_INSTINCT_PLAN_TICK"
@@ -56,8 +56,9 @@ object InstinctPlanEngine {
     InstinctContextScheduler.snapshotNow(context.applicationContext, signals)
   }
 
-  private val running: MutableSet<String> = ConcurrentHashMap.newKeySet()
-  private val again: MutableSet<String> = ConcurrentHashMap.newKeySet()
+  private val runnerLock = Any()
+  private val running = mutableSetOf<String>()
+  private val again = mutableSetOf<String>()
   private val specs = ConcurrentHashMap<String, InstinctPlanSpec>()
   private data class Foreground(val position: String, val activity: WeakReference<Activity>, val expiresAt: Long)
   private val foreground = ConcurrentHashMap<String, Foreground>()
@@ -127,21 +128,21 @@ object InstinctPlanEngine {
     val spec = check.spec ?: return Admission(AckEntry(AckKind.ERROR, check.order, "plan no válido: ${check.why ?: InstinctPlanSpec.INVALID}"))
     val commands = commands(app, spec) ?: return Admission(AckEntry(AckKind.ERROR, check.order, InstinctPlanSpec.INVALID))
     refusal(app, spec, commands, source)?.let { return Admission(AckEntry(AckKind.ERROR, check.order, it)) }
-    if (execution == null || fingerprint.isEmpty() || !InstinctExecutions.begin(app, execution, null))
+    if (execution == null || fingerprint.isEmpty())
       return Admission(AckEntry(AckKind.ERROR, check.order, InstinctProposalCenter.NOT_RECORDED))
     val id = PlanIds.of(execution)
     val now = now()
     val plan = PlanRecord(id, execution, spec.line, source, InstinctLogEvents.messageId(message), fingerprint, PlanState.PENDING,
       createdAt = now, updatedAt = now, deadline = spec.expiresAt, owner = InstinctExecutionJournal.owner)
-    return when (runCatching { journal(app).insertPlan(plan) }.getOrNull()) {
+    val accepted = "Plan ${plan.shortId} aceptado: ${spec.summary}. El progreso y el resultado van a la bitácora."
+    return when (runCatching { journal(app).insertPlan(plan, acceptance = accepted) }.getOrNull()) {
       InstinctExecutionJournal.PlanInsert.ADDED, InstinctExecutionJournal.PlanInsert.EXISTS -> {
         specs[id] = spec
-        Admission(AckEntry(AckKind.OK, check.order, "Plan ${plan.shortId} aceptado: ${spec.summary}. El progreso y el resultado van a la bitácora.",
-          informative = true), id)
+        Admission(AckEntry(AckKind.OK, check.order, accepted, informative = true), id)
       }
       InstinctExecutionJournal.PlanInsert.FULL ->
         Admission(AckEntry(AckKind.ERROR, check.order, "ya hay ${InstinctPlanSpec.MAX_ACTIVE} planes activos; cancelá alguno antes."))
-      null -> Admission(AckEntry(AckKind.ERROR, check.order, InstinctProposalCenter.NOT_RECORDED))
+      InstinctExecutionJournal.PlanInsert.UNAVAILABLE, null -> Admission(AckEntry(AckKind.ERROR, check.order, InstinctProposalCenter.NOT_RECORDED))
     }
   }
 
@@ -186,7 +187,7 @@ object InstinctPlanEngine {
     return when (runCatching { journal(app).insertPlan(plan) }.getOrNull()) {
       InstinctExecutionJournal.PlanInsert.ADDED, InstinctExecutionJournal.PlanInsert.EXISTS -> { start(app, id); null }
       InstinctExecutionJournal.PlanInsert.FULL -> "ya hay ${InstinctPlanSpec.MAX_ACTIVE} planes activos."
-      null -> InstinctProposalCenter.NOT_RECORDED
+      InstinctExecutionJournal.PlanInsert.UNAVAILABLE, null -> InstinctProposalCenter.NOT_RECORDED
     }
   }
 
@@ -212,14 +213,16 @@ object InstinctPlanEngine {
   }
 
   internal fun advance(app: Context, id: String) {
-    if (!running.add(id)) { again += id; return }
-    try {
-      do {
-        again.remove(id)
-        runCatching { loop(app, id) }
-      } while (again.remove(id))
-    } finally { running.remove(id) }
-    if (again.remove(id)) advance(app, id)
+    synchronized(runnerLock) {
+      if (!running.add(id)) { again += id; return }
+    }
+    var replay: Boolean
+    do {
+      runCatching { loop(app, id) }.onFailure { InstinctExecutionRecoveryManager.later(app) }
+      replay = synchronized(runnerLock) {
+        again.remove(id).also { if (!it) running.remove(id) }
+      }
+    } while (replay)
     rearm(app)
   }
 
@@ -227,7 +230,8 @@ object InstinctPlanEngine {
 
   private fun portableSpec(spec: InstinctPlanSpec): Boolean =
     spec.steps.flatMap { it.actions }.flatMap { listOfNotNull(it.invocation, it.alternative) }.none {
-      it.capability.startsWith("calendar_") || it.capability == "insto_clock_cancel"
+      it.capability.startsWith("calendar_") || it.capability == "insto_clock_cancel" ||
+        it.spec.adapter == InstinctCapabilities.Adapter.OMNIREMOTE
     }
 
   private fun spec(plan: PlanRecord): InstinctPlanSpec? = specs[plan.id] ?: (parse(plan.line, calendarAt(plan.createdAt)) { true }
@@ -238,7 +242,8 @@ object InstinctPlanEngine {
     repeat(MAX_ITERATIONS) {
       var plan = journal.plan(id) ?: return
       if (plan.state.terminal) { close(app, plan); return }
-      if (plan.owner != InstinctExecutionJournal.owner) {
+      val adopted = plan.owner != InstinctExecutionJournal.owner
+      if (adopted) {
         if (!journal.adoptPlan(plan)) return
         plan = journal.plan(id) ?: return
       }
@@ -262,6 +267,11 @@ object InstinctPlanEngine {
           journal.updatePlan(id, setOf(PlanState.BLOCKED)) { it.copy(state = PlanState.WAITING, reason = null) } != null
         } else run(app, plan, spec)
         PlanState.RUNNING -> run(app, plan, spec)
+        PlanState.SUSPENDED -> {
+          val recorded = journal.planSteps(id).any { it.position == "estado" && it.status == PlanState.SUSPENDED.code }
+          if (adopted || !recorded) showSuspension(app, plan, recorded)
+          false
+        }
         else -> false
       }
       if (!proceed) return
@@ -357,20 +367,9 @@ object InstinctPlanEngine {
     val rowId = ExecutionIds.of(message, 0)
     val row = runCatching { journal.get(rowId) }.getOrElse { return end(app, plan, PlanState.FAILED, InstinctPlanSpec.INVALID) }
     val persisted = decode(row)
-    if (row?.state in setOf(ExecutionState.DISPATCHING, ExecutionState.VERIFYING) &&
-      persisted is PhoneCommand.Platform && persisted.action == PlatformAction.INSTINCT_CAPABILITY &&
-      persisted.argument in setOf("insto_timer", "insto_alarm")) {
-      val recovered = InstinctLocalClock.recover(app, rowId)
-      if (recovered != null) {
-        if (row?.state == ExecutionState.DISPATCHING) InstinctExecutions.move(app, rowId, ExecutionState.VERIFYING)
-        if (!InstinctExecutions.move(app, rowId, ExecutionState.VERIFIED, recovered.message, executionData = recovered.executionData))
-          return false
-        return done(app, plan, line, checkNotNull(journal.get(rowId)))
-      }
-    }
     return when (val next = PlanStepPolicy.of(row, persisted?.let(ActionEffect::of))) {
       PlanStepPolicy.Next.Run -> runFresh(app, plan, action, line, message, row)
-      PlanStepPolicy.Next.Verify -> readBack(app, plan, row!!)
+      PlanStepPolicy.Next.Verify -> readBack(app, plan, action, row!!, persisted)
       PlanStepPolicy.Next.Done -> done(app, plan, line, row!!)
       is PlanStepPolicy.Next.Failed -> failed(app, plan, action, line, next.reason)
       is PlanStepPolicy.Next.Uncertain -> {
@@ -384,7 +383,7 @@ object InstinctPlanEngine {
   private fun decode(row: ExecutionRecord?): PhoneCommand? =
     row?.command?.let { runCatching { PhoneCommandCodec.decode(JSONObject(it)) }.getOrNull() }
 
-  private fun runFresh(app: Context, plan: PlanRecord, action: PlanAction, line: String, message: String, existing: ExecutionRecord?): Boolean {
+  private fun runFresh(app: Context, plan: PlanRecord, action: PlanAction, line: String, message: String, existing: ExecutionRecord?, retry: Boolean = false): Boolean {
     val journal = journal(app)
     val invocation = if (plan.fallback) action.alternative else action.invocation
     val structured = InstinctStructuredPlan.isOrder(plan.line)
@@ -397,7 +396,7 @@ object InstinctPlanEngine {
       else runCatching { invocation.command(reference) }.getOrNull())
       ?: return failed(app, plan, action, line, "La consulta previa no identificó un único evento apto o la acción dejó de ser válida.")
     val row = existing ?: when (val admitted = runCatching {
-      journal.admit(message, ExecutionTransport.PLAN, listOf(line), plan.message, deadline = plan.deadline, occurrence = plan.id, claim = false)
+      journal.admit(message, ExecutionTransport.PLAN, listOf(line), plan.message, deadline = plan.deadline, occurrence = plan.id, claim = false, receivedAt = plan.root?.let(journal::get)?.receivedAt ?: plan.createdAt)
     }.getOrNull()) {
       is InstinctExecutionJournal.Admission.Admitted -> admitted.records.single()
       // Admitted by another runner a moment ago: read it again on the next turn.
@@ -434,11 +433,16 @@ object InstinctPlanEngine {
     if (plan.state == PlanState.BLOCKED && journal.updatePlan(plan.id, setOf(PlanState.BLOCKED)) {
       it.copy(state = PlanState.RUNNING, reason = null)
     } == null) return false
-    InstinctExecutions.move(app, row.executionId, ExecutionState.READY, from = setOf(ExecutionState.VALIDATED, ExecutionState.RECEIVED))
-    // «despachando» on disk before touching the phone; without it nothing runs.
-    if (!InstinctExecutions.begin(app, row.executionId, command)) return end(app, plan, PlanState.FAILED, InstinctProposalCenter.NOT_RECORDED)
     val verifier = InstinctProposalCenter.outcomeVerifier(app)
     val before = runCatching { verifier.read(command) }.getOrNull()
+    val baseline = PlanStepPolicy.baseline(command, before)
+    if (retry && !PlanStepPolicy.canRetry(row, baseline))
+      return uncertain(app, plan, line, row.reason ?: ExecutionRecoveryPolicy.INTERRUPTED)
+    val encoded = PhoneCommandCodec.encode(command).toString()
+    // Persist the evidence, attempt number and dispatch marker together before touching Android.
+    if (!journal.beginPlanDispatch(row, encoded, baseline, retry)) return false
+    if (retry && PlanStepPolicy.baseline(command, runCatching { verifier.read(command) }.getOrNull()) != baseline)
+      return journal.transition(row.executionId, ExecutionState.UNCERTAIN, reason = "El estado cambió antes de reintentar el volumen.")
     val result = runCatching {
       if (activity != null) PhoneActionExecutor(activity).execute(command, confirmed = true, executionId = row.executionId, foreground = true)
       else if (command is PhoneCommand.Platform && command.action == PlatformAction.INSTINCT_CAPABILITY)
@@ -448,9 +452,9 @@ object InstinctPlanEngine {
       PhoneActionResult("La acción se interrumpió.", outcome = PhoneActionOutcome.UNCERTAIN)
     }
     when {
-      result.outcome == PhoneActionOutcome.UNCERTAIN -> {
-        InstinctExecutions.move(app, row.executionId, ExecutionState.UNCERTAIN, reason = result.message)
-        return uncertain(app, plan, line, result.message)
+      result.outcome == PhoneActionOutcome.UNCERTAIN ||
+        retry && result.outcome in setOf(PhoneActionOutcome.NEEDS_INPUT, PhoneActionOutcome.REJECTED) -> {
+        return journal.transition(row.executionId, ExecutionState.UNCERTAIN, reason = result.message, from = setOf(ExecutionState.DISPATCHING))
       }
       structured && (result.outcome == PhoneActionOutcome.NEEDS_INPUT ||
         result.outcome == PhoneActionOutcome.REJECTED && result.message == PhoneActionExecutor.LOCKED) -> {
@@ -467,7 +471,7 @@ object InstinctPlanEngine {
     }
     if (!InstinctExecutions.move(app, row.executionId, ExecutionState.VERIFYING)) return false
     var observation = runCatching { verifier.verify(command, before, result) }
-      .getOrDefault(Observation(OutcomeVerdict.NOT_OBSERVABLE, detail = ActionOutcomeRules.HANDED_OFF))
+      .getOrDefault(Observation(OutcomeVerdict.INDETERMINATE, detail = "No se pudo leer el resultado."))
     if (structured && !needsActivity && observation.verdict == OutcomeVerdict.NOT_OBSERVABLE)
       observation = Observation(OutcomeVerdict.INDETERMINATE, detail = "Insto no pudo comprobar el resultado local.")
     val entry = ActionOutcomeRules.ack(line, result, observation)
@@ -481,7 +485,7 @@ object InstinctPlanEngine {
         InstinctTrust.record(app, command, if (plan.approval == PlanApproval.PERSON) TrustEvent.CONFIRMADA else TrustEvent.EJECUTADA)
         done(app, plan, line, journal.get(row.executionId) ?: row)
       }
-      ExecutionState.UNCERTAIN -> uncertain(app, plan, line, entry.message)
+      ExecutionState.UNCERTAIN -> true
       else -> failed(app, plan, action, line, entry.message)
     }
   }
@@ -510,26 +514,38 @@ object InstinctPlanEngine {
     return false
   }
 
-  /** Interrupted while it ran: read back, never run again (1.20.0's rule). */
-  private fun readBack(app: Context, plan: PlanRecord, row: ExecutionRecord): Boolean {
-    val command = decode(row)
-    var verdict = command?.let { c ->
-      runCatching { InstinctProposalCenter.outcomeVerifier(app).verify(c, null, PhoneActionResult("", outcome = PhoneActionOutcome.COMPLETED)) }.getOrNull()?.verdict
-    } ?: OutcomeVerdict.INDETERMINATE
-    if (InstinctStructuredPlan.isOrder(plan.line) && command != null && LockScreenPolicy.runsLocked(command) &&
-      verdict == OutcomeVerdict.NOT_OBSERVABLE) verdict = OutcomeVerdict.INDETERMINATE
-    val line = row.line
-    return when (val state = ExecutionRecoveryPolicy.afterVerify(row, verdict)) {
-      ExecutionState.VERIFIED, ExecutionState.HANDED_OFF -> {
-        InstinctExecutions.move(app, row.executionId, state, result = if (state == ExecutionState.VERIFIED) ExecutionRecoveryPolicy.SATISFIED
-          else ActionOutcomeRules.HANDED_OFF, attribution = ExecutionAttribution.SATISFIED.takeIf { state == ExecutionState.VERIFIED })
-        done(app, plan, line, journal(app).get(row.executionId) ?: row)
-      }
-      else -> {
-        InstinctExecutions.move(app, row.executionId, ExecutionState.UNCERTAIN, reason = ExecutionRecoveryPolicy.INTERRUPTED)
-        uncertain(app, plan, line, ExecutionRecoveryPolicy.INTERRUPTED)
-      }
+  private fun readBack(app: Context, plan: PlanRecord, action: PlanAction, row: ExecutionRecord, command: PhoneCommand?): Boolean {
+    val reported = if (command is PhoneCommand.Platform && command.action == PlatformAction.INSTINCT_CAPABILITY &&
+      !InstinctProposalCenter.refusedByPolicy(app, command)) runCatching {
+      InstinctDeviceCapabilities.observe(app, command, row.executionId)
+    }.getOrNull() else null
+    val verifier = InstinctProposalCenter.outcomeVerifier(app)
+    var observedBaseline: String? = null
+    val observation = if (command != null && PlanStepPolicy.canObserve(command) &&
+      !InstinctProposalCenter.refusedByPolicy(app, command)) {
+      runCatching {
+        if (command is PhoneCommand.Volume && row.dispatchBaseline != null) {
+          val reading = verifier.read(command)
+          observedBaseline = PlanStepPolicy.baseline(command, reading)
+          // The device may have selected a different output since the write. A level there proves nothing about the old route.
+          if (observedBaseline?.substringBefore(':') != row.dispatchBaseline.substringBefore(':')) null
+          else ActionOutcomeRules.judge(command, null, reading, PhoneActionResult(""))
+        } else verifier.verify(command, null, PhoneActionResult(""))
+      }.getOrNull()
+    } else null
+    val journal = journal(app)
+    if (reported != null || observation?.verdict == OutcomeVerdict.VERIFIED) {
+      if (!journal.verifyPlanDispatch(row, reported?.message ?: ExecutionRecoveryPolicy.SATISFIED, reported?.executionData)) return false
+      return done(app, plan, row.line, checkNotNull(journal.get(row.executionId)))
     }
+    val reason = row.reason ?: ExecutionRecoveryPolicy.INTERRUPTED
+    if (row.state != ExecutionState.UNCERTAIN && !InstinctExecutions.move(app, row.executionId, ExecutionState.UNCERTAIN,
+        reason = reason, from = setOf(row.state))) return false
+    if (observation?.verdict == OutcomeVerdict.NOT_ACHIEVED && PlanStepPolicy.canRetry(row, observedBaseline)) {
+      val uncertain = checkNotNull(journal.get(row.executionId))
+      return runFresh(app, plan, action, row.line, row.messageId, uncertain, retry = true)
+    }
+    return uncertain(app, plan, row.line, reason)
   }
 
   private fun done(app: Context, plan: PlanRecord, line: String, row: ExecutionRecord): Boolean {
@@ -538,7 +554,9 @@ object InstinctPlanEngine {
     val stash = plan.stash.mapValues { (setting, s) ->
       if (setting in touched && !s.restored && row.attribution == ExecutionAttribution.CAUSED) readSetting(app, setting)?.let { s.copy(applied = it) } ?: s else s
     }
-    record(app, plan, plan.position, line, "ok", row.result ?: row.state.code, row.executionId)
+    val detail = row.result ?: row.state.code
+    val latency = row.dispatchLatencyMillis?.let { " · recepción a despacho: $it ms" }.orEmpty()
+    record(app, plan, plan.position, line, "ok", detail + latency, row.executionId)
     val journal = journal(app)
     val moved = journal.updatePlan(plan.id, setOf(PlanState.RUNNING)) {
       it.copy(sub = it.sub + 1, fallback = false, stash = stash)
@@ -566,10 +584,15 @@ object InstinctPlanEngine {
     val suspended = journal(app).updatePlan(plan.id, setOf(PlanState.RUNNING)) {
       it.copy(state = PlanState.SUSPENDED, sub = it.sub + 1, fallback = false, reason = why)
     } ?: return true
-    record(app, suspended, "estado", "plan", PlanState.SUSPENDED.code, why)
-    flushLog(app, suspended.id)
-    InstinctProposalCenter.notifyPlan(app, suspended.id, "Plan ${suspended.shortId} suspendido", InstinctProposalCenter.sentence(why))
+    showSuspension(app, suspended)
     return false
+  }
+
+  private fun showSuspension(app: Context, plan: PlanRecord, recorded: Boolean = false) {
+    val why = plan.reason ?: return
+    if (recorded) flushLog(app, plan.id)
+    else record(app, plan, "estado", "plan", PlanState.SUSPENDED.code, why)
+    InstinctProposalCenter.notifyPlan(app, plan.id, "Plan ${plan.shortId} suspendido", InstinctProposalCenter.sentence(why))
   }
 
   // ---------------------------------------------------------------------------------------------------------------
@@ -1043,5 +1066,9 @@ object InstinctPlanEngine {
   }
 
   /** Tests only. */
-  internal fun reset() { running.clear(); again.clear(); specs.clear(); foreground.clear() }
+  internal fun reset() {
+    synchronized(runnerLock) { running.clear(); again.clear() }
+    specs.clear()
+    foreground.clear()
+  }
 }

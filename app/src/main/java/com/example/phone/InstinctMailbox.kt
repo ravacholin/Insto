@@ -331,7 +331,12 @@ class InstinctMailboxClient(private val http: InstinctLogClient = InstinctLogCli
 
   /** `GET ?token=…&action=ordenes&limit=N`: the orders not taken yet, in order. */
   fun fetch(url: String, token: String, limit: Int = InstinctMailboxPoll.MAX_ORDERS): Fetch =
-    when (val raw = http.get(url, listOf("token" to token, "action" to "ordenes", "limit" to limit.coerceIn(1, InstinctMailboxPoll.MAX_ORDERS).toString()), mailbox = true)) {
+    fetch(url, token, "ordenes", "limit" to limit.coerceIn(1, InstinctMailboxPoll.MAX_ORDERS).toString())
+
+  fun fetchOrder(url: String, token: String, id: String): Fetch = fetch(url, token, "orden", "id" to id)
+
+  private fun fetch(url: String, token: String, action: String, parameter: Pair<String, String>): Fetch =
+    when (val raw = http.get(url, listOf("token" to token, "action" to action, parameter), mailbox = true)) {
       is InstinctLogClient.Raw.Failed -> Fetch.Failed(raw.reason)
       is InstinctLogClient.Raw.Body -> when {
         InstinctMailboxPoll.tokenRejected(raw.text) -> Fetch.Failed(InstinctLogClient.Failure.TOKEN.label)

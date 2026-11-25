@@ -117,13 +117,14 @@ data class DoorbellState(
   val decryptFailures: Int = 0,
   /** Ids of direct orders the sheet must still hear as taken (`POST tomadas`); never anything else of the order. */
   val pendingTaken: List<String> = emptyList(),
+  val referencedOrders: Int = 0,
 ) {
   fun encode(): String = JSONObject().put("confirmed", confirmed).put("informPending", informPending).put("rings", rings).put("ringPolls", ringPolls)
     .put("withOrderConfirmed", withOrderConfirmed).put("directOrders", directOrders).put("badPayloads", badPayloads)
     .put("duplicates", duplicates).put("queueRejected", queueRejected).put("uncertain", uncertain).put("storageFailures", storageFailures)
     .put("encryptionConfirmed", encryptionConfirmed).put("relayConfirmed", relayConfirmed).put("perOrderRing", perOrderRing)
     .put("temporaryEndpoint", temporaryEndpoint).put("encryptedPushes", encryptedPushes).put("plainPushes", plainPushes)
-    .put("decryptFailures", decryptFailures)
+    .put("decryptFailures", decryptFailures).put("referencedOrders", referencedOrders)
     .apply {
       token?.let { put("token", it) }; distributor?.let { put("distributor", it) }; informedAt?.let { put("informedAt", it) }
       failure?.let { put("failure", it) }; lastRingAt?.let { put("lastRingAt", it) }; lastDirectAt?.let { put("lastDirectAt", it) }
@@ -145,7 +146,8 @@ data class DoorbellState(
         o.optLong("lastDirectAt", 0L).takeIf { it > 0 }, o.optString("lastError").takeIf { it.isNotEmpty() }?.take(200),
         o.optBoolean("encryptionConfirmed"), o.optBoolean("relayConfirmed"), o.optBoolean("perOrderRing"), o.optBoolean("temporaryEndpoint"),
         o.optString("keysFingerprint").takeIf { it.isNotEmpty() }, o.optInt("encryptedPushes"), o.optInt("plainPushes"), o.optInt("decryptFailures"),
-        o.optJSONArray("pendingTaken")?.let { a -> (0 until minOf(a.length(), MAX_PENDING_TAKEN)).map { a.optString(it) }.filter { it.isNotEmpty() } }.orEmpty())
+        o.optJSONArray("pendingTaken")?.let { a -> (0 until minOf(a.length(), MAX_PENDING_TAKEN)).map { a.optString(it) }.filter { it.isNotEmpty() } }.orEmpty(),
+        o.optInt("referencedOrders"))
     }.getOrDefault(DoorbellState())
   }
 }
@@ -155,6 +157,12 @@ data class DoorbellState(
  * Apps Script writes it. A strict, pure parser: anything else (`insto-timbre` included) is no order, and the doorbell
  * then polls as before. Parsing proves nothing: the order still goes through [InstinctMailboxSignature.verify].
  */
+data class MailboxOrderReference(val id: String, val fingerprint: String) {
+  fun matches(order: MailboxOrder): Boolean = id.equals(order.id, ignoreCase = true) &&
+    InstinctMailboxSignature.matches(
+      sha256(InstinctMailboxSignature.canonical(order.id, order.at, order.lines)), fingerprint)
+}
+
 object InstinctDoorbellPayload {
   /** What the script sends without the order. */
   const val PLAIN = "insto-timbre"
@@ -187,6 +195,19 @@ object InstinctDoorbellPayload {
     if (lines.any { (!InstinctStructuredPlan.isWireLine(it) && it.length > MAX_LINE_CHARS) || it.contains('\n') || it.contains('\r') }) return null
     MailboxOrder(id, at, lines, sig)
   }.getOrNull()
+
+  /** Only the encrypted transport may supply a reference. Its fetched order still requires HMAC. */
+  fun reference(payload: ByteArray?): MailboxOrderReference? = text(payload)?.let { raw ->
+    runCatching {
+      val tokener = JSONTokener(raw)
+      val value = tokener.nextValue() as? JSONObject ?: return null
+      if (tokener.nextClean() != 0.toChar() ||
+        value.keys().asSequence().toSet() != setOf("v", "id", "sha256") || value.opt("v") != 1) return null
+      val id = value.opt("id") as? String ?: return null
+      val fingerprint = value.opt("sha256") as? String ?: return null
+      if (UUID.matches(id) && HEX.matches(fingerprint)) MailboxOrderReference(id, fingerprint) else null
+    }.getOrNull()
+  }
 
   /** No content, or the plain «insto-timbre»: a doorbell without the order, not a malformed one. */
   fun plain(payload: ByteArray?): Boolean = payload == null || payload.isEmpty() || text(payload)?.trim() == PLAIN
@@ -304,6 +325,7 @@ object InstinctDoorbellScript {
    */
   fun informBody(token: String, endpoint: String, withOrder: Boolean = false, sealed: Sealed? = null): String =
     JSONObject().put("token", token).put("action", ACTION).put("endpoint", endpoint).put(WITH_ORDER, withOrder && endpoint.isNotEmpty())
+      .put("referencia", withOrder && endpoint.isNotEmpty() && sealed?.p256dh != null && sealed.auth != null)
       .put(SEALED, sealed?.takeIf { endpoint.isNotEmpty() }?.let { s ->
         JSONObject().put("timbre", s.timbre).apply { if (s.p256dh != null && s.auth != null) put("p256dh", s.p256dh).put("auth", s.auth) }
       } ?: JSONObject.NULL).toString()
@@ -466,6 +488,7 @@ object InstinctDoorbellText {
    */
   fun diagnosis(state: DoorbellState, distributors: Int, clock: (Long) -> String): String {
     val counts = "timbres ${state.rings} · sondeos por timbre ${state.ringPolls} · órdenes directas ${state.directOrders} · payload inválido ${state.badPayloads}" +
+      " · órdenes por referencia ${state.referencedOrders}" +
       (if (state.duplicates > 0) " · duplicados descartados ${state.duplicates}" else "") +
       (if (state.uncertain > 0) " · inciertas ${state.uncertain}" else "") +
       (state.lastError?.let { " · último error: $it" } ?: "")

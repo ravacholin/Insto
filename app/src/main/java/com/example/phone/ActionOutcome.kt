@@ -35,6 +35,7 @@ data class DeviceReading(
   val temporaryHeld: Boolean? = null,
   /** A temporary mode exists. */
   val temporaryActive: Boolean? = null,
+  val audioRoute: String? = null,
 ) {
   companion object {
     const val RINGER_SILENT = 0
