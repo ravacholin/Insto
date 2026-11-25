@@ -488,7 +488,7 @@ object InstinctDoorbellText {
    */
   fun diagnosis(state: DoorbellState, distributors: Int, clock: (Long) -> String): String {
     val counts = "timbres ${state.rings} · sondeos por timbre ${state.ringPolls} · órdenes directas ${state.directOrders} · payload inválido ${state.badPayloads}" +
-      " · órdenes por referencia ${state.referencedOrders}" +
+      (if (state.referencedOrders > 0) " · órdenes por referencia ${state.referencedOrders}" else "") +
       (if (state.duplicates > 0) " · duplicados descartados ${state.duplicates}" else "") +
       (if (state.uncertain > 0) " · inciertas ${state.uncertain}" else "") +
       (state.lastError?.let { " · último error: $it" } ?: "")

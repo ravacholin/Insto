@@ -384,6 +384,8 @@ class InstinctDoorbellFlowTest {
     assertEquals(listOf(wanted.id), targeted)
     assertEquals(0, gets)
     assertEquals(listOf(wanted.id), taken)
+    assertEquals(0, bell.state().directOrders)
+    assertTrue(InstinctDoorbell.diagnosis(app).contains("órdenes por referencia 1"))
     val journal = InstinctExecutionJournal.of(app)
     assertTrue(journal.forMessage(other.id).isEmpty())
     val execution = journal.forMessage(wanted.id).single()
