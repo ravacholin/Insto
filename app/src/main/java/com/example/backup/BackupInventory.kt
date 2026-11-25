@@ -55,6 +55,13 @@ object BackupInventory {
     Item("learned_phrases", Kind.DATASTORE, Class.CONFIG, BackupCategory.PHRASES, "frases y estructuras aprendidas, con su interruptor"),
     Item("saved_places", Kind.SHARED_PREFERENCES, Class.CONFIG, BackupCategory.PLACES, "casa y trabajo"),
     f("configured-routines.json", Class.CONFIG, BackupCategory.ROUTINES, "rutinas"),
+    // «Callar alarma con la voz» (1.25.0): nothing travels in a backup; it needs this phone's model and permissions.
+    f("alarm-voice-enabled", Class.DEVICE_BOUND, null, "«Callar alarma con la voz»: se activa a mano en cada teléfono, con su modelo"),
+    f("alarm-voice.properties", Class.DEVICE_BOUND, null, "palabras, ventana de escucha, volumen y modo diagnóstico de la función"),
+    f("alarm-voice-volume-original", Class.TRANSIENT, null, "volumen de alarma a restaurar si el proceso murió mientras escuchaba"),
+    f("alarm-voice-last-clock.properties", Class.TRANSIENT, null, "diagnóstico: última notificación de reloj (paquete, categoría, botones)"),
+    f("alarm-voice-log.txt", Class.HISTORY, null, "registro local de la función: detectada, estrategia, cómo terminó"),
+    Item("vosk", Kind.DIRECTORY, Class.DEVICE_BOUND, null, "modelo de voz de Vosk descargado; se baja de nuevo en cada teléfono"),
     // Instinct
     f("instinct-proposals-enabled", Class.CONFIG, BackupCategory.INSTINCT, "«Recibir órdenes»: se restaura apagado y se pide reactivar"),
     f("instinct-proposals-reply-mode", Class.CONFIG, BackupCategory.INSTINCT, "«Responderle a Instinct»"),
