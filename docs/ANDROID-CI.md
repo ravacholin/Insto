@@ -31,3 +31,29 @@ alcanza con una clave efímera indicada por las variables que ya lee el build (`
 `KEY_PASSWORD`); el APK resultante no es distribuible. Ver
 [`architecture/reliability-refactor.md`](architecture/reliability-refactor.md) para las pruebas nuevas y las que
 requieren un dispositivo.
+
+## Firma de distribución de Insto
+
+El workflow manual **Android release firmado** se ejecuta desde `main`.
+Comprueba el certificado antes de compilar y verifica la firma del APK
+antes de guardar el artefacto `insto-release-apk`.
+
+El SHA-256 del certificado es
+`C5:FB:62:72:B6:1E:7B:0E:AE:40:BB:91:62:07:43:EB:D9:EE:D8:74:70:20:ED:07:A9:44:F6:4E:C6:C6:6E:7E`.
+Usá esa huella si OMNIREMOTE necesita autorizar el certificado de Insto.
+Los APK firmados con este certificado pueden actualizarse entre sí
+si el identificador de la app coincide y la versión permite la actualización.
+
+Configurá una sola vez los secretos de repositorio de GitHub Actions
+`INSTO_RELEASE_KEYSTORE_B64` y `INSTO_RELEASE_KEYSTORE_PASSWORD`. En una
+terminal autenticada con permisos de administración del repositorio, desde
+la carpeta privada que contiene el keystore y su contraseña:
+
+```sh
+base64 < insto-release.p12 | gh secret set INSTO_RELEASE_KEYSTORE_B64 --repo ravacholin/Insto
+gh secret set INSTO_RELEASE_KEYSTORE_PASSWORD --repo ravacholin/Insto < passphrase
+```
+
+Guardá el keystore cifrado y su contraseña por separado. La compilación
+local de distribución usa el mismo archivo mediante `KEYSTORE_PATH` y
+la misma contraseña para `STORE_PASSWORD` y `KEY_PASSWORD`.
