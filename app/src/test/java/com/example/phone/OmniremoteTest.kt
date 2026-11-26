@@ -156,6 +156,33 @@ class OmniremoteExecutionTest {
     assertEquals(PhoneActionOutcome.UNCERTAIN, result.outcome)
   }
 
+  @Test fun `power on rejection tells the user how to configure the target MAC`() {
+    val id = "execution-test-mac"
+    var dispatches = 0
+    val client = OmniremoteClient(open = { link { method, _ ->
+      assertEquals("execute", method)
+      dispatches++
+      reply("REJECTED", "MAC_ADDRESS_REQUIRED", id)
+    } }, now = { 100L }, pause = {})
+    val result = client.execute(id, 42, "POWER_ON", JSONObject())
+    assertEquals(PhoneActionOutcome.REJECTED, result.outcome)
+    assertFalse(result.verifiedLocally)
+    assertEquals(1, dispatches)
+    assertTrue(result.message, result.message.contains("Detectar MAC automáticamente"))
+  }
+
+  @Test fun `unconfirmed wake advises checking the device without repeating the order`() {
+    val id = "execution-test-wake"
+    val client = OmniremoteClient(open = { link { method, _ ->
+      assertEquals("execute", method)
+      reply("UNCERTAIN", "WAKE_NOT_CONFIRMED", id)
+    } }, now = { 100L }, pause = {})
+    val result = client.execute(id, 42, "POWER_ON", JSONObject())
+    assertEquals(PhoneActionOutcome.UNCERTAIN, result.outcome)
+    assertFalse(result.verifiedLocally)
+    assertTrue(result.message, result.message.contains("Wake-on-LAN"))
+  }
+
   @Test fun `partial state speaks only observed fields and preserves rounding`() {
     val data = JSONObject().put("volume", 43).put("controlReachable", false)
     val client = OmniremoteClient(open = {

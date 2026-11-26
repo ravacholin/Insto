@@ -10,6 +10,10 @@ Agregá los dispositivos, emparejalos y configurá sus apps en OmniRemote. Insto
 - «Apagá la tele en 30 minutos», «Apagá la tele a las 23:30» y «Cancelá el apagado de la tele» actúan sobre el temporizador de OmniRemote. Este dispone de un solo temporizador compartido y los nuevos horarios requieren el permiso de alarmas exactas. «Silenciá» usa mute explícito donde se anuncia. En Samsung envía la tecla de alternar silencio y muestra que el nuevo estado sigue sin confirmar.
 - «Pulsá la tecla HOME en la Samsung» admite cualquier tecla anunciada por ese equipo. «Escribí “hola” en la tele» conserva el texto citado. Las operaciones de TVDimmer y audio Bluetooth dependen de la configuración y el modelo. Para medios de Mac, primero consultá las fuentes de medios. Los IDs de fuente pueden cambiar cuando se cierran las apps o pestañas.
 
+## Si falta la MAC para encender
+
+`MAC_ADDRESS_REQUIRED` significa que OmniRemote no encontró una dirección MAC válida para enviar el encendido. Prendé el dispositivo con su control y conectalo a la misma red que el teléfono. En la lista de dispositivos de OmniRemote, tocá **[NO MAC]** en el equipo y elegí **Detectar MAC automáticamente**. Si la detección falla, ingresá la MAC de la interfaz que usa el equipo, Wi-Fi o Ethernet. Guardala con **Guardar y Encender TV** y probá de nuevo la orden desde Insto con el equipo en reposo.
+
 ## Instinct y rutinas
 
 El catálogo vivo del buzón firmado publica las capacidades y el inventario de OmniRemote, con IDs `omni:<deviceId>` y los IDs de apps por dispositivo. Los planes JSON usan los campos publicados por cada capacidad. El permiso de Autonomía corresponde a **Aplicaciones**. Los pasos con una dependencia explícita requieren que el resultado anterior esté verificado. Un envío sin verificación queda registrado como enviado y permite continuar con los pasos independientes.

@@ -192,6 +192,9 @@ internal class OmniremoteClient(
         "STORE_OPEN_REQUESTED" -> "OmniRemote solicitó abrir la ficha en Play Store. Puede requerir confirmación en la TV."
         "DEVICE_AUTHORIZATION_REQUIRED" -> "Autorizá el control de ese dispositivo en OmniRemote."
         "DEVICE_UNREACHABLE" -> "OmniRemote no pudo conectarse con el dispositivo."
+        "MAC_ADDRESS_REQUIRED" -> "OmniRemote necesita una MAC válida para encender este dispositivo. Prendelo con su control, " +
+          "tocá el campo MAC en la ficha de OmniRemote y elegí «Detectar MAC automáticamente» o ingresala manualmente."
+        "WAKE_NOT_CONFIRMED" -> "El envío de Wake-on-LAN quedó sin confirmación."
         "EXACT_ALARM_PERMISSION_REQUIRED" -> "Habilitá las alarmas exactas para OmniRemote en Ajustes de Android."
         "TIMER_OTHER_DEVICE" -> "OmniRemote ya tiene un temporizador para otro dispositivo."
         "NO_ACTIVE_TIMER" -> "OmniRemote no encontró un temporizador activo para ese dispositivo."
