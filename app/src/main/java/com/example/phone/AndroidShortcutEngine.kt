@@ -17,6 +17,7 @@ import android.os.Process
 import android.os.UserHandle
 import android.os.UserManager
 import android.util.AtomicFile
+import androidx.annotation.RequiresApi
 import com.example.assist.AssistantRoleHelper
 import java.io.File
 import java.security.SecureRandom
@@ -166,8 +167,9 @@ internal class AndroidShortcutEngine private constructor(private val app: Contex
     users?.isUserUnlocked(user) == true && users.isQuietModeEnabled(user).not()
   }.getOrDefault(false)
 
+  @RequiresApi(Build.VERSION_CODES.N_MR1)
   private fun query(user: UserHandle, packageName: String? = null, id: String? = null): List<ShortcutInfo> {
-    check(Build.VERSION.SDK_INT >= 25 && android.os.Looper.myLooper() != android.os.Looper.getMainLooper())
+    check(android.os.Looper.myLooper() != android.os.Looper.getMainLooper())
     var flags = ShortcutQuery.FLAG_MATCH_MANIFEST or ShortcutQuery.FLAG_MATCH_DYNAMIC or ShortcutQuery.FLAG_MATCH_PINNED
     if (Build.VERSION.SDK_INT >= 31 && AssistantRoleHelper.isDefaultAssistant(app)) {
       flags = flags or ShortcutQuery.FLAG_MATCH_PINNED_BY_ANY_LAUNCHER
@@ -183,6 +185,7 @@ internal class AndroidShortcutEngine private constructor(private val app: Contex
     else if (user == Process.myUserHandle()) app.packageManager.getApplicationInfo(packageName, 0) else null
   } catch (_: android.content.pm.PackageManager.NameNotFoundException) { null }
 
+  @RequiresApi(Build.VERSION_CODES.N_MR1)
   private fun discover(serial: Long, user: UserHandle, packageName: String?): List<AppShortcut> {
     return query(user, packageName).groupBy { it.getPackage() }.flatMap { (pkg, shortcuts) ->
       val info = appInfo(pkg, user)
@@ -213,7 +216,7 @@ internal class AndroidShortcutEngine private constructor(private val app: Contex
         if (user != null && changes[user to entry.key.packageName] == true) entry.copy(grant = null) else entry
       }
     }
-    if (access != ShortcutAccess.GRANTED) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1 || access != ShortcutAccess.GRANTED) {
       reconciled = false
       if (rows != previousRows) save()
       publish(access)
@@ -303,7 +306,7 @@ internal class AndroidShortcutEngine private constructor(private val app: Contex
   fun execute(token: String, confirmed: Boolean, remote: Boolean = false, expectedRevision: Long? = null,
     canLaunch: () -> Boolean = { true }): PhoneActionResult = synchronized(lock) {
     val access = access()
-    if (access != ShortcutAccess.GRANTED) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1 || access != ShortcutAccess.GRANTED) {
       requestRefresh()
       return@synchronized rejected(if (access == ShortcutAccess.LOCKED) "Desbloqueá el teléfono para abrir el acceso directo."
         else "Android no concede a Insto acceso a los shortcuts. Revisá el diagnóstico en Configuración.")
@@ -351,7 +354,7 @@ internal class AndroidShortcutEngine private constructor(private val app: Contex
   }
 
   suspend fun icon(entry: AppShortcut): Drawable? = withContext(Dispatchers.IO) {
-    if (!hasPermission() || !entry.available) return@withContext null
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1 || !hasPermission() || !entry.available) return@withContext null
     runCatching {
       val user = profiles()[entry.key.profile]?.takeIf(::isAvailable) ?: return@runCatching null
       iconSources[entry.key]?.let { launcher?.getShortcutBadgedIconDrawable(it, app.resources.displayMetrics.densityDpi) }
