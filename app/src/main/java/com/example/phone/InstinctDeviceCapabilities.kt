@@ -49,7 +49,7 @@ internal object InstinctDeviceCapabilities {
   private val registry = mapOf(
     InstinctCapabilities.Adapter.ANDROID_LOCAL to AndroidLocalCapabilities,
     InstinctCapabilities.Adapter.ANDROID_INTENT to AndroidIntentCapabilities,
-    InstinctCapabilities.Adapter.OMNIREMOTE to OmniremoteAdapter(),
+    InstinctCapabilities.Adapter.OMNIREMOTE to OmniremoteAdapter(listOf(OmniremoteLocalProvider())),
   )
 
   fun granted(context: Context, permission: String): Boolean = when (permission) {
@@ -63,13 +63,16 @@ internal object InstinctDeviceCapabilities {
     else -> context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
   }
 
-  fun discover(context: Context, spec: InstinctCapabilities.Spec): Discovery =
-    blockers(context, spec)?.let { Discovery(it) }
-      ?: Discovery(null, registry.getValue(spec.adapter).targets(context, spec))
+  fun discover(context: Context, spec: InstinctCapabilities.Spec): Discovery {
+    val discovery = registry.getValue(spec.adapter).discover(context, spec)
+    val blocker = permissionBlocker(context, spec, discovery.blocker)
+    return if (blocker != null) Discovery(blocker) else discovery
+  }
 
-  fun blockers(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject? = null): Block? {
-    val adapter = registry.getValue(spec.adapter)
-    val blocker = adapter.blocker(context, spec, params)
+  fun blockers(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject? = null): Block? =
+    permissionBlocker(context, spec, registry.getValue(spec.adapter).blocker(context, spec, params))
+
+  private fun permissionBlocker(context: Context, spec: InstinctCapabilities.Spec, blocker: Block?): Block? {
     if (blocker != null && !blocker.pending) return blocker
     val missing = spec.permissions.firstOrNull { !granted(context, it) }
     return if (missing != null) Block("Falta el permiso ${missing.substringAfterLast('.')} en Ajustes.", pending = true)
@@ -97,6 +100,9 @@ internal object InstinctDeviceCapabilities {
 internal interface InstinctCapabilityAdapter {
   fun blocker(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject?): InstinctDeviceCapabilities.Block? = null
   fun targets(context: Context, spec: InstinctCapabilities.Spec): List<String> = emptyList()
+  fun discover(context: Context, spec: InstinctCapabilities.Spec): InstinctDeviceCapabilities.Discovery =
+    blocker(context, spec, null)?.let { InstinctDeviceCapabilities.Discovery(it) }
+      ?: InstinctDeviceCapabilities.Discovery(null, targets(context, spec))
   fun execute(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult
   fun observe(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult? = null
 }
@@ -177,8 +183,5 @@ private object AndroidIntentCapabilities : InstinctCapabilityAdapter {
 
   private fun resource(url: String) = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
 }
-
-internal fun unavailableOmniremote() = InstinctDeviceCapabilities.Block(
-  "Falta un contrato local compatible de Omniremote.", pending = false)
 
 private fun rejected(message: String) = PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED)

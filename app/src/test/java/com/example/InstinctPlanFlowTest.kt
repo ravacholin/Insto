@@ -226,7 +226,7 @@ class InstinctPlanFlowTest {
     }
   }
 
-  @Test fun `a television capability without a provider is refused before any plan action`() {
+  @Test fun `a television capability without a bound service is refused before any plan action`() {
     val incoming = order("""#insto plan-json {"version":1,"steps":[
       {"id":"phone","kind":"action","capability":"volume","params":{"percent":10}},
       {"id":"tv","kind":"action","capability":"omniremote_power","params":{"device":"tv-living","on":true}}]}""".replace("\n", ""))
@@ -243,9 +243,8 @@ class InstinctPlanFlowTest {
       override val transport = OmniremoteAdapter.Transport.LOCAL_API
       var allowed = true
       var current = 10
-      override fun authorized(context: android.content.Context) = allowed
-      override fun televisions(context: android.content.Context) = listOf(
-        OmniremoteAdapter.Television("living-tv", setOf(OmniremoteAdapter.Control.VOLUME)))
+      override fun televisions(context: android.content.Context, id: String?) = if (allowed) listOf(
+        OmniremoteAdapter.Television("living-tv", setOf(OmniremoteAdapter.Control.VOLUME))) else emptyList()
       override fun set(context: android.content.Context, id: String, setting: OmniremoteAdapter.Setting, executionId: String) =
         PhoneActionResult("entregado", verifiedLocally = true)
       override fun read(context: android.content.Context, id: String, control: OmniremoteAdapter.Control) =
