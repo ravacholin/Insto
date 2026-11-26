@@ -70,7 +70,7 @@ class ActionExecutionLedger {
   fun lastResultWasUncertain(command: PhoneCommand): Boolean = last[command]?.uncertain == true
 
   /** An automatic or implicit retry of [command] would risk repeating an effect that may already have happened. */
-  fun needsReconfirmation(command: PhoneCommand): Boolean = last[command] == DispatchState.DISPATCHED_UNCERTAIN
+  fun needsReconfirmation(command: PhoneCommand): Boolean = lastState(command) == DispatchState.DISPATCHED_UNCERTAIN
 
   private companion object { const val MAX_REMEMBERED = 32 }
 }
