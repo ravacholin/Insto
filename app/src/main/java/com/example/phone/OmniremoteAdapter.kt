@@ -3,10 +3,7 @@ package com.example.phone
 import android.content.Context
 import org.json.JSONObject
 
-/**
- * Insto-side contract. A provider implementation needs documented operations, local authorization and read-back.
- * The production registry has no binding until Omniremote provides a compatible interface.
- */
+/** Insto-side television control with local authorization and independent read-back. */
 internal class OmniremoteAdapter(private val providers: List<Provider> = emptyList()) : InstinctCapabilityAdapter {
   enum class Transport { LOCAL_API, APP_FUNCTION, ANDROID_INTENT }
   enum class Control { POWER, VOLUME, MUTE }
@@ -21,51 +18,77 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
 
   interface Provider {
     val transport: Transport
-    /** Must confirm the OS/provider access is present, including AppFunctions access when applicable. */
-    fun authorized(context: Context): Boolean
-    /** Return only locally authorized televisions, with stable provider-qualified IDs. */
-    fun televisions(context: Context): List<Television>
+    /** Discover registered televisions through an authorized provider. A target's control channel may require pairing. */
+    fun televisions(context: Context, id: String? = null): List<Television>
     /** A headless absolute operation with no activity or permission prompt. */
     fun set(context: Context, id: String, setting: Setting, executionId: String): PhoneActionResult
     /** Compare the current state through the same authorized provider. Null means it could not be observed. */
     fun read(context: Context, id: String, control: Control): Setting?
+    fun recover(context: Context, id: String, control: Control, executionId: String): Setting? = read(context, id, control)
   }
 
-  private fun candidates(context: Context, control: Control): List<Pair<Provider, Television>> =
-    providers.sortedBy { it.transport }.flatMap { provider ->
-      if (!provider.authorized(context)) emptyList() else provider.televisions(context)
-        .filter { control in it.controls && DEVICE_ID.matches(it.id) }
-        .map { provider to it }
+  class DiscoveryFailure(message: String) : Exception(message)
+
+  private class Candidates(
+    val entries: List<Pair<Provider, Television>>,
+    val reason: String,
+  )
+
+  private fun candidates(context: Context, control: Control, id: String? = null): Candidates {
+    var failure: String? = null
+    val entries = providers.sortedBy { it.transport }.flatMap { provider ->
+      try {
+        provider.televisions(context, id)
+          .filter { television -> control in television.controls && DEVICE_ID.matches(television.id) &&
+            (id == null || id == television.id) }
+          .map { provider to it }
+      } catch (error: DiscoveryFailure) {
+        if (failure == null) failure = error.message
+        emptyList()
+      }
     }
-
-  override fun targets(context: Context, spec: InstinctCapabilities.Spec): List<String> =
-    candidates(context, control(spec.id)).map { it.second.id }.distinct().sorted()
-
-  override fun blocker(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject?): InstinctDeviceCapabilities.Block? {
-    if (providers.isEmpty()) return unavailableOmniremote()
-    val targets = targets(context, spec)
-    return if (targets.isEmpty() || params != null && params.getString("device") !in targets)
-      InstinctDeviceCapabilities.Block("No hay un televisor autorizado para este control.", false) else null
+    return Candidates(entries, failure ?: "No hay un televisor disponible para este control en Omniremote.")
   }
+
+  override fun discover(context: Context, spec: InstinctCapabilities.Spec): InstinctDeviceCapabilities.Discovery {
+    val found = candidates(context, control(spec.id))
+    val targets = found.entries.map { it.second.id }.distinct().sorted()
+    return InstinctDeviceCapabilities.Discovery(
+      found.blockerIfEmpty(),
+      targets,
+    )
+  }
+
+  override fun targets(context: Context, spec: InstinctCapabilities.Spec): List<String> = discover(context, spec).targets
+
+  override fun blocker(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject?): InstinctDeviceCapabilities.Block? =
+    candidates(context, control(spec.id), params?.getString("device")).blockerIfEmpty()
+
+  private fun Candidates.blockerIfEmpty(): InstinctDeviceCapabilities.Block? =
+    InstinctDeviceCapabilities.Block(reason, pending = false).takeIf { entries.isEmpty() }
 
   override fun execute(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult {
     val control = control(spec.id)
     val id = params.getString("device")
-    val provider = candidates(context, control).firstOrNull { it.second.id == id }?.first
-      ?: return PhoneActionResult("No hay un televisor autorizado para este control.", outcome = PhoneActionOutcome.REJECTED)
+    val found = candidates(context, control, id)
+    val provider = found.entries.firstOrNull()?.first
+      ?: return PhoneActionResult(found.reason, outcome = PhoneActionOutcome.REJECTED)
     val setting = setting(control, params)
     val result = runCatching { provider.set(context, id, setting, executionId) }.getOrNull()
     if (result?.outcome == PhoneActionOutcome.REJECTED || result?.outcome == PhoneActionOutcome.NEEDS_INPUT)
       return result.copy(verifiedLocally = false)
     return if (runCatching { provider.read(context, id, control) }.getOrNull() == setting) verified() else
-      PhoneActionResult("No pude comprobar el estado del televisor.", outcome = PhoneActionOutcome.UNCERTAIN)
+      PhoneActionResult(result?.takeIf { it.outcome == PhoneActionOutcome.UNCERTAIN }?.message
+        ?: "No pude comprobar el estado del televisor.", outcome = PhoneActionOutcome.UNCERTAIN)
   }
 
   override fun observe(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult? {
     val control = control(spec.id)
     val id = params.getString("device")
-    val provider = candidates(context, control).firstOrNull { it.second.id == id }?.first ?: return null
-    return verified().takeIf { provider.read(context, id, control) == setting(control, params) }
+    val provider = candidates(context, control, id).entries.firstOrNull()?.first ?: return null
+    return verified().takeIf {
+      runCatching { provider.recover(context, id, control, executionId) }.getOrNull() == setting(control, params)
+    }
   }
 
   private fun control(id: String) = when (id) {
