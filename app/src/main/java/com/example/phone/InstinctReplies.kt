@@ -63,7 +63,7 @@ object InstinctAck {
     ProposalCheck.Reason.FORBIDDEN -> "esa acción no está permitida para Instinct."
   }
 
-  fun invalid(check: ProposalCheck.Invalid): AckEntry = AckEntry(AckKind.ERROR, check.order, reason(check.reason))
+  fun invalid(check: ProposalCheck.Invalid): AckEntry = AckEntry(AckKind.ERROR, check.order, check.detail ?: reason(check.reason))
 
   /**
    * The kind for an executed order. Anything that did not happen and needs the user (a confirmation, a choice, a

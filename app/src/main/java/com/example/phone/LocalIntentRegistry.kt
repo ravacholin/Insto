@@ -327,7 +327,19 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
     }.let {base ->
       val native=ExtendedLocalIntents.definitions()
       val replaced=native.map {it.id}.toSet()
-      base.filterNot {it.id in replaced}+native
+      base.filterNot {it.id in replaced} + native + OmniremoteCommands.operations.values.map { operation ->
+        val spec = InstinctCapabilities.specs.getValue(operation.capability)
+        val parameters = spec.parameters.fields.map { (name, field) ->
+          IntentParameter(name, field.kind, true, if (name == "device") "destino anunciado por OmniRemote" else "campo de la API local")
+        }
+        val description = "OmniRemote: ${operation.examples.joinToString(" o ")}"
+        LocalIntentDefinition(id = operation.capability, category = IntentCategory.APPLICATIONS, description = description,
+          examples = operation.examples, parameters = parameters, permissions = emptyList(), mechanism = "OmniRemote · Binder v1",
+          expectedResult = "Resultado informado por OmniRemote para el destino",
+          parameterContext = operation.capability, prompt = "Indicá la acción y el dispositivo de OmniRemote.",
+          decisionDescription = "$description. Solo si el pedido se refiere a una TV o Mac controlada por OmniRemote.",
+          decisionParameters = emptyList(), accepts = { OmniremoteCommands.isRemote(it) && (it as PhoneCommand.Platform).argument == operation.capability })
+      }
     }
   }
 }

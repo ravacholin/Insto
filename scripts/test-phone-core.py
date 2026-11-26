@@ -54,7 +54,7 @@ def main():
              "EverydayCommandParser", "ExtendedCommandParser", "CalendarRequestParser", "CalendarSelection", "CalendarSelectionParser",
              "ClockTime", "CommandDuration", "HybridPhoneRouter", "GeminiDecisionsClient", "GroqIntentVerifier", "StructuredCommandClient",
              "ConversationSession", "WorkflowRunner", "TemporaryModePolicy", "MediaSessionPolicy",
-             "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "ProviderHttp", "GeminiTransport", "CapabilityCatalog", "InstinctCapabilities", "InstinctPlan", "InstinctStructuredPlan",
+             "GeminiSetupPolicy", "StopwatchUiPolicy", "NativeIntentSpec", "ContactSelection", "ProviderHttp", "GeminiTransport", "CapabilityCatalog", "InstinctCapabilities", "OmniremoteCommands", "InstinctPlan", "InstinctStructuredPlan",
              "DecisionsPolicy", "DecisionsCircuitBreaker", "Interpretation", "CommandDraft", "RequestSafetyPolicy", "GeminiCoordinator", "GeminiDiagnostics",
              "LocalIntentRegistry", "LocalIntentPhrases", "ExtendedLocalIntents", "NativeActionParameters",
              "DocumentNamePolicy", "ConfiguredRoutineStore", "PhrasePatterns", "OperationalContext",
@@ -96,7 +96,7 @@ def main():
         text = path.read_text()
         # Tests that use Android-backed stores (DataStore) run with Gradle.
         if any(token in text for token in ("import android.", "import androidx.", "org.robolectric", "com.example.testsupport",
-                                           "import com.example.data.")):
+                                           "import com.example.data.", "com.example.external.IRemoteCommandService")):
             continue
         tests.append(path)
     with tempfile.TemporaryDirectory(prefix="insto-core-") as directory:

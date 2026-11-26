@@ -521,6 +521,10 @@ private fun AssistantSetupSheet(
         OutlinedButton(onClick = onOpenProviderSettings) { Text("Abrir ajustes de voz e IA") }
       }
 
+      SettingsCategory("OmniRemote", expandedCategory == "omniremote", { toggleCategory("omniremote") }) {
+        OmniremoteSettings()
+      }
+
       SettingsCategory("Copia de seguridad y restauración", expandedCategory == "backup", { toggleCategory("backup") }) {
         BackupRestoreSettings(onImported = onConfigurationImported)
       }

@@ -233,32 +233,7 @@ class InstinctPlanFlowTest {
     push(incoming)
     assertTrue(journal.plans().isEmpty())
     assertTrue(ran.isEmpty())
-    assertTrue(journal.forMessage(incoming.id).single().reason.orEmpty().contains("Omniremote"))
-  }
-
-  @Test fun `the television adapter exposes authorized devices and requires an independent read to verify`() {
-    val spec = InstinctCapabilities.specs.getValue("omniremote_volume")
-    val params = JSONObject().put("device", "living-tv").put("percent", 32)
-    val provider = object : OmniremoteAdapter.Provider {
-      override val transport = OmniremoteAdapter.Transport.LOCAL_API
-      var allowed = true
-      var current = 10
-      override fun authorized(context: android.content.Context) = allowed
-      override fun televisions(context: android.content.Context) = listOf(
-        OmniremoteAdapter.Television("living-tv", setOf(OmniremoteAdapter.Control.VOLUME)))
-      override fun set(context: android.content.Context, id: String, setting: OmniremoteAdapter.Setting, executionId: String) =
-        PhoneActionResult("entregado", verifiedLocally = true)
-      override fun read(context: android.content.Context, id: String, control: OmniremoteAdapter.Control) =
-        OmniremoteAdapter.Setting.Volume(current)
-    }
-    val adapter = OmniremoteAdapter(listOf(provider))
-    assertEquals(listOf("living-tv"), adapter.targets(app, spec))
-    assertEquals(PhoneActionOutcome.UNCERTAIN, adapter.execute(app, spec, params, "e1").outcome)
-    provider.current = 32
-    assertTrue(adapter.observe(app, spec, params, "e1")?.verifiedLocally == true)
-    provider.allowed = false
-    assertTrue(adapter.targets(app, spec).isEmpty())
-    assertEquals(PhoneActionOutcome.REJECTED, adapter.execute(app, spec, params, "e1").outcome)
+    assertTrue(journal.forMessage(incoming.id).single().reason.orEmpty().contains("OmniRemote", ignoreCase = true))
   }
 
   @Test fun `an uncertain absolute set that took effect lets dependents proceed without replay`() {

@@ -11,7 +11,7 @@ import org.junit.Test
 class InstinctCatalogJsonTest {
   private val parser = PhoneCommandParser()
   private fun json(routines: List<String> = emptyList(), autonomy: InstinctAutonomyPolicy = InstinctAutonomyPolicy(),
-    channels: InstinctCatalogChannels = InstinctCatalogChannels()) = InstinctProtocolCatalog.json(routines, autonomy, channels, "1.24.0")
+    channels: InstinctCatalogChannels = InstinctCatalogChannels()) = InstinctProtocolCatalog.json(routines, autonomy, channels, "1.26.0")
 
   /** Every «orden» in the catalog, in order. */
   private fun orders(o: JSONObject): List<String> {
@@ -112,7 +112,7 @@ class InstinctCatalogJsonTest {
     assertTrue(c.getBoolean("timbre")); assertTrue(c.getBoolean("orden_en_timbre"))
     assertEquals("siempre", c.getString("acuses")); assertEquals("bitacora", c.getString("acuses_por"))
     assertEquals("Protocolo Insto v8", o.getString("protocolo")); assertEquals(8, o.getInt("version_protocolo"))
-    assertEquals("1.24.0", o.getString("version_insto"))
+    assertEquals("1.26.0", o.getString("version_insto"))
     assertTrue("well under the script's 45 000 characters", json(listOf("Estudio"), policy).published("2026-11-22T08:40:00-03:00").length < 45_000)
   }
 

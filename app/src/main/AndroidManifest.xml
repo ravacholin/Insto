@@ -29,6 +29,7 @@
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
 
     <queries>
+        <package android:name="com.aistudio.omnitvremote.qvrtm" />
         <package android:name="com.google.android.youtube" />
         <package android:name="com.spotify.music" />
         <intent><action android:name="android.intent.action.CALL" /><data android:scheme="tel" /></intent>

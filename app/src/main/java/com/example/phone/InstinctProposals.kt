@@ -31,7 +31,7 @@ sealed interface ProposalCheck {
   val order: String
   /** With [deferred], [command] is the inner order, checked now and again when it fires. */
   data class Valid(override val order: String, val command: PhoneCommand, val deferred: Deferred? = null) : ProposalCheck
-  data class Invalid(override val order: String, val reason: Reason) : ProposalCheck
+  data class Invalid(override val order: String, val reason: Reason, val detail: String? = null) : ProposalCheck
   /** An administrative order or a query about the protocol. */
   data class Query(override val order: String, val kind: QueryKind, val argument: String? = null) : ProposalCheck
   /** «avisarme <texto>» (1.16.0): a local notice for the person, allowed only from the signed mailbox. */
@@ -161,8 +161,10 @@ object InstinctProposalValidator {
     }
     if (RequestSafetyPolicy.refusal(order) != null || RequestSafetyPolicy.isQuestion(order))
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.UNSAFE)
-    val command = (parse(order) as? PhoneRoute.Local)?.command
-      ?: return ProposalCheck.Invalid(order, ProposalCheck.Reason.NOT_LOCAL)
+    val route = parse(order)
+    val command = (route as? PhoneRoute.Local)?.command
+      ?: return ProposalCheck.Invalid(order, ProposalCheck.Reason.NOT_LOCAL,
+        (route as? PhoneRoute.Unsupported)?.message?.takeIf { it.startsWith("OmniRemote") })
     val reviewed = SemanticCommandGuard.review(InterpretationRequest(order, now = now), InterpretationResult.Direct(command))
     if (reviewed !is InterpretationResult.Direct || reviewed.command != command)
       return ProposalCheck.Invalid(order, ProposalCheck.Reason.SEMANTIC)
@@ -174,12 +176,12 @@ object InstinctProposalValidator {
     routines: InstinctRoutineAccess = InstinctRoutineAccess.NONE): PhoneCommand? =
     backgroundAction(order, parser::parse, now, routines)
 
-  private fun backgroundAction(order: String, parse: (String) -> PhoneRoute, now: Calendar,
+  internal fun backgroundAction(order: String, parse: (String) -> PhoneRoute, now: Calendar,
     routines: InstinctRoutineAccess): PhoneCommand? {
     if (InstinctQuestion.isRelated(order) || ContextRuleSpec.isOrder(order) || '|' in order || order.length > 200) return null
     val command = (check(order, parse, now, routines) as? ProposalCheck.Valid)
       ?.takeIf { it.deferred == null }?.command ?: return null
-    return command.takeIf(LockScreenPolicy::runsLocked)
+    return command.takeIf { LockScreenPolicy.runsLocked(it) && !OmniremoteCommands.isRemote(it) }
   }
 
   /** The order after «probar», as written (maybe empty); null when the line is not a probe. */
@@ -271,7 +273,7 @@ object InstinctProposalValidator {
     // Silence, vibrate and Do not disturb, with or without a restoration time. A temporary media volume is not.
     is PhoneCommand.TemporaryMode -> command.kind == ModeKind.SILENT || command.kind == ModeKind.DND
     // The grammar expresses silence, vibrate and Do not disturb without a duration as platform actions.
-    is PhoneCommand.Platform -> command.action in silenceActions
+    is PhoneCommand.Platform -> command.action in silenceActions || OmniremoteCommands.isRemote(command)
     else -> false
   }
 }

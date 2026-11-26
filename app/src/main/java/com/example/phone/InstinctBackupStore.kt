@@ -30,7 +30,7 @@ class InstinctBackupStore(context: Context) : InstinctBackupAccess {
       InstinctAutonomyPolicy.encode(InstinctAutonomySettings(app).policy()) else null
     val grants = InstinctRoutineGrants(app).read().takeIf { it.isNotEmpty() }?.let(InstinctRoutines::encodeGrants)
     val recurrences = runCatching { InstinctScheduler.pending(app) }.getOrDefault(emptyList())
-      .filter { it.recurring }.distinctBy { it.series }.map { it.order }
+      .filter { it.recurring && it.remoteCommand == null }.distinctBy { it.series }.map { it.order }
     return InstinctBackupData(
       proposalsEnabled = InstinctProposalSettings(app).isEnabled(),
       replyMode = text(REPLY)?.let { v -> InstinctReplyMode.entries.firstOrNull { it.name == v } },

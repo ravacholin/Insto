@@ -30,7 +30,8 @@ class PhoneActionExecutor(
       if(command is PhoneCommand.CalendarEvent && command.beginMillis<=System.currentTimeMillis()) return PhoneActionResult("La fecha del evento ya pasó. No preparé un evento con otra fecha.",outcome=PhoneActionOutcome.REJECTED)
       when (command) {
         is PhoneCommand.Platform -> if (command.action == PlatformAction.INSTINCT_CAPABILITY)
-          InstinctDeviceCapabilities.execute(context, command, executionId, foreground)
+          InstinctDeviceCapabilities.execute(context, command, executionId ?: if (OmniremoteCommands.isRemote(command))
+            java.util.UUID.randomUUID().toString() else null, foreground)
         else PlatformActionExecutor(context).execute(command, confirmed)
         is PhoneCommand.Media -> MediaControllerAdapter(context).execute(command,
           if (command.packageName == null) preferredMediaPackage() else null)

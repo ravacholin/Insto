@@ -68,8 +68,10 @@ object SemanticCommandGuard {
       if (subjectHead.containsMatchIn(stepSyntax) && candidates.any(::isDeviceEffect))
         return Verdict.Rejected("La acción del teléfono aparece como tema de una búsqueda o un mensaje, no como orden. No se ejecutó.",
           RejectionReason.OUT_OF_SCOPE)
-      direction(stepSyntax, candidates)?.let { return Verdict.Rejected(it) }
-      foreignTarget(stepSyntax, candidates)?.let { return Verdict.Rejected(it) }
+      if (paired != null || commands.none(OmniremoteCommands::isRemote)) {
+        direction(stepSyntax, candidates)?.let { return Verdict.Rejected(it) }
+        foreignTarget(stepSyntax, candidates)?.let { return Verdict.Rejected(it) }
+      }
     }
 
     for (duration in durations(syntax)) {
@@ -199,7 +201,10 @@ object SemanticCommandGuard {
   // ---- What the commands represent ------------------------------------------------------------------------
 
   private fun payloads(command: PhoneCommand): List<String> = when (command) {
-    is PhoneCommand.Platform -> listOfNotNull(command.argument, command.content)
+    is PhoneCommand.Platform -> if (OmniremoteCommands.isRemote(command)) {
+      val params = org.json.JSONObject(command.content!!)
+      listOf("text", "sourceId", "url").mapNotNull { params.optString(it).takeIf(String::isNotEmpty) }
+    } else listOfNotNull(command.argument, command.content)
     is PhoneCommand.Timer -> listOf(command.label)
     is PhoneCommand.Alarm -> listOf(command.label)
     is PhoneCommand.CalendarEvent -> listOfNotNull(command.title, command.description)
@@ -243,13 +248,16 @@ object SemanticCommandGuard {
     is PhoneCommand.Timer -> command.seconds
     is PhoneCommand.TemporaryMode -> command.seconds.takeIf { command.deadlineMillis == null }
     is PhoneCommand.CalendarEvent -> ((command.endMillis - command.beginMillis) / 1000).toInt()
+    is PhoneCommand.Platform -> if (command.argument == "omniremote_sleep_for")
+      org.json.JSONObject(command.content!!).getInt("minutes") * 60 else null
     else -> null
   }
 
   private fun percentOf(command: PhoneCommand): Int? = when (command) {
     is PhoneCommand.Volume -> command.percent.takeIf { command.operation == VolumeOp.SET }
     is PhoneCommand.TemporaryMode -> command.percent.takeIf { command.kind == ModeKind.MEDIA_VOLUME }
-    is PhoneCommand.Platform -> command.percent
+    is PhoneCommand.Platform -> if (command.argument == "omniremote_volume")
+      org.json.JSONObject(command.content!!).getInt("percent") else command.percent
     else -> null
   }
 
@@ -260,6 +268,8 @@ object SemanticCommandGuard {
     is PhoneCommand.TemporaryMode -> command.deadlineMillis?.let { local(it, now) }
       ?.let { it.get(Calendar.HOUR_OF_DAY) to it.get(Calendar.MINUTE) }
     is PhoneCommand.CalendarEvent -> local(command.beginMillis, now).let { it.get(Calendar.HOUR_OF_DAY) to it.get(Calendar.MINUTE) }
+    is PhoneCommand.Platform -> if (command.argument == "omniremote_sleep_at")
+      org.json.JSONObject(command.content!!).let { it.getInt("hour") to it.getInt("minute") } else null
     else -> null
   }
 

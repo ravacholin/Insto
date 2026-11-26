@@ -76,13 +76,15 @@ internal object InstinctCapabilities {
       permissions = if (category == InstinctCategory.RELOJ) listOf("com.android.alarm.permission.SET_ALARM") else emptyList(),
       adapter = Adapter.ANDROID_INTENT, decode = decode)
 
-  private fun television(id: String, parameter: Pair<String, CapabilityCatalog.Field>) =
-    spec(id, InstinctCategory.APPS, "device ${parameter.first}", "device" to text(120), parameter,
-      verification = "relectura del televisor por el proveedor autorizado",
-      restriction = "requiere contrato local compatible de Omniremote y un televisor autorizado",
+  private fun remote(operation: OmniremoteCommands.Operation) =
+    spec(operation.capability, InstinctCategory.APPS, (listOf("device") + operation.fields.keys).joinToString(" "),
+      "device" to text(120), *operation.fields.toList().toTypedArray(),
+      verification = "resultado real de OmniRemote; enviado y verificado son estados distintos",
+      recovery = "consultar el ID original; no reenviar una orden incierta",
+      restriction = "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
       adapter = Adapter.OMNIREMOTE)
 
-  const val OMNIREMOTE_UNAVAILABLE = "no disponible: falta un contrato local compatible de Omniremote"
+  const val OMNIREMOTE_UNAVAILABLE = "consultar disponibilidad de OmniRemote en el teléfono"
 
   val specs = listOf(
     spec("volume", InstinctCategory.VOLUMEN, "percent", "percent" to number(0, 100),
@@ -125,10 +127,7 @@ internal object InstinctCapabilities {
     external("open_resource", InstinctCategory.APPS, "url", "url" to text(2000)),
     external("youtube", InstinctCategory.APPS, "query", "query" to text(200)) { PhoneCommand.YouTubeSearch(it.getString("query")) },
     external("spotify", InstinctCategory.APPS, "query", "query" to text(200)) { PhoneCommand.SpotifySearch(it.getString("query")) },
-    television("omniremote_power", "on" to flag),
-    television("omniremote_volume", "percent" to number(0, 100)),
-    television("omniremote_mute", "muted" to flag),
-  ).associateBy(Spec::id)
+  ).plus(OmniremoteCommands.operations.values.map(::remote)).associateBy(Spec::id)
 
   /** Decode only after validating strict types, bounds and the capability's cross-field invariants. */
   fun command(id: String, params: JSONObject): PhoneCommand {
@@ -143,8 +142,8 @@ internal object InstinctCapabilities {
         "integer" -> (value is Int || value is Long) && (value as Number).toLong() in rule.min!!..rule.max!!
         "array" -> value is JSONArray && value.length() in 1..7 &&
           (0 until value.length()).all { index -> (value.get(index) as? Int)?.let { it in 1..7 } == true }
-        "string" -> value is String && value.isNotBlank() && value.length <= rule.maxLength &&
-          value.none { it.isISOControl() } && (rule.values.isEmpty() || value in rule.values)
+        "string" -> value is String && (if (id == "omniremote_text" && field == "text") value.isNotEmpty() && '\u0000' !in value
+          else value.isNotBlank() && value.none { it.isISOControl() }) && value.length <= rule.maxLength && (rule.values.isEmpty() || value in rule.values)
         else -> false
       }) { "Parámetro inválido: $field" }
     }
@@ -158,6 +157,10 @@ internal object InstinctCapabilities {
     if (id == "open_resource") {
       val uri = URI.create(params.getString("url"))
       require(uri.scheme == "https" && uri.host != null && uri.rawUserInfo == null)
+    }
+    if (id == "omniremote_mac_open_link") {
+      val uri = URI.create(params.getString("url"))
+      require(uri.scheme?.lowercase() in setOf("http", "https") && uri.host != null)
     }
     val decoded = spec.decode(params)
     if (decoded != null) return PhoneCommandCodec.decode(PhoneCommandCodec.encode(decoded))

@@ -82,7 +82,8 @@ object InstinctScheduler {
     }
     val order = ScheduledOrder(UUID.randomUUID().toString(), check.order, deferred.inner, deferred.fireAt, fingerprint,
       deferred.condition, deferred.label, now, message = InstinctLogEvents.messageId(message), source = source,
-      trigger = deferred.trigger, expiresAt = deferred.expiresAt)
+      trigger = deferred.trigger, expiresAt = deferred.expiresAt,
+      remoteCommand = check.command.takeIf(OmniremoteCommands::isRemote))
     return when (val added = runCatching { store(context).add(order) }.getOrNull()) {
       is InstinctScheduleStore.Add.Added -> { alarms(context.applicationContext, order, true); Outcome.Scheduled(order) }
       InstinctScheduleStore.Add.Full -> Outcome.Refused("ya hay ${InstinctDeferral.MAX_SCHEDULED} órdenes programadas; cancelá alguna antes.")
@@ -141,11 +142,11 @@ object InstinctScheduler {
    */
   fun cancelRefused(context: Context) {
     val app = context.applicationContext
-    val parser = PhoneCommandParser()
     val routines = InstinctRoutineGrants(app).access()
     val pending = runCatching { store(app).pending() }.getOrDefault(emptyList()).filter { it.recurring }
     pending.distinctBy { it.series }.forEach { order ->
-      val command = (InstinctProposalValidator.check(order.inner, parser, Calendar.getInstance(), routines) as? ProposalCheck.Valid)?.command
+      val command = order.remoteCommand ?:
+        (InstinctProposalValidator.check(app, order.inner, Calendar.getInstance(), routines) as? ProposalCheck.Valid)?.command
         ?: return@forEach
       if (!InstinctProposalCenter.refusedByPolicy(app, command)) return@forEach
       cancelShort(app, order.shortId)
@@ -249,9 +250,8 @@ object InstinctScheduler {
       } ?: return
       val now = wallClock()
       val routines = InstinctRoutineGrants(app).access()
-      val parser = PhoneCommandParser()
       val decision = ScheduleFirePolicy.decide(order, InstinctProposalSettings(app).isEnabled(), InstinctProposalCenter.fingerprint(app), now) {
-        InstinctProposalValidator.check(it, parser, Calendar.getInstance().apply { timeInMillis = now }, routines)
+        InstinctProposalValidator.check(app, it, Calendar.getInstance().apply { timeInMillis = now }, routines)
       }
       // The chat's line while its handle lives; for the log, also after a restart, from the stored message id.
       val ackKey = ackKey(app, order)
@@ -303,7 +303,8 @@ object InstinctScheduler {
         return
       }
       InstinctExecutions.link(proposal.id, execution)
-      InstinctExecutions.move(app, execution, ExecutionState.READY, proposalId = proposal.id)
+      InstinctExecutions.move(app, execution, ExecutionState.READY, proposalId = proposal.id,
+        command = command.takeIf(OmniremoteCommands::isRemote))
       if (ackKey != null) { InstinctProposalCenter.acks.relink(ackKey, proposal.id); InstinctExecutions.relink(ackKey, proposal.id) }
       if (decision is ScheduleFirePolicy.Decision.Late) InstinctProposalCenter.askLate(app, proposal,
         "Llegó tarde: estaba programada ${order.label}.")

@@ -107,7 +107,13 @@ object PhoneCommandCodec {
  }
  fun summary(command: PhoneCommand): String = when(command) {
   is PhoneCommand.Platform -> {
-    if (command.action == PlatformAction.INSTINCT_CAPABILITY) command.argument ?: "acción local" else {
+    if (OmniremoteCommands.isRemote(command)) {
+      val params = JSONObject(command.content!!)
+      val device = params.getString("device")
+      val operation = OmniremoteCommands.operations.getValue(command.argument!!)
+      val (wire, args) = OmniremoteCommands.request(operation.capability, params)
+      "OmniRemote · $device · $wire" + if (args.length() == 0) "" else " · $args"
+    } else if (command.action == PlatformAction.INSTINCT_CAPABILITY) command.argument ?: "acción local" else {
       val calendar = if (command.action in CalendarSelection.actions) CalendarSelection.decode(command) else null
       val content = if (calendar == null) command.content else listOfNotNull(
         calendar.from,

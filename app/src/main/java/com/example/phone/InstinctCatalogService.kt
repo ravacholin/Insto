@@ -63,6 +63,28 @@ object InstinctCatalogPublisher {
     val calendarAccess = InstinctCalendarAccess(app)
     val enabledCalendars = calendars.map { it.id }.intersect(calendarAccess.enabled()).sorted()
     val writableCalendars = calendars.filter { it.writable }.map { it.id }.intersect(calendarAccess.enabled(write = true)).sorted()
+    val autonomy = InstinctAutonomySettings(app).policy()
+    val remote = if (channels.mailbox && autonomy.level(InstinctCategory.APPS) != InstinctAutonomy.NUNCA)
+      InstinctDeviceCapabilities.omniremote.catalog(app).devices else emptyList()
+    val remoteSettings by lazy { OmniremotePreferences(app).read() }
+    fun label(value: String) = InstinctAck.flat(value).takeIf(InstinctAck::safe).orEmpty()
+    val remoteCatalog = remote.map { device ->
+      mapOf(
+        "id" to device.target,
+        "nombre" to label(device.name),
+        "habitacion" to label(device.room),
+        "tipo" to device.type,
+        "aliases" to remoteSettings.aliases[device.id].orEmpty().map(::label).filter(String::isNotBlank),
+        "predeterminado" to (remoteSettings.default == device.id),
+        "comandos" to device.commands.sorted(),
+        "teclas" to device.keys.sorted(),
+        "campos_de_estado" to device.stateFields.sorted(),
+        "alarmas_exactas" to device.exactAlarms,
+        "apps" to device.apps.map {
+          mapOf("id" to it.id, "nombre" to label(it.name), "categoria" to label(it.category), "favorita" to it.favorite)
+        },
+      )
+    }
     val discovery = if (channels.mailbox) InstinctCapabilities.specs.mapValues { (_, spec) ->
       runCatching { InstinctDeviceCapabilities.discover(app, spec) }.getOrElse {
         InstinctDeviceCapabilities.Discovery(InstinctDeviceCapabilities.Block("No se pudo comprobar la disponibilidad.", false))
@@ -83,12 +105,13 @@ object InstinctCatalogPublisher {
     }
     val routines = InstinctRoutineGrants(app).access()
     val names = routines.enabledNames()
-    return InstinctProtocolCatalog.json(names, InstinctAutonomySettings(app).policy(), channels, instoVersion(),
+    return InstinctProtocolCatalog.json(names, autonomy, channels, instoVersion(),
       availability = availability, calendarIds = enabledCalendars, calendarWriteIds = writableCalendars,
       calendarLabels = calendars.filter { it.id in enabledCalendars }.associate {
         it.id to InstinctAck.cut(InstinctAck.flat(it.label), 80).takeIf(InstinctAck::safe).orEmpty()
       },
       capabilityTargets = discovery.mapValues { it.value.targets }.filterValues { it.isNotEmpty() },
+      omniremoteDevices = remoteCatalog,
       routineRevisions = names.mapNotNull { name -> routines.resolve(name)?.let { name to InstinctRoutines.hash(it) } }.toMap())
   }
 

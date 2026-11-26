@@ -203,9 +203,13 @@ class MainViewModel @JvmOverloads constructor(
   private val phoneExecutor = PhoneActionExecutor(application, preferredMediaPackage = operationalContext::preferredMediaPackage)
   private val conversation = ConversationSession()
   private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).readValue() })
+  private val omniremote = com.example.phone.OmniremoteVoice.of(application)
   private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor,
     verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter, lookupLearnedPhrase = learnedPhrases::lookup,
-    lookupLearnedPattern = learnedPhrases::lookupPattern, operationalContext = operationalContext)
+    lookupLearnedPattern = learnedPhrases::lookupPattern, operationalContext = operationalContext,
+    remoteRoute = { request, decision ->
+      withContext(Dispatchers.IO) { omniremote.resolve(request.text, request.now, decision) }
+    })
   private var learningPreview: InterpretationRequest? = null
   /** A model interpretation executed without confirmation: an example for learned structures once it succeeds. */
   private var patternExample: Pair<InterpretationRequest, PhoneCommand>? = null
@@ -217,6 +221,7 @@ class MainViewModel @JvmOverloads constructor(
   private var proposalCommand: PhoneCommand? = null
   /** The claimed proposal whose result Instinct hears about ([InstinctProposalCenter.report]). */
   private var runningProposal: ProposalBook.Proposal? = null
+  private var remoteProposalInFlight: Long? = null
   private val waitingProposals = ArrayDeque<ProposalBook.Proposal>()
   private var proposalsAttached = false
   private val proposalListener = object : InstinctProposalCenter.Listener {
@@ -242,7 +247,7 @@ class MainViewModel @JvmOverloads constructor(
     val active = activeWorkflow()
     val step = active?.steps?.getOrNull(active.cursor)
     floatingState.value = floatingState.value.copy(
-      workflowLines = snapshot?.steps?.mapIndexed { index, item -> "${index + 1}. ${PhoneCommandCodec.summary(item.command)}${CapabilityRequirements.missing(getApplication(),item.command).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: ""} · ${when(item.status){StepStatus.PENDING->"pendiente";StepStatus.EXECUTING->"en curso";StepStatus.COMPLETED->"completado";StepStatus.HANDED_OFF->"entregado · revisá la app";StepStatus.WAITING_INPUT->"requiere tu respuesta";StepStatus.FAILED->"falló";StepStatus.UNCERTAIN->"resultado incierto · revisá antes de seguir";StepStatus.CANCELLED->"cancelado"}}" } ?: emptyList(),
+      workflowLines = snapshot?.steps?.mapIndexed { index, item -> "${index + 1}. ${PhoneCommandCodec.summary(item.command)}${CapabilityRequirements.missing(getApplication(),item.command).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: ""} · ${when(item.status){StepStatus.PENDING->"pendiente";StepStatus.EXECUTING->"en curso";StepStatus.COMPLETED->"completado";StepStatus.SENT->"enviado · efecto sin confirmar";StepStatus.HANDED_OFF->"entregado · revisá la app";StepStatus.WAITING_INPUT->"requiere tu respuesta";StepStatus.FAILED->"falló";StepStatus.UNCERTAIN->"resultado incierto · revisá antes de seguir";StepStatus.CANCELLED->"cancelado"}}" } ?: emptyList(),
       workflowActive = active != null,
       needsConfirmation = active?.confirmed == false || confirmation != null,
       workflowCanContinue = step?.status in listOf(StepStatus.HANDED_OFF, StepStatus.UNCERTAIN) || active?.confirmed == true && step?.status == StepStatus.PENDING,
@@ -316,16 +321,19 @@ class MainViewModel @JvmOverloads constructor(
     runningProposal?.takeIf { InstinctProposalCenter.isRoutine(it.command) }?.let { proposal ->
       runningProposal = null
       val steps = workflow.snapshot?.steps.orEmpty()
-      val done = steps.count { it.status == StepStatus.COMPLETED || it.status == StepStatus.HANDED_OFF }
+      val done = steps.count { it.status in setOf(StepStatus.COMPLETED, StepStatus.SENT, StepStatus.HANDED_OFF) }
       val name = (proposal.command as PhoneCommand.Platform).argument.orEmpty()
       InstinctProposalCenter.report(getApplication(), proposal.id, com.example.phone.AckEntry(
         if (done == steps.size) com.example.phone.AckKind.OK else com.example.phone.AckKind.ERROR, proposal.order,
         "Instinct ejecutó la rutina $name: $done de ${steps.size} pasos."))
     }
     conversation.clear(); semanticDraft = null; clarification = null; clarificationRequest = null
+    val remote = workflow.snapshot?.steps?.filter { com.example.phone.OmniremoteCommands.isRemote(it.command) }.orEmpty()
+    val completion = if (remote.isEmpty()) "Secuencia finalizada." else
+      "Secuencia finalizada. " + remote.map { it.message }.filter(String::isNotBlank).distinct().joinToString(" ")
     floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
-      status = "Secuencia finalizada. Las entregas a otras apps se revisan allí.",
-      phoneActionCompletion = "Secuencia finalizada.")
+      status = if (remote.isEmpty()) "Secuencia finalizada. Las entregas a otras apps se revisan allí." else completion,
+      phoneActionCompletion = completion)
     syncWorkflow()
   }
   private var clarification: String? = null
@@ -546,6 +554,27 @@ class MainViewModel @JvmOverloads constructor(
       retainDecisionRequest("No se pudo guardar el paso. No se ejecutó la acción."); return
     }
     val ticket = executions.open(session, command)
+    if (com.example.phone.OmniremoteCommands.isRemote(command)) {
+      val proposal = runningProposal?.takeIf { it.command == command }
+      val id = proposal?.executionId ?: activeWorkflow()?.remoteExecutionId() ?: java.util.UUID.randomUUID().toString()
+      val app = getApplication<Application>()
+      remoteProposalInFlight = proposal?.id
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, status = "Consultando OmniRemote…", error = null)
+      viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+        val dispatch = if (proposal == null) Dispatchers.IO else Dispatchers.IO + kotlinx.coroutines.NonCancellable
+        val result = withContext(dispatch) {
+          phoneExecutor.execute(command, confirmed, executionId = id).also {
+            // The claim belongs to the journal even if the panel closes while Binder finishes.
+            if (proposal != null) InstinctProposalCenter.report(app, proposal, it)
+          }
+        }
+        if (proposal != null && remoteProposalInFlight == proposal.id) remoteProposalInFlight = null
+        if (proposal != null && runningProposal?.id == proposal.id) runningProposal = null
+        if (executions.complete(ticket, result) && session == floatingGeneration)
+          applyPhoneActionResult(command, confirmed, result, learning)
+      }
+      return
+    }
     val result = phoneExecutor.execute(command, confirmed)
     // An automation result arrives later; anything else is final now.
     if (result.stopwatchAutomation == null) executions.complete(ticket, result)
@@ -571,6 +600,7 @@ class MainViewModel @JvmOverloads constructor(
     learning: InterpretationRequest? = null,
   ) {
     val inWorkflow = activeWorkflow() != null
+    val beforeWorkflow = activeWorkflow()
     if (inWorkflow) try {workflow.accept(result)} catch (_: Exception) {
       workflow.markUncertainInMemory()
       retainDecisionRequest("No se pudo guardar el resultado. Revisá la app antes de continuar; no se repetirá el paso.")
@@ -587,7 +617,22 @@ class MainViewModel @JvmOverloads constructor(
     // A proposal from Instinct is not the user's turn: it never becomes a reference for the next order.
     // The steps of a routine Instinct asked for are not the user's turns either.
     val instinctRoutine = runningProposal?.let { InstinctProposalCenter.isRoutine(it.command) } == true
-    if (command != proposalCommand && !instinctRoutine) operationalContext.record(command, result)
+    if (command != proposalCommand && !instinctRoutine) {
+      operationalContext.record(command, result)
+      val remote = command as? PhoneCommand.Platform
+      val group = if (remote != null && com.example.phone.OmniremoteCommands.isRemote(remote)) {
+        fun signature(item: PhoneCommand): Pair<String, String>? {
+          if (!com.example.phone.OmniremoteCommands.isRemote(item)) return null
+          val (spec, params) = com.example.phone.InstinctCapabilities.platform(item as PhoneCommand.Platform)
+          val (wire, args) = com.example.phone.OmniremoteCommands.request(spec.id, params)
+          return wire to args.toString()
+        }
+        beforeWorkflow?.steps?.take(beforeWorkflow.cursor)?.asReversed()?.takeWhile {
+          it.status in setOf(StepStatus.COMPLETED, StepStatus.SENT) && signature(it.command) == signature(remote)
+        }?.map { it.command }.orEmpty()
+      } else emptyList()
+      omniremote.record(command, result, group)
+    }
     else if (!instinctRoutine) runningProposal?.let { proposal ->
       InstinctProposalCenter.report(getApplication(), proposal, result)
       if (com.example.phone.InstinctAck.kindOf(result).final) runningProposal = null
@@ -626,7 +671,8 @@ class MainViewModel @JvmOverloads constructor(
     if (inWorkflow) {
       syncWorkflow()
       if (workflow.snapshot?.finished == true) finishWorkflow()
-      else if (result.outcome == PhoneActionOutcome.COMPLETED) advanceWorkflow()
+      else if (result.outcome == PhoneActionOutcome.COMPLETED ||
+        result.outcome == PhoneActionOutcome.HANDOFF && com.example.phone.OmniremoteCommands.isRemote(command)) advanceWorkflow()
     }
     if (!result.retainRequest && !inWorkflow) {
       pendingFloatingAudio?.file?.delete()
@@ -961,6 +1007,8 @@ class MainViewModel @JvmOverloads constructor(
           queryFloatingCalendar(result.command)
         } else if (result.command is PhoneCommand.Platform && WorkflowRunner.isWeatherQuery(result.command)) {
           queryFloatingWeather(result.command)
+        } else if (com.example.phone.OmniremoteCommands.isRemote(result.command) && executions.lastResultWasUncertain(result.command)) {
+          confirmRepeat(result.command)
         } else runPhoneCommand(result.command)
       }
       is InterpretationResult.Clarification -> {
@@ -1063,6 +1111,7 @@ class MainViewModel @JvmOverloads constructor(
   private fun endRunningProposal(reason: String) {
     val proposal = runningProposal ?: return
     runningProposal = null
+    if (remoteProposalInFlight == proposal.id) return
     val entry = if (InstinctProposalCenter.isRoutine(proposal.command))
       com.example.phone.AckEntry(com.example.phone.AckKind.ERROR, proposal.order, "la rutina se detuvo antes de terminar; los pasos hechos no se repiten.")
       else com.example.phone.AckEntry(com.example.phone.AckKind.DISCARDED, proposal.order, reason)
@@ -1204,9 +1253,22 @@ class MainViewModel @JvmOverloads constructor(
       // Cold start: the panel shows "Instinct" until the first value arrives; nothing waits on the main thread.
       floatingPrefsLoad = viewModelScope.launch { applyFloatingPrefs(currentPrefs()) }
     }
-    if (activeWorkflow() != null) {
+    activeWorkflow()?.let { active ->
       syncWorkflow()
       floatingState.value = floatingState.value.copy(status = "Hay una secuencia pendiente. Revisá los pasos antes de continuar.")
+      val step = active.steps[active.cursor]
+      if (step.status == StepStatus.UNCERTAIN && com.example.phone.OmniremoteCommands.isRemote(step.command)) {
+        val id = active.remoteExecutionId()
+        viewModelScope.launch {
+          val report = withContext(Dispatchers.IO) {
+            com.example.phone.InstinctDeviceCapabilities.observe(getApplication(), step.command as PhoneCommand.Platform, id)
+          }
+          if (report != null && workflow.snapshot == active) runCatching {
+            workflow.recoverRemote(id, report)
+            if (workflow.snapshot?.finished == true) finishWorkflow() else syncWorkflow()
+          }
+        }
+      }
     }
     workflowLoadError?.let {floatingState.value = floatingState.value.copy(error = it)}
     val gemini = com.example.phone.GeminiSettings(getApplication())
