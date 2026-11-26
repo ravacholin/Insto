@@ -17,6 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.LearnedPhraseStore
 import com.example.data.PhraseActions
 import com.example.data.PhraseTeaching
@@ -276,6 +277,10 @@ private fun PhraseEditorDialog(
   onDismiss: () -> Unit,
   onSave: (key: String, command: PhoneCommand, target: String?, written: String, generalize: Boolean) -> Unit,
 ) {
+  val context = androidx.compose.ui.platform.LocalContext.current
+  val engine = remember(context) { com.example.phone.AndroidShortcutEngine.of(context) }
+  val shortcuts by engine.state.collectAsStateWithLifecycle()
+  val parser = remember(engine) { engine.parser() }
   var phrase by rememberSaveable { mutableStateOf(editor.original?.display ?: editor.phrase) }
   var generalize by rememberSaveable { mutableStateOf(editor.original?.generalize ?: true) }
   var command by remember { mutableStateOf(editor.original?.command) }
@@ -283,12 +288,12 @@ private fun PhraseEditorDialog(
   var picking by remember { mutableStateOf(false) }
   var check by remember { mutableStateOf<PhraseTeaching.Phrase?>(null) }
 
-  LaunchedEffect(phrase, command) {
+  LaunchedEffect(phrase, command, shortcuts) {
     check = null
     val chosen = command ?: return@LaunchedEffect
     if (phrase.isBlank()) return@LaunchedEffect
     delay(250)
-    check = PhraseTeaching.checkPhrase(phrase, chosen, existing, editor.original?.phrase)
+    check = PhraseTeaching.checkPhrase(phrase, chosen, existing, editor.original?.phrase, parser)
   }
 
   if (picking) {
@@ -344,6 +349,10 @@ private fun PhraseEditorDialog(
 /** Step one lists the actions by group. Step two asks for the value an action needs. */
 @Composable
 private fun ActionPickerDialog(current: PhoneCommand?, onDismiss: () -> Unit, onPick: (PhoneCommand, String?) -> Unit) {
+  val context = androidx.compose.ui.platform.LocalContext.current
+  val engine = remember(context) { com.example.phone.AndroidShortcutEngine.of(context) }
+  val shortcuts by engine.state.collectAsStateWithLifecycle()
+  val parser = remember(engine) { engine.parser() }
   var selected by remember { mutableStateOf(current?.let(PhraseActions::optionFor)?.takeIf { it.input != PhraseActions.Input.NONE }) }
   var writing by remember { mutableStateOf(false) }
   var value by remember {
@@ -363,7 +372,12 @@ private fun ActionPickerDialog(current: PhoneCommand?, onDismiss: () -> Unit, on
     option != null -> option.label
     else -> "Elegir acción"
   }
-  val written = remember(value, writing) { if (writing && value.isNotBlank()) PhraseTeaching.resolveTarget(value) else null }
+  val written = remember(value, writing, shortcuts) {
+    if (!writing || value.isBlank()) null else when (val result = PhraseTeaching.resolveTarget(value, parser)) {
+      is PhraseTeaching.Target.Valid -> result.copy(summary = engine.summary(result.command))
+      else -> result
+    }
+  }
   val ready: Pair<PhoneCommand, String?>? = when {
     writing -> (written as? PhraseTeaching.Target.Valid)?.let { it.command to value.trim() }
     option != null && option.input != PhraseActions.Input.APP && option.input != PhraseActions.Input.ROUTINE ->

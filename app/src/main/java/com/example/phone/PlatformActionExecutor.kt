@@ -18,10 +18,12 @@ import android.provider.Settings
 
 /** Public Android adapters. No arbitrary components, URIs or executable model output. */
 internal class PlatformActionExecutor(private val context: Context) {
-  fun execute(command: PhoneCommand.Platform,confirmed:Boolean=false): PhoneActionResult {
+  fun execute(command: PhoneCommand.Platform, confirmed: Boolean = false, canLaunch: () -> Boolean = { true }): PhoneActionResult {
     // Revalidate even when commands originate from disk or another caller.
     PhoneCommandCodec.decode(PhoneCommandCodec.encode(command))
     return when(command.action) {
+      PlatformAction.EXECUTE_APP_SHORTCUT -> AndroidShortcutEngine.of(context)
+        .execute(command.argument!!, confirmed, expectedRevision = command.content?.toLongOrNull(), canLaunch = canLaunch)
       PlatformAction.CALL_DIRECT -> localActivity(command,CallActionActivity::class.java)
       PlatformAction.MESSAGE_SEND -> {
         if(PhoneNumbers.canonical(command.argument!!)==null) {

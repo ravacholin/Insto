@@ -29,7 +29,7 @@ enum class SessionState {
  * Confined to the main thread, like the ViewModel state it guards.
  */
 class SessionLifecycle {
-  var current: Long = 0L
+  @Volatile var current: Long = 0L
     private set
   var state: SessionState = SessionState.IDLE
     private set

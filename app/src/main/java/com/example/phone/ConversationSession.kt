@@ -277,7 +277,7 @@ class ConversationSession(private val now: () -> Calendar = { Calendar.getInstan
       val syntax = maskQuotes(input)
       val separators = Regex("\\s*[,;]\\s*|\\s+(?:y después|y despues|y luego|después|despues|luego|y)\\s+", RegexOption.IGNORE_CASE)
       // 'y' within quantities, titles and a time is not a separator unless followed by a command-like verb.
-      val verbs = Regex("^(?:pone|poneme|pon|baja|subi|abri|prende|enciende|encende|apaga|inicia|pausa|continua|reinicia|lleva|llevame|llama|agenda|busca|reproduci|compra|envia|borra|activa|desactiva|silencia|mostra|cancela)(?:le|les|me|lo|la|los|las)?\\b")
+      val verbs = Regex("^(?:pone|poneme|pon|baja|subi|abri|prende|enciende|encende|apaga|inicia|pausa|continua|reinicia|lleva|llevame|llama|agenda|busca|reproduci|compra|envia|borra|activa|desactiva|silencia|mostra|cancela|ejecuta|lanza|usa|abre)(?:le|les|me|lo|la|los|las)?\\b")
       // «Por favor, prendé…» and «Che, bajá…»: a leading courtesy or interjection is not a step of its own.
       val courtesy = Regex("^(?:(?:por favor|porfa|por fa|che|dale|bueno|a ver|ok|okey|eh)(?: |$))+$")
       val boundaries = separators.findAll(input).filter { m ->

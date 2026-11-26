@@ -16,6 +16,7 @@ internal data class PlanInvocation(val capability: String, val parameters: Strin
     fun instant(key: String) = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
       .format(java.util.Date(params.getLong(key)))
     val target = when (capability) {
+      ShortcutResolver.CAPABILITY -> "acceso directo autorizado"
       "open_app" -> params.getString("package")
       "open_resource" -> java.net.URI.create(params.getString("url")).host
       "youtube", "spotify" -> InstinctAck.cut(InstinctAck.flat(params.getString("query")), 50)

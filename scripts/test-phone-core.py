@@ -50,7 +50,7 @@ def main():
     source = ROOT / "app/src/main/java/com/example/phone"
     # Explicit boundary: pure command/registry policies and file-based routines,
     # without Android executors, preferences/storage or permission adapters.
-    names = ["PhoneCommand", "PhoneActionResult", "PhoneCommandCodec", "PhoneCommandParser",
+    names = ["PhoneCommand", "AppShortcut", "PhoneActionResult", "PhoneCommandCodec", "PhoneCommandParser",
              "EverydayCommandParser", "ExtendedCommandParser", "CalendarRequestParser", "CalendarSelection", "CalendarSelectionParser",
              "ClockTime", "CommandDuration", "HybridPhoneRouter", "GeminiDecisionsClient", "GroqIntentVerifier", "StructuredCommandClient",
              "ConversationSession", "WorkflowRunner", "TemporaryModePolicy", "MediaSessionPolicy",

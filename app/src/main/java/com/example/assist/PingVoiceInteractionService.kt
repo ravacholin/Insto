@@ -11,7 +11,17 @@ import android.service.voice.VoiceInteractionService
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
 
-class PingVoiceInteractionService : VoiceInteractionService()
+class PingVoiceInteractionService : VoiceInteractionService() {
+  override fun onReady() {
+    super.onReady()
+    com.example.phone.AndroidShortcutEngine.of(this).requestRefresh()
+  }
+
+  override fun onShutdown() {
+    com.example.phone.AndroidShortcutEngine.of(this).requestRefresh()
+    super.onShutdown()
+  }
+}
 
 class PingVoiceInteractionSessionService : VoiceInteractionSessionService() {
   override fun onNewSession(args: Bundle?): VoiceInteractionSession {

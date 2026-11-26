@@ -137,6 +137,12 @@ private object AndroidLocalCapabilities : InstinctCapabilityAdapter {
 
 private object AndroidIntentCapabilities : InstinctCapabilityAdapter {
   override fun blocker(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject?): InstinctDeviceCapabilities.Block? {
+    if (spec.id == ShortcutResolver.CAPABILITY) {
+      val shortcuts = AndroidShortcutEngine.of(context)
+      if (params != null && shortcuts.remoteTarget(params.getString("shortcut")) == null)
+        return InstinctDeviceCapabilities.Block("El acceso directo no está autorizado o disponible en este teléfono.", false)
+      return null
+    }
     val handler = when (spec.id) {
       "clock_timer" -> PhoneActionExecutor.clockIntent(PhoneCommand.Timer(1))
       "clock_alarm" -> PhoneActionExecutor.clockIntent(PhoneCommand.Alarm(0, 0))
@@ -154,7 +160,12 @@ private object AndroidIntentCapabilities : InstinctCapabilityAdapter {
       InstinctDeviceCapabilities.Block("No hay una aplicación compatible instalada.", false) else null
   }
 
+  override fun targets(context: Context, spec: InstinctCapabilities.Spec): List<String> =
+    if (spec.id == ShortcutResolver.CAPABILITY) AndroidShortcutEngine.of(context).remoteTargets() else emptyList()
+
   override fun execute(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult {
+    if (spec.id == ShortcutResolver.CAPABILITY)
+      return AndroidShortcutEngine.of(context).execute(params.getString("shortcut"), confirmed = true, remote = true)
     val intent = when (spec.id) {
       "open_app" -> context.packageManager.getLaunchIntentForPackage(params.getString("package"))
       "open_resource" -> resource(params.getString("url"))

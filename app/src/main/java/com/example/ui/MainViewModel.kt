@@ -196,16 +196,39 @@ class MainViewModel @JvmOverloads constructor(
   private var pendingTranscript: String? = null
   private var transcribingAudio = false
   private var decidingRequest = false
-  private var floatingPaused = false
+  @Volatile private var floatingPaused = false
 
   fun resumeFloatingAssistant() { floatingPaused = false }
-  private val phoneParser = PhoneCommandParser()
+  private val shortcutEngine = AndroidShortcutEngine.of(application)
+  private val phoneParser = shortcutEngine.parser()
+  private val shortcutDecisions = GeminiDecisionsClient({ GeminiSettings(application).readKey() })
   private val phoneExecutor = PhoneActionExecutor(application, preferredMediaPackage = operationalContext::preferredMediaPackage)
   private val conversation = ConversationSession()
   private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).readValue() })
   private val geminiCoordinator = GeminiCoordinator(hybridRouter, structuredExtractor,
     verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter, lookupLearnedPhrase = learnedPhrases::lookup,
-    lookupLearnedPattern = learnedPhrases::lookupPattern, operationalContext = operationalContext)
+    lookupLearnedPattern = learnedPhrases::lookupPattern, operationalContext = operationalContext,
+    parseWithShortcuts = phoneParser::parse, resolveShortcutWithDecisions = ::resolveShortcutWithDecisions)
+
+  private suspend fun resolveShortcutWithDecisions(text: String): PhoneRoute? {
+    val target = ShortcutResolver.explicitTarget(text) ?: return null
+    val catalog = shortcutEngine.state.value
+    if (catalog.access == ShortcutAccess.DENIED || catalog.access == ShortcutAccess.LOCKED || catalog.access == ShortcutAccess.ERROR)
+      return PhoneRoute.Unsupported("Los accesos directos no están disponibles. Revisá el diagnóstico en Configuración → Accesos directos.")
+    if (!hybridRouter.isEnabled() || catalog.access != ShortcutAccess.GRANTED) return null
+    val candidates = withContext(Dispatchers.Default) { ShortcutResolver.candidates(target, catalog.entries) }
+    val input = ShortcutResolver.providerInput(text, candidates) ?: return null
+    return try {
+      shortcutDecisions.chooseShortcut(input, candidates)?.let { selected ->
+        shortcutEngine.state.value.entries.singleOrNull { it.key == selected.key && it.usable && it.revision == selected.revision }
+          ?.let { PhoneRoute.Local(it.command()) }
+      }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+      throw cancelled
+    } catch (_: Exception) {
+      null
+    }
+  }
   private var learningPreview: InterpretationRequest? = null
   /** A model interpretation executed without confirmation: an example for learned structures once it succeeds. */
   private var patternExample: Pair<InterpretationRequest, PhoneCommand>? = null
@@ -242,7 +265,7 @@ class MainViewModel @JvmOverloads constructor(
     val active = activeWorkflow()
     val step = active?.steps?.getOrNull(active.cursor)
     floatingState.value = floatingState.value.copy(
-      workflowLines = snapshot?.steps?.mapIndexed { index, item -> "${index + 1}. ${PhoneCommandCodec.summary(item.command)}${CapabilityRequirements.missing(getApplication(),item.command).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: ""} · ${when(item.status){StepStatus.PENDING->"pendiente";StepStatus.EXECUTING->"en curso";StepStatus.COMPLETED->"completado";StepStatus.HANDED_OFF->"entregado · revisá la app";StepStatus.WAITING_INPUT->"requiere tu respuesta";StepStatus.FAILED->"falló";StepStatus.UNCERTAIN->"resultado incierto · revisá antes de seguir";StepStatus.CANCELLED->"cancelado"}}" } ?: emptyList(),
+      workflowLines = snapshot?.steps?.mapIndexed { index, item -> "${index + 1}. ${shortcutEngine.summary(item.command)}${CapabilityRequirements.missing(getApplication(),item.command).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: ""} · ${when(item.status){StepStatus.PENDING->"pendiente";StepStatus.EXECUTING->"en curso";StepStatus.COMPLETED->"completado";StepStatus.HANDED_OFF->"entregado · revisá la app";StepStatus.WAITING_INPUT->"requiere tu respuesta";StepStatus.FAILED->"falló";StepStatus.UNCERTAIN->"resultado incierto · revisá antes de seguir";StepStatus.CANCELLED->"cancelado"}}" } ?: emptyList(),
       workflowActive = active != null,
       needsConfirmation = active?.confirmed == false || confirmation != null,
       workflowCanContinue = step?.status in listOf(StepStatus.HANDED_OFF, StepStatus.UNCERTAIN) || active?.confirmed == true && step?.status == StepStatus.PENDING,
@@ -546,6 +569,20 @@ class MainViewModel @JvmOverloads constructor(
       retainDecisionRequest("No se pudo guardar el paso. No se ejecutó la acción."); return
     }
     val ticket = executions.open(session, command)
+    if (command is PhoneCommand.Platform && command.action == PlatformAction.EXECUTE_APP_SHORTCUT) {
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING)
+      viewModelScope.launch {
+        val job = coroutineContext[Job]
+        val result = withContext(Dispatchers.IO) {
+          phoneExecutor.execute(command, confirmed, canLaunch = {
+            job?.isActive != false && session == floatingGeneration && !floatingPaused
+          })
+        }
+        if (executions.complete(ticket, result) && session == floatingGeneration)
+          applyPhoneActionResult(command, confirmed, result, learning)
+      }
+      return
+    }
     val result = phoneExecutor.execute(command, confirmed)
     // An automation result arrives later; anything else is final now.
     if (result.stopwatchAutomation == null) executions.complete(ticket, result)
@@ -745,6 +782,17 @@ class MainViewModel @JvmOverloads constructor(
       return interpretWithGemini(text,PhoneRoute.Instinct,semanticDraft)
     }
     val context = clarification
+    if (context?.startsWith(ShortcutResolver.CONTEXT) == true) {
+      ShortcutResolver.reply(context, text, shortcutEngine.state.value.entries)?.let { return applyResolvedRoute(it, text) }
+    }
+    if (context?.startsWith(ShortcutResolver.CONTEXT) == true && !fresh) {
+      if (context == ShortcutResolver.CONTEXT) {
+        val retry = "ejecutá el acceso directo $text"
+        return interpretWithGemini(retry, phoneParser.parse(retry), null)
+      }
+      retainDecisionRequest("Indicá el número o el nombre de una de las opciones, o decí cancelar.")
+      return true
+    }
     if (context != null && !fresh || context == "intent:calendar" && correction) {
       if (context == "intent:calendar" || !context!!.startsWith("intent:")) {
         when (val reply = conversation.accept(text, allowSemantic=hybridRouter.isEnabled())) {

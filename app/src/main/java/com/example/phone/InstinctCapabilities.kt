@@ -121,6 +121,7 @@ internal object InstinctCapabilities {
       PhoneCommand.Alarm(it.getInt("hour"), it.getInt("minute"), days, it.optString("label"),
         it.optString("date").takeIf(String::isNotEmpty))
     },
+    external(ShortcutResolver.CAPABILITY, InstinctCategory.APPS, "").copy(parameters = CapabilityCatalog.appShortcut),
     external("open_app", InstinctCategory.APPS, "package", "package" to text(160)),
     external("open_resource", InstinctCategory.APPS, "url", "url" to text(2000)),
     external("youtube", InstinctCategory.APPS, "query", "query" to text(200)) { PhoneCommand.YouTubeSearch(it.getString("query")) },
@@ -154,6 +155,7 @@ internal object InstinctCapabilities {
     }
     if (id in setOf("calendar_update", "calendar_cancel")) require(hash.matches(params.getString("revision")))
     if (id == "insto_clock_cancel") require(Regex("e[0-9a-f]{20}").matches(params.getString("clockId")))
+    if (id == ShortcutResolver.CAPABILITY) require(ShortcutResolver.token.matches(params.getString("shortcut")))
     if (id == "open_app") require(pkg.matches(params.getString("package")))
     if (id == "open_resource") {
       val uri = URI.create(params.getString("url"))

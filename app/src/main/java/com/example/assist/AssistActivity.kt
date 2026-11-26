@@ -227,8 +227,14 @@ class AssistActivity : ComponentActivity() {
     }
   }
 
+  override fun onPause() {
+    com.example.phone.AndroidShortcutEngine.of(this).hidden(this)
+    super.onPause()
+  }
+
   override fun onResume() {
     super.onResume()
+    com.example.phone.AndroidShortcutEngine.of(this).visible(this)
     viewModel.resumeFloatingAssistant()
     autoSendEnabled = PingAutoSendAccessibilityService.isEnabled(this)
     viewModel.prepareFloatingAssistant()

@@ -325,7 +325,13 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
         decisionDescription = "Terminar ahora un modo temporal activo y restaurar el estado anterior.")
       unavailable("routine_run",IntentCategory.AUTOMATION,"Ejecutar rutina local previamente configurada","ejecutá mi rutina estudio","activá la rutina estudio",listOf(p("routineId")),"Adaptador de rutinas registradas y WorkflowRunner",emptyList(),"No hay un proveedor de rutinas configuradas registrado en esta instalación. No convertí el pedido en una secuencia nueva.")
     }.let {base ->
-      val native=ExtendedLocalIntents.definitions()
+      val shortcut = LocalIntentDefinition(ShortcutResolver.CAPABILITY, IntentCategory.APPLICATIONS,
+        "Abrir un acceso directo publicado por una aplicación", listOf("ejecutá el acceso directo buscar destinos", "abrí el acceso directo nuevo documento"),
+        listOf(IntentParameter("shortcut", "string", true, "Identificador resuelto desde el catálogo del dispositivo")),
+        emptyList(), "LauncherApps.startShortcut", "Solicitud de lanzamiento entregada a Android",
+        parameterContext = ShortcutResolver.CONTEXT, decisions = false,
+        accepts = { it is PhoneCommand.Platform && it.action == PlatformAction.EXECUTE_APP_SHORTCUT })
+      val native=ExtendedLocalIntents.definitions() + shortcut
       val replaced=native.map {it.id}.toSet()
       base.filterNot {it.id in replaced}+native
     }

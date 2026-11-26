@@ -60,6 +60,11 @@ object PhoneCommandCodec {
     val content = if(o.has("content")) str("content") else null
     val percent = if(o.has("percent")) integer("percent",0..100) else null
     require((percent != null) == (action == PlatformAction.BRIGHTNESS))
+    if (action == PlatformAction.EXECUTE_APP_SHORTCUT) {
+      require(argument != null && ShortcutResolver.token.matches(argument) &&
+        (content == null || content.toLongOrNull()?.let { it >= 0 && it.toString() == content } == true))
+      return PhoneCommand.Platform(action, argument, content = content)
+    }
     val targetActions = setOf(PlatformAction.CALL_DIRECT,PlatformAction.MESSAGE_SEND,PlatformAction.ROUTINE_RUN,PlatformAction.CALENDAR_QUERY,PlatformAction.CALENDAR_UPDATE,PlatformAction.CALENDAR_DELETE,PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_RENAME,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE,PlatformAction.ALARM_DISMISS,PlatformAction.CONTACT_SEARCH,PlatformAction.CONTACT_PHONES,PlatformAction.APP_SETTINGS,PlatformAction.NOTIFICATION_OPEN,PlatformAction.NOTIFICATION_DISMISS)
     if(action==PlatformAction.WEATHER_TEMPERATURE) require(argument==null || argument==WeatherIntentParser.FEELS_LIKE)
     val optionalTargets=setOf(PlatformAction.WEATHER_TEMPERATURE,PlatformAction.FILE_OPEN,PlatformAction.FILE_SEARCH,PlatformAction.FILE_SHARE,PlatformAction.FILE_COPY,PlatformAction.FILE_MOVE,PlatformAction.FILE_DELETE)
@@ -107,7 +112,8 @@ object PhoneCommandCodec {
  }
  fun summary(command: PhoneCommand): String = when(command) {
   is PhoneCommand.Platform -> {
-    if (command.action == PlatformAction.INSTINCT_CAPABILITY) command.argument ?: "acción local" else {
+    if (command.action == PlatformAction.EXECUTE_APP_SHORTCUT) "Abrir acceso directo"
+    else if (command.action == PlatformAction.INSTINCT_CAPABILITY) command.argument ?: "acción local" else {
       val calendar = if (command.action in CalendarSelection.actions) CalendarSelection.decode(command) else null
       val content = if (calendar == null) command.content else listOfNotNull(
         calendar.from,

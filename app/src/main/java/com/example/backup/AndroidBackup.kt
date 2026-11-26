@@ -123,6 +123,7 @@ object AndroidBackup {
         CredentialsSection(StoreCredentialAccess(app)),
         AssistantSection(RepositoryAssistantAccess(AssistantPreferencesRepository(app))),
         PhrasesSection(phrases),
+        AppShortcutBackupSection(com.example.phone.AndroidShortcutEngine.of(app)),
         RoutinesSection(ConfiguredRoutineStore(File(app.noBackupFilesDir, "configured-routines.json"))),
         PlacesSection(RepositoryPlacesAccess(SavedPlacesRepository(app))),
         InstinctSection(com.example.phone.InstinctBackupStore(app)),

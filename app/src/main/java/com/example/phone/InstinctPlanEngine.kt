@@ -60,7 +60,7 @@ object InstinctPlanEngine {
   private val running = mutableSetOf<String>()
   private val again = mutableSetOf<String>()
   private val specs = ConcurrentHashMap<String, InstinctPlanSpec>()
-  private data class Foreground(val position: String, val activity: WeakReference<Activity>, val expiresAt: Long)
+  private data class Foreground(val position: String, val activity: WeakReference<Activity>, val expiresAt: Long, val shortcutGrant: String?)
   private val foreground = ConcurrentHashMap<String, Foreground>()
 
   private fun journal(context: Context) = InstinctExecutions.journal(context)
@@ -230,7 +230,7 @@ object InstinctPlanEngine {
 
   private fun portableSpec(spec: InstinctPlanSpec): Boolean =
     spec.steps.flatMap { it.actions }.flatMap { listOfNotNull(it.invocation, it.alternative) }.none {
-      it.capability.startsWith("calendar_") || it.capability == "insto_clock_cancel" ||
+      it.capability.startsWith("calendar_") || it.capability == "insto_clock_cancel" || it.capability == ShortcutResolver.CAPABILITY ||
         it.spec.adapter == InstinctCapabilities.Adapter.OMNIREMOTE
     }
 
@@ -424,7 +424,7 @@ object InstinctPlanEngine {
     }
     val needsActivity = structured && !LockScreenPolicy.runsLocked(command)
     val activity = if (needsActivity) foreground.remove(plan.id)?.takeIf {
-      it.position == plan.position && now() <= it.expiresAt
+      it.position == plan.position && it.shortcutGrant == pendingShortcutGrant(plan) && now() <= it.expiresAt
     }?.activity?.get()?.takeIf { !it.isFinishing && !it.isDestroyed && it.hasWindowFocus() &&
       it.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != true } else null
     if (needsActivity && activity == null) return block(app, plan, line,
@@ -946,11 +946,20 @@ object InstinctPlanEngine {
   // Queries and management
   // ---------------------------------------------------------------------------------------------------------------
 
-  internal fun continueInForeground(activity: Activity, short: String): String {
+  internal fun pendingShortcutGrant(plan: PlanRecord): String? {
+    val action = (spec(plan)?.steps?.getOrNull(plan.block) as? PlanStep.Act)?.action?.invocation
+    return action?.takeIf { it.capability == ShortcutResolver.CAPABILITY }
+      ?.let { JSONObject(it.parameters).getString("shortcut") }
+  }
+
+  internal fun continueInForeground(activity: Activity, short: String, shortcutGrant: String? = null): String {
     val app = activity.applicationContext
     val plan = journal(app).planByShort(short) ?: return "No encontré ese plan."
     if (plan.state != PlanState.BLOCKED) return "El plan ya cambió de estado."
-    foreground[plan.id] = Foreground(plan.position, WeakReference(activity), now() + 10_000)
+    if (pendingShortcutGrant(plan) != shortcutGrant) return "Volvé a revisar el paso pendiente."
+    if (shortcutGrant != null && AndroidShortcutEngine.of(app).remoteTarget(shortcutGrant) == null)
+      return "El acceso directo no está autorizado o disponible."
+    foreground[plan.id] = Foreground(plan.position, WeakReference(activity), now() + 10_000, shortcutGrant)
     start(app, plan.id)
     return "Revisando el paso pendiente."
   }

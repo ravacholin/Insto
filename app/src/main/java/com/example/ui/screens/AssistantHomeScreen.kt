@@ -511,6 +511,10 @@ private fun AssistantSetupSheet(
         }
       }
 
+      SettingsCategory("Accesos directos", expandedCategory == "shortcuts", { toggleCategory("shortcuts") }) {
+        AppShortcutSettings()
+      }
+
       SettingsCategory("Frases aprendidas", expandedCategory == "phrases", { toggleCategory("phrases") }) {
         SettingsDescription("Atajos con tus palabras: elegí qué hace Insto cuando decís una frase. Podés agregarlas, editarlas y borrarlas.")
         OutlinedButton(onClick = onOpenLearnedPhrases) { Text("Editar frases") }

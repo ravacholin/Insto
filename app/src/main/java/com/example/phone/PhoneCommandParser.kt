@@ -46,7 +46,14 @@ class PhoneCommandParser(private val calendarNow: () -> java.util.Calendar = { j
     }
   }
 
+  internal var shortcutRoutes: ((String, PhoneRoute) -> PhoneRoute)? = null
+
   fun parse(text: String): PhoneRoute {
+    val native = parseNative(text)
+    return shortcutRoutes?.invoke(text, native) ?: native
+  }
+
+  private fun parseNative(text: String): PhoneRoute {
     val original = normalize(text)
     val s = canonicalRequest(original)
     if (s in listOf("cancelar", "cancela", "olvidalo", "nada", "dejalo")) return PhoneRoute.Cancel

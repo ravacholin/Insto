@@ -411,6 +411,7 @@ private fun InstinctPlansList(revision: Int, onChange: () -> Unit) {
   val engine = com.example.phone.InstinctPlanEngine
   val scope = rememberCoroutineScope()
   var plans by remember { mutableStateOf(emptyList<com.example.phone.PlanRecord>()) }
+  var shortcutConfirmation by remember { mutableStateOf<Triple<String, String, String>?>(null) }
   var feedback by remember { mutableStateOf<String?>(null) }
   LaunchedEffect(revision) { plans = withContext(Dispatchers.IO) { engine.plans(context) } }
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_plans")) {
@@ -431,11 +432,33 @@ private fun InstinctPlansList(revision: Int, onChange: () -> Unit) {
           val activity = context as? android.app.Activity
           if (activity != null) TextButton(onClick = {
             scope.launch {
-              feedback = withContext(Dispatchers.IO) { engine.continueInForeground(activity, plan.shortId) }
-              onChange()
+              val grant = engine.pendingShortcutGrant(plan)
+              if (grant == null) {
+                feedback = withContext(Dispatchers.IO) { engine.continueInForeground(activity, plan.shortId) }
+                onChange()
+              } else {
+                val shortcut = withContext(Dispatchers.IO) { com.example.phone.AndroidShortcutEngine.of(context).remoteTarget(grant) }
+                if (shortcut == null) feedback = "El acceso directo no está autorizado o disponible."
+                else shortcutConfirmation = Triple(plan.shortId, grant, shortcut.localLabel)
+              }
             }
           }) { Text("Continuar ${plan.shortId}") }
         }
+        shortcutConfirmation?.takeIf { it.first == plan.shortId && plan.state == com.example.phone.PlanState.BLOCKED }
+          ?.let { (_, grant, label) ->
+            SettingsDescription("Instinct solicitó abrir «$label». La aplicación decide qué hace. Confirmá si reconocés su acción.")
+            Row {
+              TextButton(onClick = {
+                shortcutConfirmation = null
+                val activity = context as? android.app.Activity ?: return@TextButton
+                scope.launch {
+                  feedback = withContext(Dispatchers.IO) { engine.continueInForeground(activity, plan.shortId, grant) }
+                  onChange()
+                }
+              }) { Text("Abrir acceso directo") }
+              TextButton(onClick = { shortcutConfirmation = null }) { Text("Cancelar") }
+            }
+          }
         if (plan.state == com.example.phone.PlanState.SUSPENDED) TextButton(onClick = {
           scope.launch { feedback = withContext(Dispatchers.IO) { engine.resume(context, plan.shortId) }; onChange() }
         }, modifier = Modifier.testTag("instinct_plan_resume")) { Text("Reanudar ${plan.shortId}") }
@@ -443,6 +466,7 @@ private fun InstinctPlansList(revision: Int, onChange: () -> Unit) {
     }
     feedback?.let { SettingsDescription(it) }
   }
+
 }
 
 /** «Instinct puede ejecutarla», one switch per configured routine. Off by default; disabled with the reason when not eligible. */
