@@ -700,6 +700,8 @@ class LearnedPhraseStore internal constructor(
       is PhoneCommand.Alarm -> command.date == null
       is PhoneCommand.TemporaryMode -> command.deadlineMillis == null
       is PhoneCommand.Platform -> when (command.action) {
+        PlatformAction.EXECUTE_APP_SHORTCUT -> command.argument?.matches(com.example.phone.ShortcutResolver.token) == true &&
+          command.content == null && command.percent == null
         PlatformAction.ROUTINE_RUN -> !command.argument.isNullOrBlank()
         PlatformAction.DND_ON, PlatformAction.DND_OFF, PlatformAction.BATTERY, PlatformAction.ROUTINE_LIST,
         PlatformAction.ALARM_SNOOZE, PlatformAction.TIMER_DISMISS, PlatformAction.CALENDAR_AGENDA,

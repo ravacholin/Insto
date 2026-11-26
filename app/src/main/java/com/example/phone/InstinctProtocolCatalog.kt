@@ -316,7 +316,10 @@ object InstinctProtocolCatalog {
       "version_protocolo" to VERSION,
       "version_insto" to instoVersion,
       "prefijo" to "${InstinctProposalProtocol.PREFIX} ",
-      "capacidades" to InstinctCapabilities.specs.values.map { spec ->
+      "capacidades" to InstinctCapabilities.specs.values.filter {
+        it.id != ShortcutResolver.CAPABILITY || capabilityTargets[it.id].orEmpty().isNotEmpty() &&
+          autonomy.level(it.category) != InstinctAutonomy.NUNCA
+      }.map { spec ->
         InstinctCatalogCanonical.toKotlin(spec.catalog(
           if (autonomy.level(spec.category) == InstinctAutonomy.NUNCA) "nunca"
           else availability[spec.id] ?: if (spec.adapter == InstinctCapabilities.Adapter.OMNIREMOTE)

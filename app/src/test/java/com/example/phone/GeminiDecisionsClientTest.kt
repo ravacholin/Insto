@@ -66,4 +66,25 @@ class GeminiDecisionsClientTest {
     assertTrue(job.isCancelled)
     assertTrue(http.last.isCanceled)
   }
+
+  @Test fun shortcutDecisionsAcceptOnlyNumberedCandidatesAndSendNoIdentifiers() = runBlocking {
+    val shortcut = AppShortcut(ShortcutKey("com.publisher", "internal-id", 0), "Nuevo documento", "Editor",
+      manifest = true, preferences = ShortcutPreferences(alias = "Nombre privado"))
+    fun reply(choice: String) = JSONObject().put("answers", JSONObject()
+      .put("action", JSONObject().put("type", "choice").put("choice", choice).put("confidence", .99)
+        .put("probabilities", JSONObject().put("opcion_1", .99).put("ninguno", .01)))
+      .put("unconditional", JSONObject().put("type", "noul").put("noul", .99).put("confidence", .99)))
+    val http = FakeHttp.json(200, reply("opcion_1").toString())
+    assertEquals(shortcut, GeminiDecisionsClient({ "key" }, http).chooseShortcut("documento nuevo", listOf(shortcut)))
+    val body = http.last.bodyText()
+    assertTrue(body.contains("Nuevo documento"))
+    listOf(shortcut.key.id, shortcut.key.token, shortcut.key.packageName, shortcut.preferences.alias).forEach {
+      assertFalse(body.contains(it))
+    }
+    val forged = FakeHttp.json(200, reply(shortcut.key.token).toString())
+    assertTrue(runCatching { GeminiDecisionsClient({ "key" }, forged).chooseShortcut("documento nuevo", listOf(shortcut)) }.isFailure)
+    val privateCandidate = shortcut.copy(manifest = false, dynamic = true)
+    assertNull(GeminiDecisionsClient({ "key" }, FakeHttp { error("Must stay local") }).chooseShortcut("documento nuevo", listOf(privateCandidate)))
+  }
+
 }

@@ -28,6 +28,9 @@ object CapabilityCatalog {
   private fun spec(type: String, required: String, vararg fields: Pair<String, Field>) =
     Spec(type, fields.toMap(), required.split(' ').filter { it.isNotEmpty() }.toSet())
 
+  // Device-resolved identities use their own allowlist. The general extractor never emits this schema.
+  internal val appShortcut = spec(ShortcutResolver.CAPABILITY, "shortcut", "shortcut" to Field("string", maxLength = 64))
+
   val specs = listOf(
     spec("timer", "seconds", "seconds" to integer(1), "label" to text()),
     spec("alarm", "hour minute", "hour" to integer(0, 23), "minute" to integer(0, 59), "period" to text("AM", "PM", "24H"), "days" to Field("array"), "label" to text(), "date" to text()),

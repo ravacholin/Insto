@@ -13,6 +13,7 @@ enum class BackupCategory(val id: String, val label: String) {
   PHRASES("phrases", "Frases aprendidas"),
   ROUTINES("routines", "Rutinas"),
   PLACES("places", "Lugares guardados"),
+  SHORTCUTS("shortcuts", "Accesos directos de aplicaciones"),
   /** 1.20.0: receiving orders, autonomy, log, mailbox, doorbell and recurring orders. Older copies do not have it. */
   INSTINCT("instinct", "Instinct: órdenes, bitácora, buzón y timbre");
 
@@ -22,7 +23,7 @@ enum class BackupCategory(val id: String, val label: String) {
      * Restore order: least sensitive first, secrets last, so an earlier failure never touches the keys. Instinct goes
      * after the assistant (its contact) and before the API keys.
      */
-    val restoreOrder = listOf(PLACES, ROUTINES, PHRASES, ASSISTANT, INSTINCT, CREDENTIALS)
+    val restoreOrder = listOf(PLACES, SHORTCUTS, ROUTINES, PHRASES, ASSISTANT, INSTINCT, CREDENTIALS)
   }
 }
 

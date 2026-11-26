@@ -1038,3 +1038,7 @@ que Insto ya entiende. Para corregir, decí «corregí esta frase: abrí YouTube
 o «olvidá esta frase». Las dos órdenes actúan sobre la última frase usada o
 aprendida. La guía completa está en
 [Insto · frases aprendidas](releases/Insto-frases-aprendidas.md).
+
+## Accesos directos de aplicaciones
+
+El intent local **execute_app_shortcut** utiliza el catálogo del dispositivo y se puede usar como paso de un workflow. Consultá la [guía de accesos directos](APP-SHORTCUTS.md).

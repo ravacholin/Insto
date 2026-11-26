@@ -31,6 +31,8 @@ class GeminiCoordinator(
   private val speculation: FallbackSpeculation = FallbackSpeculation.WHEN_DEGRADED,
   /** Observes Gemini extraction only to decide speculation; it never skips an extraction. */
   private val extractionHealth: DecisionsCircuitBreaker = DecisionsCircuitBreaker(),
+  private val parseWithShortcuts: (suspend (String) -> PhoneRoute)? = null,
+  private val resolveShortcutWithDecisions: (suspend (String) -> PhoneRoute?)? = null,
 ) {
   /**
    * Every interpretation, whatever produced it, passes the final [SemanticCommandGuard] here, once, before the
@@ -55,6 +57,21 @@ class GeminiCoordinator(
     val explicitQuestion = '?' in request.text || '¿' in request.text || RequestSafetyPolicy.isGeneralRequest(request.text)
     if (request.draft == null && steps.size > 1 && !explicitQuestion) {
       steps.firstNotNullOfOrNull(RequestSafetyPolicy::refusal)?.let { return it.asResult() }
+      parseWithShortcuts?.let { parse ->
+        val routes = steps.map { parse(it) }
+        val hasShortcut = routes.any { route ->
+          val command = (route as? PhoneRoute.Local)?.command as? PhoneCommand.Platform
+          command?.action == PlatformAction.EXECUTE_APP_SHORTCUT ||
+            route is PhoneRoute.Clarify && route.context.startsWith(ShortcutResolver.CONTEXT)
+        } || steps.any(ShortcutResolver::isShortcutOrder)
+        if (hasShortcut) {
+          if (routes.all { it is PhoneRoute.Local })
+            return InterpretationResult.Plan(routes.filterIsInstance<PhoneRoute.Local>().map { it.command })
+          val prompt = routes.filterIsInstance<PhoneRoute.Clarify>().firstOrNull()?.prompt
+          return InterpretationResult.Rejected(listOfNotNull(prompt,
+            "Indicá el acceso directo y la aplicación al repetir la secuencia completa.").joinToString(" "))
+        }
+      }
       // Plan locally only when the existing conversation parser understands every step.
       // Local and model plans enter the same confirmation flow.
       when (val plan = ConversationSession { request.now }.accept(request.text, allowSemantic = router.isEnabled())) {
@@ -87,7 +104,7 @@ class GeminiCoordinator(
         }
         is PhoneRoute.Clarify -> {
           // Missing fields may be present in the explicit reference. Otherwise retain the local fast path.
-          if (request.sourceContext == null || !router.isEnabled()) {
+          if (local.context.startsWith(ShortcutResolver.CONTEXT) || request.sourceContext == null || !router.isEnabled()) {
             // A date-bearing alarm needs the registry continuation's source-date guard.
             val datedAlarm = local.context == "alarm" && Regex("\\b(?:hoy|manana)\\b")
               .containsMatchIn(PhoneCommandParser.normalize(request.text).replace("de la manana", ""))
@@ -122,6 +139,15 @@ class GeminiCoordinator(
             else -> Unit
           }
         }
+      }
+    }
+    if (isSingleNewTurn && local == PhoneRoute.Instinct && resolveShortcutWithDecisions != null && ShortcutResolver.explicitTarget(request.text) != null) {
+      return when (val route = resolveShortcutWithDecisions.invoke(request.text)) {
+        is PhoneRoute.Local -> InterpretationResult.Direct(route.command)
+        is PhoneRoute.Clarify -> InterpretationResult.Clarification(route.prompt, route.context)
+        is PhoneRoute.Unsupported -> InterpretationResult.Rejected(route.message, route.reason)
+        else -> InterpretationResult.Clarification("Indicá el nombre del acceso directo y su aplicación, o revisá Configuración → Accesos directos.",
+          ShortcutResolver.CONTEXT)
       }
     }
     if (!router.needsDecision(request.text, local)) return when (local) {

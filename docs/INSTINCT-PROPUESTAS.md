@@ -975,3 +975,7 @@ Con el timbre cifrado, el relé y «Incluir la orden en el timbre», un aviso de
 Para activar esta ruta, actualizá la app y desplegá `docs/instinct-bitacora.gs` en la planilla conservando la configuración existente. Insto informa el soporte al registrar o actualizar el timbre. Podés guardar de nuevo la configuración de la bitácora para reenviarla. El relé existente acepta ambos cuerpos cifrados. El diario muestra el tiempo entre que Insto recibe la señal (o recibe la respuesta del sondeo) y que empieza el primer despacho. Los pasos del plan incluyen las esperas y confirmaciones transcurridas desde la recepción original. [Detalles del transporte](architecture/instinct-push-reliability.md)
 
  Los accesos del dispositivo, los resultados verificables y el procedimiento de prueba física están en la guía de la versión. [Insto 1.24.0](releases/Insto-1.24.0.md)
+
+## Accesos directos de aplicaciones
+
+Los planes del buzón firmado pueden pedir **execute_app_shortcut** como último paso para un destino autorizado. El lanzamiento requiere que la persona revise el destino y confirme en primer plano. Consultá la [guía de accesos directos](APP-SHORTCUTS.md).

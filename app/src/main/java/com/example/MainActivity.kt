@@ -40,8 +40,14 @@ class MainActivity : ComponentActivity() {
 
   private val viewModel: MainViewModel by viewModels()
 
+  override fun onPause() {
+    com.example.phone.AndroidShortcutEngine.of(this).hidden(this)
+    super.onPause()
+  }
+
   override fun onResume() {
     super.onResume()
+    com.example.phone.AndroidShortcutEngine.of(this).visible(this)
     // Insto opened: the signed mailbox is read at once (off the main thread, at most every 20 seconds).
     runCatching { com.example.phone.InstinctMailbox.pollSoon(this) }
     com.example.phone.InstinctQuestionNotifications.recoverSoon(this)

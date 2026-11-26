@@ -50,15 +50,19 @@ object SemanticCommandGuard {
     fun literal(fact: String) = payloads.any { fact in it }
     val syntax = PhoneCommandParser.normalize(RequestSafetyPolicy.withoutQuotedText(text))
 
-    // Quoted text is literal content: it must reach a command unchanged.
-    for (quote in RequestSafetyPolicy.quotedTexts(text)) {
+    // The shortcut resolver verifies a quoted name against the catalogue before creating an opaque command.
+    // Quoted parameters for every other action still have to survive in the command payload.
+    val steps = OperationalContext.withoutDiscourseLead(ConversationSession.splitSteps(text))
+    val quotedSteps = if (steps.size == commands.size) steps.zip(commands).filterNot { (step, command) ->
+      command is PhoneCommand.Platform && command.action == PlatformAction.EXECUTE_APP_SHORTCUT &&
+        ShortcutResolver.explicitTarget(step) != null
+    }.map { it.first } else listOf(text)
+    for (quote in quotedSteps.flatMap(RequestSafetyPolicy::quotedTexts)) {
       val wanted = PhoneCommandParser.normalize(quote)
       if (wanted.isNotEmpty() && payloads.none { it == wanted || wanted in it })
         return Verdict.Rejected("La interpretación cambió o perdió el texto citado «$quote». No se ejecutó ni se envió.")
     }
 
-    // «Ahora, poné…»: a leading discourse marker is not a step, as in the coordinator.
-    val steps = OperationalContext.withoutDiscourseLead(ConversationSession.splitSteps(text))
     if (commands.size < steps.size)
       return Verdict.Rejected("La interpretación omitió pasos del pedido. No se ejecutó ninguno; indicá cada acción.")
     val pairs = if (commands.size == steps.size) steps.zip(commands) else steps.map { step -> step to null }
