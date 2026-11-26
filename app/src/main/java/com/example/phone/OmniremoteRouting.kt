@@ -19,13 +19,24 @@ internal class OmniremoteRouting(
     data class Unresolved(val message: String, val mayUseDecisions: Boolean = false) : Step
   }
 
-  fun resolve(text: String, clock: Calendar, decision: String? = null, background: Boolean = false): InterpretationResult? {
+  data class CachedResolution(val result: InterpretationResult?, val needsDiscovery: Boolean)
+
+  fun resolveCached(text: String, clock: Calendar, decision: String?, cached: () -> OmniremoteAdapter.Catalog?): CachedResolution {
+    var needsDiscovery = false
+    val result = resolve(text, clock, decision, loadCatalog = {
+      cached() ?: OmniremoteAdapter.Catalog().also { needsDiscovery = true }
+    })
+    return CachedResolution(result, needsDiscovery)
+  }
+
+  fun resolve(text: String, clock: Calendar, decision: String? = null, background: Boolean = false,
+    loadCatalog: () -> OmniremoteAdapter.Catalog = catalog): InterpretationResult? {
     if (RequestSafetyPolicy.refusal(text) != null || RequestSafetyPolicy.isGeneralRequest(text) ||
       '?' in RequestSafetyPolicy.withoutQuotedText(text)) return null
     val steps = OperationalContext.withoutDiscourseLead(ConversationSession.splitSteps(text))
     if (steps.none { actionHead.containsMatchIn(syntax(it)) }) return null
     val preferences by lazy(settings)
-    val snapshot by lazy(catalog)
+    val snapshot by lazy(loadCatalog)
     var inherited = if (background) emptyList() else recent?.takeIf { now() - it.at in 0..120_000 }?.ids.orEmpty()
     var remote = false
     var missing = false

@@ -18,13 +18,20 @@ internal class OmniremoteAdapter(
   private val refreshLock = Any()
   @Volatile private var cached: Cached? = null
 
+  private fun fresh(): Catalog? = cached?.takeIf {
+    now() - it.at < if (it.catalog.error == null) 60_000 else 5_000
+  }?.catalog
+
+  fun cachedCatalog(context: Context): Catalog? =
+    if (OmniremoteClient.installed(context)) fresh() else Catalog(error = OmniremoteClient.NOT_INSTALLED)
+
   fun catalog(context: Context, refresh: Boolean = false): Catalog {
     // Some preview and availability surfaces run synchronously on the UI thread.
     if (Looper.myLooper() == Looper.getMainLooper())
-      return cached?.catalog ?: Catalog(error = "Consultá la conexión con OmniRemote desde Configuración.")
+      return cachedCatalog(context) ?: Catalog(error = "Consultá la conexión con OmniRemote desde Configuración.")
     return synchronized(refreshLock) {
-      cached?.takeUnless { refresh || now() - it.at >= if (it.catalog.error == null) 60_000 else 5_000 }?.catalog
-        ?: readCatalog(context).also { cached = Cached(now(), it) }
+      if (!refresh) fresh()?.let { return@synchronized it }
+      readCatalog(context).also { cached = Cached(now(), it) }
     }
   }
 

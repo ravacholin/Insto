@@ -208,7 +208,11 @@ class MainViewModel @JvmOverloads constructor(
     verifier = groqInterpreter, fallback = groqFallback ?: groqInterpreter, lookupLearnedPhrase = learnedPhrases::lookup,
     lookupLearnedPattern = learnedPhrases::lookupPattern, operationalContext = operationalContext,
     remoteRoute = { request, decision ->
-      withContext(Dispatchers.IO) { omniremote.resolve(request.text, request.now, decision) }
+      val cached = omniremote.resolveCached(request.text, request.now, decision) {
+        com.example.phone.InstinctDeviceCapabilities.omniremote.cachedCatalog(application)
+      }
+      if (!cached.needsDiscovery) cached.result
+      else withContext(Dispatchers.IO) { omniremote.resolve(request.text, request.now, decision) }
     })
   private var learningPreview: InterpretationRequest? = null
   /** A model interpretation executed without confirmation: an example for learned structures once it succeeds. */

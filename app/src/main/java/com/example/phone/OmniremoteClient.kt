@@ -174,6 +174,14 @@ internal class OmniremoteClient(
     const val INCOMPATIBLE = "La versión instalada de OmniRemote no ofrece la API local compatible."
 
     fun android(context: Context) = OmniremoteClient({ BinderLink.open(context.applicationContext) })
+
+    fun installed(context: Context): Boolean = try {
+      @Suppress("DEPRECATION")
+      context.packageManager.getPackageInfo(OMNIREMOTE_PACKAGE, 0)
+      true
+    } catch (_: PackageManager.NameNotFoundException) {
+      false
+    }
     private fun rejected(message: String) = PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED)
     private fun uncertain(reason: String? = null) = PhoneActionResult(
       listOfNotNull("OmniRemote no pudo confirmar el resultado. Revisá el dispositivo antes de repetir la orden.", reason).joinToString(" "),
@@ -277,9 +285,7 @@ private class BinderLink(private val context: Context) : OmniremoteClient.Link, 
     private val calls = ThreadPoolExecutor(0, 8, 30, TimeUnit.SECONDS, java.util.concurrent.SynchronousQueue())
 
     fun open(context: Context): BinderLink {
-      @Suppress("DEPRECATION")
-      try { context.packageManager.getPackageInfo(OMNIREMOTE_PACKAGE, 0) }
-      catch (_: PackageManager.NameNotFoundException) { throw OmniremoteFailure(OmniremoteClient.NOT_INSTALLED) }
+      if (!OmniremoteClient.installed(context)) throw OmniremoteFailure(OmniremoteClient.NOT_INSTALLED)
       val link = BinderLink(context)
       val intent = Intent("$OMNIREMOTE_PACKAGE.BIND_EXTERNAL_CONTROL")
         .setComponent(ComponentName(OMNIREMOTE_PACKAGE, "com.example.external.RemoteCommandService"))

@@ -30,6 +30,11 @@ class CapabilityCatalogTest {
       stopwatch_show stopwatch_start temporary_mode temporary_mode_end text_share timer timer_dismiss
       timer_pause timer_resume timer_update timers_show torch_off torch_on unsupported vibrate_on
       volume_down volume_set volume_up wifi_off wifi_on workflow youtube
+      omniremote_state omniremote_power omniremote_key omniremote_text omniremote_volume omniremote_mute
+      omniremote_open_app omniremote_open_brightness omniremote_open_brightness_adb omniremote_open_bluetooth_audio
+      omniremote_sleep_for omniremote_sleep_at omniremote_sleep_extend omniremote_sleep_cancel
+      omniremote_mac_open_link omniremote_mac_media_list omniremote_mac_media_state omniremote_mac_media_key
+      omniremote_mac_media_reveal
     """.trim().split(Regex("\\s+")).toSet()
     val actualIds = criteria.keys().asSequence().toSet()
     assertEquals(baselineIds, actualIds)

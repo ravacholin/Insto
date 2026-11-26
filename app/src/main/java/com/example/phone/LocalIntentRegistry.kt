@@ -337,7 +337,7 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
           examples = operation.examples, parameters = parameters, permissions = emptyList(), mechanism = "OmniRemote · Binder v1",
           expectedResult = "Resultado informado por OmniRemote para el destino",
           parameterContext = operation.capability, prompt = "Indicá la acción y el dispositivo de OmniRemote.",
-          decisionDescription = "$description. Solo si el pedido se refiere a una TV o Mac controlada por OmniRemote.",
+          decisionDescription = "Solo para una TV o Mac en OmniRemote. Ejemplo: ${operation.examples.first()}.",
           decisionParameters = emptyList(), accepts = { OmniremoteCommands.isRemote(it) && (it as PhoneCommand.Platform).argument == operation.capability })
       }
     }

@@ -240,15 +240,10 @@ object InstinctProposalIntake {
       return
     }
     val sentAt = if (outcome.orders.any(InstinctQuestion::isRelated)) view.latestMessage()?.sentAt else null
-    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() && omniInstalled(app)) {
+    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() && OmniremoteClient.installed(app)) {
       remoteIntake.launch { acceptWhatsApp(app, outcome, sentAt, replyHandle) }
     } else acceptWhatsApp(app, outcome, sentAt, replyHandle)
   }
-
-  private fun omniInstalled(app: Context): Boolean = runCatching {
-    @Suppress("DEPRECATION")
-    app.packageManager.getPackageInfo(OMNIREMOTE_PACKAGE, 0)
-  }.isSuccess
 
   private fun acceptWhatsApp(app: Context, outcome: InstinctProposalFilter.Outcome.Accepted, sentAt: Long?,
     replyHandle: () -> InstinctReplyHandle?) {
