@@ -60,15 +60,23 @@ internal class OmniremoteAdapter(
     val id = OmniremoteCommands.targetId(params.getString("device"))
       ?: return PhoneActionResult("El ID del dispositivo de OmniRemote es inválido.", outcome = PhoneActionOutcome.REJECTED)
     val (wire, args) = OmniremoteCommands.request(spec.id, params)
+    val label = cached?.catalog?.devices?.firstOrNull { it.id == id }?.label
     val result = client(context).execute(executionId, id, wire, args)
     if (result.outcome == PhoneActionOutcome.REJECTED) cached = null
-    return result
+    return result.withTarget(label)
   }
 
   override fun observe(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult? {
     val (wire, _) = OmniremoteCommands.request(spec.id, params)
-    return client(context).observe(executionId, wire).takeIf { it.verifiedLocally || it.outcome == PhoneActionOutcome.HANDOFF }
+    val label = cached?.catalog?.devices?.firstOrNull { it.target == params.getString("device") }?.label
+    return client(context).observe(executionId, wire)
+      .takeIf { it.verifiedLocally || it.outcome == PhoneActionOutcome.HANDOFF }?.withTarget(label)
   }
+
+  fun displayTarget(id: String): String? = cached?.catalog?.devices?.firstOrNull { it.target == id }?.label
+
+  private fun PhoneActionResult.withTarget(label: String?): PhoneActionResult =
+    if (label.isNullOrBlank()) this else copy(message = "$label · $message")
 
   private fun blocked(reason: String) = InstinctDeviceCapabilities.Block(reason, pending = false)
 }

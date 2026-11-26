@@ -100,7 +100,7 @@ internal class OmniremoteRouting(
   private fun resolveStep(source: String, folded: String, snapshot: OmniremoteAdapter.Catalog,
     preferences: OmniremotePreferences.Settings, inherited: List<Long>, decision: String?, background: Boolean): Step? {
     val explicit = generic.findAll(folded).toList().ifEmpty {
-      listOfNotNull(bareTv.find(folded, folded.indexOf(' ').coerceAtLeast(0)))
+      if (powerHead.containsMatchIn(folded)) listOfNotNull(bareTv.find(folded)) else emptyList()
     }
     val all = allTv.containsMatchIn(folded)
     val selected = linkedSetOf<Long>()

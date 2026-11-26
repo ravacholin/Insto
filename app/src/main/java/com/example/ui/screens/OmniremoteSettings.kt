@@ -82,12 +82,10 @@ internal fun OmniremoteSettings() {
         Text("${device.type} · ${device.target} · ${device.commands.sorted().joinToString()}",
           style = MaterialTheme.typography.bodySmall)
         if (device.apps.isNotEmpty()) Text(device.apps.joinToString { it.name }, style = MaterialTheme.typography.bodySmall)
-        if (device.television) {
-          Row {
-            Switch(checked = primary, onCheckedChange = { primary = it })
-            Spacer(Modifier.width(8.dp))
-            Text("Televisor predeterminado")
-          }
+        Row {
+          Switch(checked = primary, onCheckedChange = { primary = it })
+          Spacer(Modifier.width(8.dp))
+          Text("Dispositivo predeterminado")
         }
         OutlinedTextField(value = aliases, onValueChange = { aliases = it }, singleLine = true,
           label = { Text("Aliases separados por coma") })

@@ -92,6 +92,15 @@ class OmniremoteRoutingTest {
     assertNull(offline.resolve("Bajá el volumen", clock))
   }
 
+  @Test fun `a Mac order cannot resolve to a TV in the named room`() {
+    assertTrue(route.resolve("Apagá la Mac del dormitorio", clock) is InterpretationResult.Rejected)
+  }
+
+  @Test fun `a phone app containing TV in its name keeps its full name`() {
+    assertNull(route.resolve("Abrí Apple TV", clock))
+    assertEquals("omni:7", params(direct("Prendé tele")).getString("device"))
+  }
+
   private fun direct(text: String) = (route.resolve(text, clock) as InterpretationResult.Direct).command
   private fun params(command: PhoneCommand) = JSONObject((command as PhoneCommand.Platform).content!!)
   private fun tv(id: Long, name: String, room: String, app: Long) = OmniremoteClient.Device(
@@ -170,6 +179,40 @@ class OmniremoteExecutionTest {
     val result = client.execute(id, 42, "KEY", JSONObject().put("key", "MUTE"))
     assertEquals(1, executions)
     assertEquals(PhoneActionOutcome.UNCERTAIN, result.outcome)
+  }
+
+  @Test fun `catalog follows provider cursors and keeps app ids scoped to each device`() {
+    val deviceId = 9_007_199_254_740_993L
+    val appId = Long.MAX_VALUE
+    val base = JSONObject().put("deviceId", deviceId).put("name", "Living")
+      .put("room", "Casa").put("type", "SAMSUNG_TIZEN")
+    val cursors = mutableListOf<Long>()
+    val api = OmniremoteClient(open = { link { method, args ->
+      val data = when (method) {
+        "listDevices" -> {
+          val after = args[1] as Long
+          cursors += after
+          JSONObject().put("devices", if (after == 0L) org.json.JSONArray().put(base) else org.json.JSONArray())
+            .put("nextAfterId", if (after == 0L) deviceId else JSONObject.NULL)
+        }
+        "getDevice" -> {
+          assertEquals(deviceId, args[1])
+          JSONObject(base.toString()).put("commands", org.json.JSONArray(listOf("OPEN_APP")))
+            .put("keys", org.json.JSONArray()).put("stateFields", org.json.JSONArray()).put("canScheduleExactAlarms", true)
+        }
+        "listApps" -> {
+          assertEquals(deviceId, args[1])
+          val app = JSONObject().put("appId", appId).put("name", "YouTube").put("category", "Video").put("favorite", true)
+          JSONObject().put("apps", org.json.JSONArray().put(app)).put("nextAfterId", JSONObject.NULL)
+        }
+        else -> error(method)
+      }
+      JSONObject().put("apiVersion", 1).put("status", "VERIFIED").put("code", "OK").put("data", data).toString()
+    } }, now = { 100L }, pause = {})
+    val device = api.devices().single()
+    assertEquals(listOf(0L, deviceId), cursors)
+    assertEquals(deviceId, device.id)
+    assertEquals(appId, device.apps.single().id)
   }
 
   private fun reply(status: String, code: String, id: String, data: JSONObject? = null) =

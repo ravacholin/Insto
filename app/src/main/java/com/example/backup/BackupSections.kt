@@ -8,6 +8,7 @@ import com.example.data.VolumeKeyTrigger
 import com.example.data.WhatsAppFlavor
 import com.example.phone.ConfiguredRoutine
 import com.example.phone.ConfiguredRoutineStore
+import com.example.phone.OmniremoteCommands
 import com.example.phone.PhoneCommandParser
 import com.example.whatsapp.PhoneNumberUtils
 import org.json.JSONArray
@@ -286,7 +287,7 @@ class RoutinesSection(private val store: ConfiguredRoutineStore) : BackupSection
   override val category = BackupCategory.ROUTINES
 
   override suspend fun export(): JSONObject? {
-    val routines = store.read()
+    val routines = store.read().filterNot(::remoteRoutine)
     if (routines.isEmpty()) return null
     return JSONObject().put("routines", JSONArray(ConfiguredRoutineStore.encode(routines)))
   }
@@ -296,7 +297,7 @@ class RoutinesSection(private val store: ConfiguredRoutineStore) : BackupSection
 
   private fun parse(json: JSONObject): List<ConfiguredRoutine> {
     val array = json.optJSONArray("routines") ?: JSONArray()
-    return try { ConfiguredRoutineStore.decode(array.toString()) }
+    return try { ConfiguredRoutineStore.decode(array.toString()).filterNot(::remoteRoutine) }
       catch (error: IllegalArgumentException) { throw IllegalArgumentException(error.message?.takeIf { it.length < 120 } ?: "Hay rutinas no válidas.") }
       catch (error: org.json.JSONException) { throw IllegalArgumentException("Hay rutinas dañadas.") }
   }
@@ -319,9 +320,13 @@ class RoutinesSection(private val store: ConfiguredRoutineStore) : BackupSection
       if (added.isNotEmpty()) changes += "Se agregan ${added.size} rutinas."
       if (kept > 0) attention += "$kept rutinas del respaldo tienen el mismo nombre que una tuya; se conservaron las tuyas."
     } else {
-      final = incoming
-      changes += "Se restauran ${incoming.size} rutinas."
-      if (current.isNotEmpty()) warnings += "Se reemplazan tus ${current.size} rutinas actuales."
+      val local = current.filter(::remoteRoutine)
+      val protected = local.map { PhoneCommandParser.normalize(it.name) }.toSet()
+      val transferable = incoming.filter { PhoneCommandParser.normalize(it.name) !in protected }
+      final = local + transferable
+      changes += "Se restauran ${transferable.size} rutinas."
+      if (local.isNotEmpty()) attention += "Se conservan ${local.size} rutinas con dispositivos de OmniRemote."
+      if (current.size > local.size) warnings += "Se reemplazan ${current.size - local.size} rutinas actuales."
     }
     ConfiguredRoutineStore.decode(ConfiguredRoutineStore.encode(final)) // The final list must be valid as a whole.
     return change(changes, warnings, attention,
@@ -389,3 +394,6 @@ class PlacesSection(private val access: PlacesAccess) : BackupSection {
       commit = { save.forEach { (alias, address) -> access.save(alias, address) }; remove.forEach(access::remove) })
   }
 }
+
+private fun remoteRoutine(routine: ConfiguredRoutine): Boolean =
+  routine.commands.any(OmniremoteCommands::isRemote)

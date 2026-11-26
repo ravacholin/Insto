@@ -247,12 +247,21 @@ class MainViewModel @JvmOverloads constructor(
     val active = activeWorkflow()
     val step = active?.steps?.getOrNull(active.cursor)
     floatingState.value = floatingState.value.copy(
-      workflowLines = snapshot?.steps?.mapIndexed { index, item -> "${index + 1}. ${PhoneCommandCodec.summary(item.command)}${CapabilityRequirements.missing(getApplication(),item.command).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: ""} · ${when(item.status){StepStatus.PENDING->"pendiente";StepStatus.EXECUTING->"en curso";StepStatus.COMPLETED->"completado";StepStatus.SENT->"enviado · efecto sin confirmar";StepStatus.HANDED_OFF->"entregado · revisá la app";StepStatus.WAITING_INPUT->"requiere tu respuesta";StepStatus.FAILED->"falló";StepStatus.UNCERTAIN->"resultado incierto · revisá antes de seguir";StepStatus.CANCELLED->"cancelado"}}" } ?: emptyList(),
+      workflowLines = snapshot?.steps?.mapIndexed { index, item -> "${index + 1}. ${workflowSummary(item.command)}${CapabilityRequirements.missing(getApplication(),item.command).takeIf {it.isNotEmpty()}?.joinToString(prefix=" · ",separator=" · ") ?: ""} · ${when(item.status){StepStatus.PENDING->"pendiente";StepStatus.EXECUTING->"en curso";StepStatus.COMPLETED->"completado";StepStatus.SENT->"enviado · efecto sin confirmar";StepStatus.HANDED_OFF->"entregado · revisá la app";StepStatus.WAITING_INPUT->"requiere tu respuesta";StepStatus.FAILED->"falló";StepStatus.UNCERTAIN->"resultado incierto · revisá antes de seguir";StepStatus.CANCELLED->"cancelado"}}" } ?: emptyList(),
       workflowActive = active != null,
       needsConfirmation = active?.confirmed == false || confirmation != null,
       workflowCanContinue = step?.status in listOf(StepStatus.HANDED_OFF, StepStatus.UNCERTAIN) || active?.confirmed == true && step?.status == StepStatus.PENDING,
       workflowCanRetry = step?.status in listOf(StepStatus.FAILED, StepStatus.WAITING_INPUT),
     )
+  }
+
+  private fun workflowSummary(command: PhoneCommand): String {
+    val summary = PhoneCommandCodec.summary(command)
+    if (!com.example.phone.OmniremoteCommands.isRemote(command)) return summary
+    val (_, params) = com.example.phone.InstinctCapabilities.platform(command as PhoneCommand.Platform)
+    val target = params.getString("device")
+    val label = com.example.phone.InstinctDeviceCapabilities.omniremote.displayTarget(target) ?: return summary
+    return summary.replaceFirst(" · $target · ", " · $label · ")
   }
 
   private fun previewWorkflow(commands: List<PhoneCommand>) {
