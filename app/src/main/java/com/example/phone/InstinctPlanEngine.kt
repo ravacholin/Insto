@@ -317,7 +317,7 @@ object InstinctPlanEngine {
         if (plan.sub >= actions.size) {
           val prefix = "${plan.block + 1}."
           val uncertain = spec.structured && journal(app).planSteps(plan.id)
-            .any { it.position.startsWith(prefix) && it.status == "incierta" }
+            .any { it.position.startsWith(prefix) && it.status in setOf("incierta", "enviada") }
           next(app, plan, succeeded = actions.isNotEmpty() && !uncertain)
         } else action(app, plan, actions[plan.sub])
       }
@@ -367,6 +367,8 @@ object InstinctPlanEngine {
     val rowId = ExecutionIds.of(message, 0)
     val row = runCatching { journal.get(rowId) }.getOrElse { return end(app, plan, PlanState.FAILED, InstinctPlanSpec.INVALID) }
     val persisted = decode(row)
+    if (row != null && row.state in setOf(ExecutionState.DISPATCHING, ExecutionState.VERIFYING) &&
+      persisted?.let(OmniremoteCommands::isRemote) == true) return readBack(app, plan, action, row, persisted)
     return when (val next = PlanStepPolicy.of(row, persisted?.let(ActionEffect::of))) {
       PlanStepPolicy.Next.Run -> runFresh(app, plan, action, line, message, row)
       PlanStepPolicy.Next.Verify -> readBack(app, plan, action, row!!, persisted)
@@ -472,9 +474,10 @@ object InstinctPlanEngine {
     if (!InstinctExecutions.move(app, row.executionId, ExecutionState.VERIFYING)) return false
     var observation = runCatching { verifier.verify(command, before, result) }
       .getOrDefault(Observation(OutcomeVerdict.INDETERMINATE, detail = "No se pudo leer el resultado."))
-    if (structured && !needsActivity && observation.verdict == OutcomeVerdict.NOT_OBSERVABLE)
+    val remoteSent = OmniremoteCommands.isRemote(command) && result.outcome == PhoneActionOutcome.HANDOFF
+    if (structured && !needsActivity && !remoteSent && observation.verdict == OutcomeVerdict.NOT_OBSERVABLE)
       observation = Observation(OutcomeVerdict.INDETERMINATE, detail = "Insto no pudo comprobar el resultado local.")
-    val entry = ActionOutcomeRules.ack(line, result, observation)
+    val entry = if (remoteSent) AckEntry(AckKind.OK, line, result.message) else ActionOutcomeRules.ack(line, result, observation)
     val state = ActionOutcomeRules.state(observation)
     if (!InstinctExecutions.move(app, row.executionId, state, result = entry.message,
       reason = observation.detail.takeIf { state == ExecutionState.FAILED || state == ExecutionState.UNCERTAIN },
@@ -482,7 +485,7 @@ object InstinctPlanEngine {
       executionData = result.executionData.takeIf { state == ExecutionState.VERIFIED })) return false
     return when (state) {
       ExecutionState.VERIFIED, ExecutionState.HANDED_OFF -> {
-        InstinctTrust.record(app, command, if (plan.approval == PlanApproval.PERSON) TrustEvent.CONFIRMADA else TrustEvent.EJECUTADA)
+        if (!remoteSent) InstinctTrust.record(app, command, if (plan.approval == PlanApproval.PERSON) TrustEvent.CONFIRMADA else TrustEvent.EJECUTADA)
         done(app, plan, line, journal.get(row.executionId) ?: row)
       }
       ExecutionState.UNCERTAIN -> true
@@ -535,7 +538,8 @@ object InstinctPlanEngine {
     } else null
     val journal = journal(app)
     if (reported != null || observation?.verdict == OutcomeVerdict.VERIFIED) {
-      if (!journal.verifyPlanDispatch(row, reported?.message ?: ExecutionRecoveryPolicy.SATISFIED, reported?.executionData)) return false
+      if (!journal.verifyPlanDispatch(row, reported?.message ?: ExecutionRecoveryPolicy.SATISFIED, reported?.executionData,
+          verified = reported?.outcome != PhoneActionOutcome.HANDOFF)) return false
       return done(app, plan, row.line, checkNotNull(journal.get(row.executionId)))
     }
     val reason = row.reason ?: ExecutionRecoveryPolicy.INTERRUPTED
@@ -556,7 +560,8 @@ object InstinctPlanEngine {
     }
     val detail = row.result ?: row.state.code
     val latency = row.dispatchLatencyMillis?.let { " · recepción a despacho: $it ms" }.orEmpty()
-    record(app, plan, plan.position, line, "ok", detail + latency, row.executionId)
+    val remoteSent = row.state == ExecutionState.HANDED_OFF && decode(row)?.let(OmniremoteCommands::isRemote) == true
+    record(app, plan, plan.position, line, if (remoteSent) "enviada" else "ok", detail + latency, row.executionId)
     val journal = journal(app)
     val moved = journal.updatePlan(plan.id, setOf(PlanState.RUNNING)) {
       it.copy(sub = it.sub + 1, fallback = false, stash = stash)

@@ -45,17 +45,18 @@ class ActionExecutionLedger {
 
   private var serial = 0L
   private val completed = mutableSetOf<Long>()
-  private val last = LinkedHashMap<PhoneCommand, DispatchState>()
+  private data class Outcome(val dispatch: DispatchState, val uncertain: Boolean)
+  private val last = LinkedHashMap<PhoneCommand, Outcome>()
 
   fun open(session: Long, command: PhoneCommand): Ticket = Ticket(session, command, ++serial)
 
   /** Records the outcome of [ticket]. False if it was already recorded: the duplicate must be ignored. */
-  fun complete(ticket: Ticket, outcome: PhoneActionOutcome): Boolean = complete(ticket, DispatchState.of(outcome))
+  fun complete(ticket: Ticket, outcome: PhoneActionOutcome): Boolean = complete(ticket, Outcome(DispatchState.of(outcome), outcome == PhoneActionOutcome.UNCERTAIN))
 
   /** Records a full result, so an unverified effect counts as [DispatchState.DISPATCHED_UNCERTAIN]. */
-  fun complete(ticket: Ticket, result: PhoneActionResult): Boolean = complete(ticket, DispatchState.of(result))
+  fun complete(ticket: Ticket, result: PhoneActionResult): Boolean = complete(ticket, Outcome(DispatchState.of(result), result.outcome == PhoneActionOutcome.UNCERTAIN || result.effectUnverified))
 
-  private fun complete(ticket: Ticket, state: DispatchState): Boolean {
+  private fun complete(ticket: Ticket, state: Outcome): Boolean {
     if (!completed.add(ticket.serial)) return false
     last.remove(ticket.command)
     last[ticket.command] = state
@@ -64,10 +65,12 @@ class ActionExecutionLedger {
     return true
   }
 
-  fun lastState(command: PhoneCommand): DispatchState? = last[command]
+  fun lastState(command: PhoneCommand): DispatchState? = last[command]?.dispatch
+
+  fun lastResultWasUncertain(command: PhoneCommand): Boolean = last[command]?.uncertain == true
 
   /** An automatic or implicit retry of [command] would risk repeating an effect that may already have happened. */
-  fun needsReconfirmation(command: PhoneCommand): Boolean = last[command] == DispatchState.DISPATCHED_UNCERTAIN
+  fun needsReconfirmation(command: PhoneCommand): Boolean = lastState(command) == DispatchState.DISPATCHED_UNCERTAIN
 
   private companion object { const val MAX_REMEMBERED = 32 }
 }

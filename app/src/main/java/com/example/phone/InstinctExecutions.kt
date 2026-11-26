@@ -33,10 +33,11 @@ object InstinctExecutions {
   /** Moves [executionId] to [state]; never throws. */
   fun move(context: Context, executionId: String?, state: ExecutionState, result: String? = null, reason: String? = null,
     attribution: ExecutionAttribution? = null, proposalId: Long? = null, occurrence: String? = null, reported: AckKind? = null,
-    from: Set<ExecutionState>? = null, executionData: String? = null): Boolean {
+    from: Set<ExecutionState>? = null, executionData: String? = null, command: PhoneCommand? = null): Boolean {
     if (executionId == null) return false
     val moved = runCatching {
-      journal(context).transition(executionId, state, result, reason, from = from, attribution = attribution,
+      journal(context).transition(executionId, state, result, reason, command = command?.let { PhoneCommandCodec.encode(it).toString() },
+        from = from, attribution = attribution,
         proposalId = proposalId, occurrence = occurrence, reported = reported, executionData = executionData)
     }.getOrDefault(false)
     if (moved && state.terminal) runCatching {

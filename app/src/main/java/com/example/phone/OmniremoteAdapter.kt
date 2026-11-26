@@ -1,87 +1,134 @@
 package com.example.phone
 
 import android.content.Context
+import android.os.Looper
+import android.os.SystemClock
+import android.util.AtomicFile
+import java.io.File
+import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Insto-side contract. A provider implementation needs documented operations, local authorization and read-back.
- * The production registry has no binding until Omniremote provides a compatible interface.
- */
-internal class OmniremoteAdapter(private val providers: List<Provider> = emptyList()) : InstinctCapabilityAdapter {
-  enum class Transport { LOCAL_API, APP_FUNCTION, ANDROID_INTENT }
-  enum class Control { POWER, VOLUME, MUTE }
+internal class OmniremoteAdapter(
+  private val client: (Context) -> OmniremoteClient = OmniremoteClient.Companion::android,
+  private val now: () -> Long = SystemClock::elapsedRealtime,
+) : InstinctCapabilityAdapter {
+  data class Catalog(val devices: List<OmniremoteClient.Device> = emptyList(), val error: String? = null)
 
-  sealed interface Setting {
-    data class Power(val on: Boolean) : Setting
-    data class Volume(val percent: Int) : Setting
-    data class Mute(val muted: Boolean) : Setting
-  }
+  private data class Cached(val at: Long, val catalog: Catalog)
+  private val refreshLock = Any()
+  @Volatile private var cached: Cached? = null
 
-  data class Television(val id: String, val controls: Set<Control>)
+  private fun fresh(): Catalog? = cached?.takeIf {
+    now() - it.at < if (it.catalog.error == null) 60_000 else 5_000
+  }?.catalog
 
-  interface Provider {
-    val transport: Transport
-    /** Must confirm the OS/provider access is present, including AppFunctions access when applicable. */
-    fun authorized(context: Context): Boolean
-    /** Return only locally authorized televisions, with stable provider-qualified IDs. */
-    fun televisions(context: Context): List<Television>
-    /** A headless absolute operation with no activity or permission prompt. */
-    fun set(context: Context, id: String, setting: Setting, executionId: String): PhoneActionResult
-    /** Compare the current state through the same authorized provider. Null means it could not be observed. */
-    fun read(context: Context, id: String, control: Control): Setting?
-  }
+  fun cachedCatalog(context: Context): Catalog? =
+    if (OmniremoteClient.installed(context)) fresh() else Catalog(error = OmniremoteClient.NOT_INSTALLED)
 
-  private fun candidates(context: Context, control: Control): List<Pair<Provider, Television>> =
-    providers.sortedBy { it.transport }.flatMap { provider ->
-      if (!provider.authorized(context)) emptyList() else provider.televisions(context)
-        .filter { control in it.controls && DEVICE_ID.matches(it.id) }
-        .map { provider to it }
+  fun catalog(context: Context, refresh: Boolean = false): Catalog {
+    // Some preview and availability surfaces run synchronously on the UI thread.
+    if (Looper.myLooper() == Looper.getMainLooper())
+      return cachedCatalog(context) ?: Catalog(error = "Consultá la conexión con OmniRemote desde Configuración.")
+    return synchronized(refreshLock) {
+      if (!refresh) fresh()?.let { return@synchronized it }
+      readCatalog(context).also { cached = Cached(now(), it) }
     }
+  }
+
+  private fun readCatalog(context: Context): Catalog = try {
+    Catalog(client(context).devices())
+  } catch (error: OmniremoteFailure) {
+    Catalog(error = error.reason)
+  } catch (_: SecurityException) {
+    Catalog(error = OmniremoteClient.UNAUTHORIZED)
+  } catch (_: Exception) {
+    Catalog(error = "No se pudo leer el catálogo local de OmniRemote.")
+  }
 
   override fun targets(context: Context, spec: InstinctCapabilities.Spec): List<String> =
-    candidates(context, control(spec.id)).map { it.second.id }.distinct().sorted()
+    catalog(context).devices.filter { it.advertises(OmniremoteCommands.operations.getValue(spec.id)) }.map { it.target }
 
   override fun blocker(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject?): InstinctDeviceCapabilities.Block? {
-    if (providers.isEmpty()) return unavailableOmniremote()
-    val targets = targets(context, spec)
-    return if (targets.isEmpty() || params != null && params.getString("device") !in targets)
-      InstinctDeviceCapabilities.Block("No hay un televisor autorizado para este control.", false) else null
+    val catalog = catalog(context)
+    catalog.error?.let { return blocked(it) }
+    if (params == null) return if (targets(context, spec).isEmpty())
+      blocked("OmniRemote no anunció ningún dispositivo compatible con este control.") else null
+    val id = OmniremoteCommands.targetId(params.getString("device"))
+    val device = catalog.devices.firstOrNull { it.id == id }
+      ?: return blocked("OmniRemote no encontró ese dispositivo. Revisá los dispositivos en Configuración.")
+    val (wire, args) = OmniremoteCommands.request(spec.id, params)
+    return if (device.supports(wire, args)) null
+    else if (wire in device.commands && wire in setOf("SLEEP_FOR", "SLEEP_AT") && !device.exactAlarms)
+      blocked("Habilitá las alarmas exactas para OmniRemote en Ajustes de Android.")
+    else blocked("OmniRemote no anuncia ese control para ${device.name}.")
   }
 
   override fun execute(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult {
-    val control = control(spec.id)
-    val id = params.getString("device")
-    val provider = candidates(context, control).firstOrNull { it.second.id == id }?.first
-      ?: return PhoneActionResult("No hay un televisor autorizado para este control.", outcome = PhoneActionOutcome.REJECTED)
-    val setting = setting(control, params)
-    val result = runCatching { provider.set(context, id, setting, executionId) }.getOrNull()
-    if (result?.outcome == PhoneActionOutcome.REJECTED || result?.outcome == PhoneActionOutcome.NEEDS_INPUT)
-      return result.copy(verifiedLocally = false)
-    return if (runCatching { provider.read(context, id, control) }.getOrNull() == setting) verified() else
-      PhoneActionResult("No pude comprobar el estado del televisor.", outcome = PhoneActionOutcome.UNCERTAIN)
+    val id = OmniremoteCommands.targetId(params.getString("device"))
+      ?: return PhoneActionResult("El ID del dispositivo de OmniRemote es inválido.", outcome = PhoneActionOutcome.REJECTED)
+    val (wire, args) = OmniremoteCommands.request(spec.id, params)
+    val label = cached?.catalog?.devices?.firstOrNull { it.id == id }?.label
+    val result = client(context).execute(executionId, id, wire, args)
+    if (result.outcome == PhoneActionOutcome.REJECTED) cached = null
+    return result.withTarget(label)
   }
 
   override fun observe(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult? {
-    val control = control(spec.id)
-    val id = params.getString("device")
-    val provider = candidates(context, control).firstOrNull { it.second.id == id }?.first ?: return null
-    return verified().takeIf { provider.read(context, id, control) == setting(control, params) }
+    val (wire, _) = OmniremoteCommands.request(spec.id, params)
+    val label = cached?.catalog?.devices?.firstOrNull { it.target == params.getString("device") }?.label
+    return client(context).observe(executionId, wire)
+      .takeIf { it.verifiedLocally || it.outcome == PhoneActionOutcome.HANDOFF }?.withTarget(label)
   }
 
-  private fun control(id: String) = when (id) {
-    "omniremote_power" -> Control.POWER
-    "omniremote_volume" -> Control.VOLUME
-    "omniremote_mute" -> Control.MUTE
-    else -> error("Control de Omniremote desconocido")
+  fun displayTarget(id: String): String? = cached?.catalog?.devices?.firstOrNull { it.target == id }?.label
+
+  private fun PhoneActionResult.withTarget(label: String?): PhoneActionResult =
+    if (label.isNullOrBlank()) this else copy(message = "$label · $message")
+
+  private fun blocked(reason: String) = InstinctDeviceCapabilities.Block(reason, pending = false)
+}
+
+/** Local aliases point at provider IDs. The provider remains the only source of device configuration. */
+internal class OmniremotePreferences(context: Context) {
+  data class Settings(val default: Long? = null, val aliases: Map<Long, List<String>> = emptyMap())
+
+  private val file = AtomicFile(File(context.applicationContext.noBackupFilesDir, "omniremote-devices.json"))
+
+  fun read(): Settings = synchronized(lock) {
+    runCatching {
+      val json = JSONObject(file.readFully().toString(Charsets.UTF_8))
+      val aliases = json.getJSONObject("aliases")
+      Settings(json.optLong("default").takeIf { it > 0 }, aliases.keys().asSequence().associate { id ->
+        val values = aliases.getJSONArray(id)
+        id.toLong() to (0 until values.length()).map(values::getString)
+      })
+    }.getOrDefault(Settings())
   }
 
-  private fun setting(control: Control, params: JSONObject): Setting = when (control) {
-    Control.POWER -> Setting.Power(params.getBoolean("on"))
-    Control.VOLUME -> Setting.Volume(params.getInt("percent"))
-    Control.MUTE -> Setting.Mute(params.getBoolean("muted"))
+  fun save(id: Long, aliases: List<String>, isDefault: Boolean) = synchronized(lock) {
+    require(id > 0)
+    val clean = aliases.map(String::trim).filter(String::isNotEmpty).distinctBy(PhoneCommandParser::normalize)
+    require(clean.size <= 10 && clean.all { it.length <= 80 && it.none(Char::isISOControl) &&
+      PhoneCommandParser.normalize(it).isNotEmpty() && !OmniremoteRouting.reservedAlias(it) }) {
+      "Ingresá hasta diez aliases distintos, de hasta 80 caracteres, que no sean nombres genéricos de dispositivos."
+    }
+    val previous = read()
+    val other = previous.aliases.filterKeys { it != id }
+    val existing = other.values.flatten().map(PhoneCommandParser::normalize).toSet()
+    require(clean.none { PhoneCommandParser.normalize(it) in existing }) { "Ese alias ya pertenece a otro dispositivo." }
+    val updated = if (clean.isEmpty()) other else other + (id to clean)
+    val default = if (isDefault) id else previous.default?.takeUnless { it == id }
+    val encoded = JSONObject().put("default", default ?: JSONObject.NULL)
+      .put("aliases", JSONObject().apply { updated.forEach { (target, labels) -> put(target.toString(), JSONArray(labels)) } })
+    val stream = file.startWrite()
+    try {
+      stream.write(encoded.toString().toByteArray(Charsets.UTF_8))
+      file.finishWrite(stream)
+    } catch (error: Exception) {
+      file.failWrite(stream)
+      throw error
+    }
   }
 
-  private fun verified() = PhoneActionResult("Estado del televisor comprobado.", verifiedLocally = true)
-
-  companion object { private val DEVICE_ID = Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}") }
+  companion object { private val lock = Any() }
 }

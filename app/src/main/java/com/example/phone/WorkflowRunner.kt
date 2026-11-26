@@ -2,10 +2,12 @@ package com.example.phone
 
 import java.util.UUID
 
-enum class StepStatus { PENDING, EXECUTING, COMPLETED, HANDED_OFF, WAITING_INPUT, FAILED, UNCERTAIN, CANCELLED }
-data class WorkflowStep(val command: PhoneCommand, val status: StepStatus = StepStatus.PENDING, val message: String = "")
+enum class StepStatus { PENDING, EXECUTING, COMPLETED, SENT, HANDED_OFF, WAITING_INPUT, FAILED, UNCERTAIN, CANCELLED }
+data class WorkflowStep(val command: PhoneCommand, val status: StepStatus = StepStatus.PENDING,
+  val message: String = "", val dispatchAttempt: Int = 0)
 data class WorkflowSnapshot(val id: String = UUID.randomUUID().toString(), val steps: List<WorkflowStep>, val cursor: Int = 0, val confirmed: Boolean = false, val cancelled: Boolean = false) {
   val finished: Boolean get() = cancelled || cursor >= steps.size
+  internal fun remoteExecutionId(): String = "$id-$cursor-${steps[cursor].dispatchAttempt}"
 }
 
 /** The pre-dispatch write is synchronous. Persistence failure prevents the side effect. */
@@ -44,10 +46,11 @@ class WorkflowRunner(initial: WorkflowSnapshot? = null, private val save: (Workf
       result.outcome == PhoneActionOutcome.NEEDS_INPUT -> StepStatus.WAITING_INPUT
       result.outcome == PhoneActionOutcome.UNCERTAIN -> StepStatus.UNCERTAIN
       result.outcome == PhoneActionOutcome.REJECTED -> StepStatus.FAILED
-      result.outcome == PhoneActionOutcome.HANDOFF -> StepStatus.HANDED_OFF
+      result.outcome == PhoneActionOutcome.HANDOFF ->
+        if (OmniremoteCommands.isRemote(step.command)) StepStatus.SENT else StepStatus.HANDED_OFF
       else -> StepStatus.COMPLETED
     }
-    replace(step.copy(status = status, message = result.message), advance = status == StepStatus.COMPLETED)
+    replace(step.copy(status = status, message = result.message), advance = status == StepStatus.COMPLETED || status == StepStatus.SENT)
   }
   fun resumeHandoff() {
     val s = snapshot ?: return
@@ -55,8 +58,22 @@ class WorkflowRunner(initial: WorkflowSnapshot? = null, private val save: (Workf
   }
   fun retry() {
     val s = snapshot ?: return
-    if (!s.finished && s.steps[s.cursor].status in listOf(StepStatus.FAILED, StepStatus.WAITING_INPUT))
-      replace(s.steps[s.cursor].copy(status = StepStatus.PENDING))
+    if (s.finished) return
+    val step = s.steps[s.cursor]
+    if (step.status in listOf(StepStatus.FAILED, StepStatus.WAITING_INPUT)) {
+      val attempt = step.dispatchAttempt + if (OmniremoteCommands.isRemote(step.command)) 1 else 0
+      replace(step.copy(status = StepStatus.PENDING, dispatchAttempt = attempt))
+    }
+  }
+  internal fun recoverRemote(id: String, result: PhoneActionResult) {
+    val s = snapshot ?: return
+    if (s.finished || s.steps[s.cursor].status != StepStatus.UNCERTAIN || s.remoteExecutionId() != id) return
+    val status = when {
+      result.verifiedLocally -> StepStatus.COMPLETED
+      result.outcome == PhoneActionOutcome.HANDOFF -> StepStatus.SENT
+      else -> return
+    }
+    replace(s.steps[s.cursor].copy(status = status, message = result.message), advance = true)
   }
   /** Explicitly acknowledge an uncertain effect; never replay it. */
   fun acknowledgeUncertain() {

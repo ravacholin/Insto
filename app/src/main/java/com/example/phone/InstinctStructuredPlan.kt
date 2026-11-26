@@ -12,6 +12,7 @@ internal data class PlanInvocation(val capability: String, val parameters: Strin
   val spec get() = InstinctCapabilities.specs.getValue(capability)
 
   fun review(): String {
+    if (capability in OmniremoteCommands.operations) return PhoneCommandCodec.summary(command())
     val params = JSONObject(parameters)
     fun instant(key: String) = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
       .format(java.util.Date(params.getLong(key)))
@@ -30,9 +31,6 @@ internal data class PlanInvocation(val capability: String, val parameters: Strin
       "clock_alarm" -> String.format(java.util.Locale.ROOT, "%02d:%02d", params.getInt("hour"), params.getInt("minute"))
       "insto_clock_cancel" -> params.getString("clockId")
       "volume" -> "${params.getInt("percent")} %"
-      "omniremote_power" -> "${params.getString("device")} · ${if (params.getBoolean("on")) "encender" else "apagar"}"
-      "omniremote_volume" -> "${params.getString("device")} · ${params.getInt("percent")} %"
-      "omniremote_mute" -> "${params.getString("device")} · ${if (params.getBoolean("muted")) "silenciar" else "activar sonido"}"
       else -> ""
     }
     return listOf(capability, target).filter(String::isNotBlank).joinToString(" · ")

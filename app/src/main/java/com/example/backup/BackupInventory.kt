@@ -70,6 +70,7 @@ object BackupInventory {
     f("instinct-question-lock-screen", Class.CONFIG, BackupCategory.INSTINCT, "visibilidad de preguntas en la pantalla bloqueada"),
     f("instinct-autonomy.json", Class.CONFIG, BackupCategory.INSTINCT, "autonomía por categoría (incluye Preguntas), horas de silencio y su excepción"),
     f("instinct-calendar-access.json", Class.DEVICE_BOUND, null, "autorizaciones locales de lectura y escritura por id de calendario"),
+    f("omniremote-devices.json", Class.DEVICE_BOUND, null, "aliases y dispositivo predeterminado vinculados a IDs locales de OmniRemote"),
     f("instinct-routines.json", Class.CONFIG, BackupCategory.INSTINCT, "rutinas que Instinct puede ejecutar"),
     f("instinct-log-url", Class.CONFIG, BackupCategory.INSTINCT, "URL completa del Apps Script"),
     f("instinct-log-token", Class.SECRET, BackupCategory.INSTINCT, "token de la bitácora"),

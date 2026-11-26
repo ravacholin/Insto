@@ -31,6 +31,7 @@ class GeminiCoordinator(
   private val speculation: FallbackSpeculation = FallbackSpeculation.WHEN_DEGRADED,
   /** Observes Gemini extraction only to decide speculation; it never skips an extraction. */
   private val extractionHealth: DecisionsCircuitBreaker = DecisionsCircuitBreaker(),
+  private val remoteRoute: suspend (InterpretationRequest, String?) -> InterpretationResult? = { _, _ -> null },
 ) {
   /**
    * Every interpretation, whatever produced it, passes the final [SemanticCommandGuard] here, once, before the
@@ -48,6 +49,11 @@ class GeminiCoordinator(
     stage: (String) -> Unit,
   ): InterpretationResult {
     RequestSafetyPolicy.refusal(request.text)?.let { return it.asResult() }
+    val remote = if (request.draft == null) remoteRoute(request, null) else null
+    val remoteFallback = (remote as? InterpretationResult.Clarification)?.takeIf { it.context == "omniremote_decision" }
+    if (remote != null && remoteFallback == null) return remote
+    if (remoteFallback != null && !router.isEnabled())
+      return InterpretationResult.Rejected(remoteFallback.prompt, RejectionReason.NOT_UNDERSTOOD)
     val canDeferToInstinct = canDeferToInstinct(request, local)
     val indirectPhoneRequest = RequestSafetyPolicy.isIndirectPhoneRequest(request.text)
     val steps = ConversationSession.splitSteps(request.text)
@@ -78,7 +84,7 @@ class GeminiCoordinator(
         }
       }
     val isSingleNewTurn = request.draft == null && steps.size == 1
-    if (isSingleNewTurn) {
+    if (isSingleNewTurn && remoteFallback == null) {
       when (local) {
         is PhoneRoute.Local -> {
           // Context only fills the media app of a music request that named none; the parsed order prevails.
@@ -99,7 +105,7 @@ class GeminiCoordinator(
         else -> Unit
       }
     }
-    if (local != PhoneRoute.Cancel && local !is PhoneRoute.Local && local !is PhoneRoute.Clarify &&
+    if (remoteFallback == null && local != PhoneRoute.Cancel && local !is PhoneRoute.Local && local !is PhoneRoute.Clarify &&
       !(local is PhoneRoute.Unsupported && !local.recoverable)) {
       lookupLearnedPhrase(request)?.let {
         currentCoroutineContext().ensureActive()
@@ -137,8 +143,16 @@ class GeminiCoordinator(
       is PhoneRoute.Unsupported -> InterpretationResult.Rejected(local.message, local.reason)
       PhoneRoute.Cancel -> InterpretationResult.Rejected("Pedido cancelado.", RejectionReason.UNSAFE_OR_HYPOTHETICAL)
     }
-    if (isSingleNewTurn && local is PhoneRoute.Unsupported && !local.recoverable)
+    if (remoteFallback == null && isSingleNewTurn && local is PhoneRoute.Unsupported && !local.recoverable)
       return InterpretationResult.Rejected(local.message, local.reason)
+    if (remoteFallback != null) {
+      val fallback = InterpretationResult.Rejected(remoteFallback.prompt, RejectionReason.NOT_UNDERSTOOD)
+      val attempt = breaker.acquire() ?: return fallback
+      val decision = try { classify(request, attempt) } catch (_: DecisionException) { return fallback }
+      if (decision.choice !in OmniremoteCommands.operations ||
+        router.policy.action(decision, true, request.text) != DecisionAction.ACCEPT) return fallback
+      return remoteRoute(request, decision.choice) ?: fallback
+    }
     if (request.modelInput().length > 16000) return unavailableRoute(request, local,
       GeminiFailureKind.INVALID_REQUEST, "El pedido o su contexto es demasiado largo. Se conserva para editarlo.")
     val start = System.nanoTime()
@@ -211,6 +225,10 @@ class GeminiCoordinator(
             router.recoverSearch(request.text)?.let { return@withTimeout InterpretationResult.Direct(it.command) }
           if (request.draft == null && steps.size > 1 && decision.choice != "workflow")
             return@withTimeout InterpretationResult.Rejected("No pude interpretar todos los pasos del pedido")
+          if (decision.choice in OmniremoteCommands.operations) {
+            return@withTimeout remoteRoute(request, decision.choice)
+              ?: InterpretationResult.Rejected("Indicá el dispositivo de OmniRemote y la acción concreta.", RejectionReason.NOT_UNDERSTOOD)
+          }
           if (request.draft == null && router.hasIntent(decision.choice)) {
             when (val registered = router.resolve(decision.choice, request.text)) {
               is PhoneRoute.Local -> return@withTimeout if (verifiedByGroq)

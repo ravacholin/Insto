@@ -1,4 +1,5 @@
 package com.example.phone
+import kotlinx.coroutines.launch
 
 import android.Manifest
 import android.app.Notification
@@ -200,6 +201,9 @@ object InstinctProposalIntake {
   @Volatile var lastReplyAt: Long = 0L
     private set
 
+  private val remoteIntake = kotlinx.coroutines.CoroutineScope(
+    kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO.limitedParallelism(1))
+
   private val whatsAppPackages = setOf("com.whatsapp", "com.whatsapp.w4b")
 
   /** [replyHandle] is read only for an accepted message, and only when replies are on and go to the chat. */
@@ -235,17 +239,24 @@ object InstinctProposalIntake {
       log(counters() + " only_mailbox=1")
       return
     }
-    val parser = PhoneCommandParser()
+    val sentAt = if (outcome.orders.any(InstinctQuestion::isRelated)) view.latestMessage()?.sentAt else null
+    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() && OmniremoteClient.installed(app)) {
+      remoteIntake.launch { acceptWhatsApp(app, outcome, sentAt, replyHandle) }
+    } else acceptWhatsApp(app, outcome, sentAt, replyHandle)
+  }
+
+  private fun acceptWhatsApp(app: Context, outcome: InstinctProposalFilter.Outcome.Accepted, sentAt: Long?,
+    replyHandle: () -> InstinctReplyHandle?) {
     val routines = InstinctRoutineGrants(app).access()
     // One wall clock for the grammar and the deferred orders it may produce.
     val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
-    val checks = outcome.orders.map { InstinctProposalValidator.check(it, parser, now, routines) }
+    val checks = outcome.orders.map { InstinctProposalValidator.check(app, it, now, routines) }
     if (checks.none { it !is ProposalCheck.Invalid }) diagnose(Diagnosis.NOT_UNDERSTOOD)
     val fingerprint = InstinctProposalCenter.fingerprint(app) ?: return
     // 1.20.0: every accepted line gets its own row before anything runs; without the journal nothing runs.
     val messageId = if (checks.any { InstinctQuestion.isRelated(it.order) }) {
       // The same WhatsApp notification can be posted after process death. Reuse its message identity in the journal.
-      ExecutionIds.whatsappQuestion(outcome.message, view.latestMessage()?.sentAt)
+      ExecutionIds.whatsappQuestion(outcome.message, sentAt)
     } else ExecutionIds.whatsapp(outcome.message, InstinctScheduler.wallClock(), java.util.UUID.randomUUID().toString())
     val records = try {
       (InstinctExecutions.journal(app).admit(messageId, ExecutionTransport.WHATSAPP, outcome.orders, outcome.message)
@@ -309,10 +320,9 @@ object InstinctProposalIntake {
     val records = if (source == ProposalSource.BUZON) {
       val (local, others) = admitted.partition { InstinctQuestion.isRelated(it.line) || InstinctProposalValidator.isContextOrder(it.line) }
       if (local.isNotEmpty()) {
-        val parser = PhoneCommandParser()
         val checks = local.map {
           val received = java.util.Calendar.getInstance().apply { timeInMillis = it.receivedAt }
-          InstinctProposalValidator.check(it.line, parser, received)
+          InstinctProposalValidator.check(app, it.line, received)
         }
         local.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.VALIDATED) }
         val ticket = InstinctProposalCenter.openReply(app, checks.count { !InstinctQuestion.isRelated(it.order) }, { null }, message, logOnly = true)
@@ -329,10 +339,12 @@ object InstinctProposalIntake {
       } else records.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.FAILED, reason = NO_CONTACT) }
       return
     }
-    val parser = PhoneCommandParser()
     val routines = InstinctRoutineGrants(app).access()
     val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
-    val checks = records.map { InstinctProposalValidator.check(it.line, parser, now, routines) }
+    val checks = records.map {
+      val persisted = it.remoteCommand().takeIf { _ -> it.state == ExecutionState.READY }
+      if (persisted != null) ProposalCheck.Valid(it.line, persisted) else InstinctProposalValidator.check(app, it.line, now, routines)
+    }
     records.forEach { InstinctExecutions.move(app, it.executionId, ExecutionState.VALIDATED) }
     val logOnly = source == ProposalSource.BUZON || records.any { it.transport != ExecutionTransport.WHATSAPP }
     val ticket = InstinctProposalCenter.openReply(app, checks.count { !InstinctQuestion.isRelated(it.order) }, { null }, message, logOnly = logOnly)
@@ -400,6 +412,8 @@ object InstinctProposalCenter {
     return fingerprint(context)
   }
   internal var PREFS_WAIT_MILLIS = 3_000L
+
+  private val remoteDelivery = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
 
   fun attach(value: Listener) { listener = value }
   fun detach(value: Listener) { if (listener === value) listener = null }
@@ -485,7 +499,8 @@ object InstinctProposalCenter {
               AckEntry(AckKind.ERROR, check.order, "ya había una orden igual esperando confirmación; no se duplica.")))
           } else {
             InstinctExecutions.link(proposal.id, execution)
-            InstinctExecutions.move(app, execution, ExecutionState.READY, proposalId = proposal.id)
+            InstinctExecutions.move(app, execution, ExecutionState.READY, proposalId = proposal.id,
+              command = check.command.takeIf(OmniremoteCommands::isRemote))
             acks.link(ticket, index, proposal.id); offered += proposal
           }
         }
@@ -692,7 +707,7 @@ object InstinctProposalCenter {
     val app = context.applicationContext
     if (!probes.tryAcquire()) return AckEntry(AckKind.ERROR, line, InstinctProbe.TOO_MANY, informative = true)
     val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
-    val check = InstinctProposalValidator.check(inner, PhoneCommandParser(), now, InstinctRoutineGrants(app).access())
+    val check = InstinctProposalValidator.check(app, inner, now, InstinctRoutineGrants(app).access())
     val minute = InstinctAutonomySettings.minuteOfDay(InstinctScheduler.wallClock())
     val verdict = when (check) {
       is ProposalCheck.Question -> InstinctQuestionNotifications.probe(app, source, check.question)
@@ -702,7 +717,7 @@ object InstinctProposalCenter {
         else -> InstinctContextScheduler.blocker(app, check.spec)?.let { InstinctProbe.Verdict.Invalid(it) }
           ?: InstinctProbe.Verdict.Scheduled("regla contextual por ${check.spec.days} días")
       }
-      is ProposalCheck.Invalid -> InstinctProbe.Verdict.Invalid(InstinctAck.reason(check.reason))
+      is ProposalCheck.Invalid -> InstinctProbe.Verdict.Invalid(check.detail ?: InstinctAck.reason(check.reason))
       is ProposalCheck.Query -> if (check.kind == ProposalCheck.QueryKind.PROBE) InstinctProbe.Verdict.Invalid("no se puede probar una prueba")
         else if (check.kind in InstinctProposalValidator.ruleQueries && source != ProposalSource.BUZON) InstinctProbe.Verdict.Invalid(InstinctContextScheduler.ONLY_SIGNED)
         else InstinctProbe.Verdict.Alone(if (check.kind.readOnly) "consulta" else "cambio de programación")
@@ -853,8 +868,12 @@ object InstinctProposalCenter {
     InstinctAutonomySettings(context).policy().refuses(steps(context, command) ?: emptyList(), isRoutine(command))
 
   /** The checks that existed before the autonomy policy, for one command, without the budget. */
-  internal fun blocker(context: Context, command: PhoneCommand, foreground: Boolean): String? =
-    InstinctGatePreview.blocker(command, snapshot(context, foreground))
+  internal fun blocker(context: Context, command: PhoneCommand, foreground: Boolean): String? {
+    val general = InstinctGatePreview.blocker(command, snapshot(context, foreground))
+    if (general != null || !OmniremoteCommands.isRemote(command)) return general
+    val (spec, params) = InstinctCapabilities.platform(command as PhoneCommand.Platform)
+    return InstinctDeviceCapabilities.blockers(context, spec, params)?.reason
+  }
 
   /** The panel is closed: runs the proposal now, or leaves it for Confirmar when it cannot or should not. */
   internal fun runInBackground(context: Context, proposal: ProposalBook.Proposal) {
@@ -943,6 +962,12 @@ object InstinctProposalCenter {
 
   private fun executeBackground(context: Context, proposal: ProposalBook.Proposal, canReoffer: Boolean,
     successTrust: TrustEvent = TrustEvent.EJECUTADA) {
+    if (Looper.myLooper() == Looper.getMainLooper() &&
+      (OmniremoteCommands.isRemote(proposal.command) ||
+        isRoutine(proposal.command) && steps(context, proposal.command).orEmpty().any(OmniremoteCommands::isRemote))) {
+      remoteDelivery.launch { executeBackground(context.applicationContext, proposal, canReoffer, successTrust) }
+      return
+    }
     val execution = proposal.executionId
     // 1.20.0: «despachando» is on disk before anything touches the phone; without it nothing runs.
     if (!InstinctExecutions.begin(context, execution, proposal.command)) {
@@ -954,7 +979,8 @@ object InstinctProposalCenter {
     val verifier = outcomeVerifier(context)
     val before = runCatching { verifier.read(proposal.command) }.getOrNull()
     // 1.20.0: an order the gate let run is authorized; the action does not ask its own «¿Confirmás?» again.
-    val result = PhoneActionExecutor(context).execute(proposal.command, confirmed = InstinctConfirmations.preAuthorized(proposal.command))
+    val result = PhoneActionExecutor(context).execute(proposal.command,
+      confirmed = InstinctConfirmations.preAuthorized(proposal.command), executionId = execution)
     when {
       // Maybe it happened: never offered again, so it is never repeated.
       result.outcome == PhoneActionOutcome.UNCERTAIN -> {
@@ -1027,7 +1053,8 @@ object InstinctProposalCenter {
       InstinctContextScheduler.FINGERPRINT
     } else awaitFingerprint(app) ?: return false
     val now = java.util.Calendar.getInstance().apply { timeInMillis = InstinctScheduler.wallClock() }
-    val check = InstinctProposalValidator.check(row.line, PhoneCommandParser(), now, InstinctRoutineGrants(app).access())
+    val check = row.remoteCommand()?.let { ProposalCheck.Valid(row.line, it) }
+      ?: InstinctProposalValidator.check(app, row.line, now, InstinctRoutineGrants(app).access())
     if (check !is ProposalCheck.Valid || check.deferred != null || refusedByPolicy(app, check.command)) return false
     val source = if (row.transport == ExecutionTransport.WHATSAPP) ProposalSource.WHATSAPP else ProposalSource.BUZON
     // Its notification keeps the time it had left: the book counts from the original wait, in this process's clock.
@@ -1067,7 +1094,8 @@ object InstinctProposalCenter {
     val run = InstinctRoutineRun(runner, { blocker(context, it, foreground = false) }) { step ->
       val capture = InstinctUndoActions.capture(context, step)
       val before = runCatching { verifier.read(step) }.getOrNull()
-      executor.execute(step, confirmed = InstinctConfirmations.preAuthorized(step)).let { result ->
+      executor.execute(step, confirmed = InstinctConfirmations.preAuthorized(step),
+        executionId = runner.snapshot?.remoteExecutionId()).let { result ->
         if (InstinctAck.kindOf(result) != AckKind.OK) return@let result
         // Each step is checked like a single order: not reached stops the routine, unconfirmed stops it as uncertain.
         val observation = runCatching { verifier.verify(step, before, result) }.getOrNull()

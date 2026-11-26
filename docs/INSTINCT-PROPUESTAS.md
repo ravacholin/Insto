@@ -966,7 +966,7 @@ Límites: 6 acciones (se cuentan las alternativas y todas las opciones), 10 paso
 
 Desde 1.24.0, las instrucciones para Instinct incluyen un ejemplo de cómo pasar de un objetivo a un plan JSON v1. Instinct lee las capacidades disponibles y el estado fechado, genera el plan y lo manda por el buzón firmado. El ejecutor local usa el diario, la autonomía, las condiciones y las preguntas existentes. Para activar líneas de más de 300 caracteres en la planilla hace falta desplegar el Apps Script actualizado.
 
-El contrato y el ejemplo de la reunión están en `plan_json` del catálogo vivo. Insto publica la disponibilidad que encuentra en Android y los destinos autorizados que declara cada adaptador. Los controles `omniremote_power`, `omniremote_volume` y `omniremote_mute` figuran como no disponibles hasta contar con un contrato local verificable del proveedor. [Capacidades y adaptadores](architecture/instinct-device-capabilities.md)
+El contrato y el ejemplo de la reunión están en `plan_json` del catálogo vivo. Insto publica la disponibilidad que encuentra en Android y los destinos autorizados que declara cada adaptador. Desde Insto 1.26.0, el catálogo publica las capacidades de OmniRemote y los dispositivos que las anuncian. [Integración con OmniRemote](architecture/omniremote.md) [Capacidades y adaptadores](architecture/instinct-device-capabilities.md)
 
 ### Entrega de órdenes grandes
 

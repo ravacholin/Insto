@@ -225,6 +225,8 @@ data class ScheduledOrder(
   val expiresAt: Long? = null,
   /** The same for every occurrence of a recurrence, so it is cancelled whole and keeps its short id. */
   val series: String = id,
+  /** Preserve the selected provider target across firings, even if names or aliases are edited. */
+  val remoteCommand: PhoneCommand? = null,
 ) {
   enum class State { PENDING, CONSUMED }
   val summary: String get() = "$label: $inner"
@@ -362,6 +364,7 @@ class InstinctScheduleStore(private val file: File, private val clock: () -> Lon
         .put("trigger", InstinctTriggers.encode(o.trigger))
         .apply { o.expiresAt?.let { put("expiresAt", it) } }
         .apply { if (o.series != o.id) put("series", o.series) }
+        .apply { o.remoteCommand?.let { put("remoteCommand", PhoneCommandCodec.encode(it)) } }
     })).toString()
 
     /**
@@ -382,7 +385,10 @@ class InstinctScheduleStore(private val file: File, private val clock: () -> Lon
           if (o.optString("source") == ProposalSource.BUZON.name) ProposalSource.BUZON else ProposalSource.WHATSAPP,
           InstinctTriggers.decode(o.optJSONObject("trigger")),
           if (o.has("expiresAt")) o.getLong("expiresAt") else null,
-          o.optString("series").takeIf { it.isNotEmpty() } ?: id)
+          o.optString("series").takeIf { it.isNotEmpty() } ?: id,
+          o.optJSONObject("remoteCommand")?.let { PhoneCommandCodec.decode(it).also { command ->
+            require(OmniremoteCommands.isRemote(command))
+          } })
       }
     }
 
@@ -418,8 +424,11 @@ object ScheduleFirePolicy {
   fun decide(order: ScheduledOrder, enabled: Boolean, fingerprint: String?, now: Long, check: (String) -> ProposalCheck): Decision {
     if (!enabled) return Decision.Drop("«Recibir órdenes de Instinct» está apagado.")
     if (fingerprint == null || fingerprint != order.fingerprint) return Decision.Drop("cambió la configuración de Insto desde que se programó.")
-    val valid = check(order.inner) as? ProposalCheck.Valid ?: return Decision.Drop("la orden ya no es válida.")
-    if (valid.deferred != null) return Decision.Drop("la orden ya no es válida.")
-    return if (now - order.fireAt > InstinctDeferral.LATE_MILLIS) Decision.Late(valid.command) else Decision.Run(valid.command)
+    val command = order.remoteCommand ?: run {
+      val valid = check(order.inner) as? ProposalCheck.Valid ?: return Decision.Drop("la orden ya no es válida.")
+      if (valid.deferred != null) return Decision.Drop("la orden ya no es válida.")
+      valid.command
+    }
+    return if (now - order.fireAt > InstinctDeferral.LATE_MILLIS) Decision.Late(command) else Decision.Run(command)
   }
 }

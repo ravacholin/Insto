@@ -751,7 +751,31 @@
       "bloqueado": true,
       "categoria": "APPS",
       "deshacer": "ninguno",
-      "disponibilidad": "no disponible: falta un contrato local compatible de Omniremote",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_state",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
       "id": "omniremote_power",
       "parametros": {
         "additionalProperties": false,
@@ -771,15 +795,113 @@
         "type": "object"
       },
       "permisos": [],
-      "recuperacion": "releer si hay evidencia, suspender si es incierto",
-      "restriccion": "requiere contrato local compatible de Omniremote y un televisor autorizado",
-      "verificacion": "relectura del televisor por el proveedor autorizado"
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
     },
     {
       "bloqueado": true,
       "categoria": "APPS",
       "deshacer": "ninguno",
-      "disponibilidad": "no disponible: falta un contrato local compatible de Omniremote",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_key",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "VOL_UP",
+              "VOL_DOWN",
+              "MUTE",
+              "CH_UP",
+              "CH_DOWN",
+              "NUM_PRE_CH",
+              "UP",
+              "DOWN",
+              "LEFT",
+              "RIGHT",
+              "ENTER",
+              "BACK",
+              "HOME",
+              "MENU",
+              "INFO",
+              "SOURCE",
+              "SETTINGS",
+              "EXIT",
+              "PLAY",
+              "PAUSE",
+              "PLAY_PAUSE",
+              "STOP",
+              "REWIND",
+              "FAST_FORWARD",
+              "COLOR_RED",
+              "COLOR_GREEN",
+              "COLOR_YELLOW",
+              "COLOR_BLUE",
+              "NUM_0",
+              "NUM_1",
+              "NUM_2",
+              "NUM_3",
+              "NUM_4",
+              "NUM_5",
+              "NUM_6",
+              "NUM_7",
+              "NUM_8",
+              "NUM_9"
+            ],
+            "maxLength": 16,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "key"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_text",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "text"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
       "id": "omniremote_volume",
       "parametros": {
         "additionalProperties": false,
@@ -801,15 +923,15 @@
         "type": "object"
       },
       "permisos": [],
-      "recuperacion": "releer si hay evidencia, suspender si es incierto",
-      "restriccion": "requiere contrato local compatible de Omniremote y un televisor autorizado",
-      "verificacion": "relectura del televisor por el proveedor autorizado"
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
     },
     {
       "bloqueado": true,
       "categoria": "APPS",
       "deshacer": "ninguno",
-      "disponibilidad": "no disponible: falta un contrato local compatible de Omniremote",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
       "id": "omniremote_mute",
       "parametros": {
         "additionalProperties": false,
@@ -829,9 +951,378 @@
         "type": "object"
       },
       "permisos": [],
-      "recuperacion": "releer si hay evidencia, suspender si es incierto",
-      "restriccion": "requiere contrato local compatible de Omniremote y un televisor autorizado",
-      "verificacion": "relectura del televisor por el proveedor autorizado"
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_open_app",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "appId": {
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "appId"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_open_brightness",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_open_brightness_adb",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_open_bluetooth_audio",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_sleep_for",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "minutes": {
+            "maximum": 1440,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device",
+          "minutes"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_sleep_at",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "hour": {
+            "maximum": 23,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minute": {
+            "maximum": 59,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device",
+          "hour",
+          "minute"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_sleep_extend",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_sleep_cancel",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_mac_open_link",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 4096,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "url"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_mac_media_list",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_mac_media_state",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "sourceId": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "sourceId"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_mac_media_key",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "PLAY",
+              "PAUSE",
+              "PLAY_PAUSE",
+              "STOP",
+              "REWIND",
+              "FAST_FORWARD"
+            ],
+            "maxLength": 16,
+            "type": "string"
+          },
+          "sourceId": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "sourceId",
+          "key"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
+    },
+    {
+      "bloqueado": true,
+      "categoria": "APPS",
+      "deshacer": "ninguno",
+      "disponibilidad": "consultar disponibilidad de OmniRemote en el teléfono",
+      "id": "omniremote_mac_media_reveal",
+      "parametros": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "sourceId": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "sourceId"
+        ],
+        "type": "object"
+      },
+      "permisos": [],
+      "recuperacion": "consultar el ID original; no reenviar una orden incierta",
+      "restriccion": "requiere OmniRemote autorizado y una capacidad anunciada por el destino",
+      "verificacion": "resultado real de OmniRemote; enviado y verificado son estados distintos"
     }
   ],
   "consultas": [
@@ -974,11 +1465,11 @@
       }
     ]
   },
-  "hash": "feb9488d83cefb95c7e62b0678b5ec0b009be8452c7c4ef098511a5a96915960",
+  "hash": "fedec0091d68d04406a10e2de90f8401d3696f6465e2d143bda750cf6825e69c",
   "horas_de_silencio": null,
   "integraciones": {
     "appfunctions": "sin proveedor autorizado",
-    "omniremote": "sin interfaz local compatible"
+    "omniremote": "consultar disponibilidad en el teléfono"
   },
   "limites": {
     "atraso_minutos_max": 15,
@@ -1019,6 +1510,7 @@
     "reglas_contextuales": 12,
     "rutina_pasos_max": 6
   },
+  "omniremote_dispositivos": [],
   "plan_json": {
     "action": "{capability, params, fallback?: {capability,params}, eventFrom?: id de calendar_query}",
     "branch": "{conditions: texto de condiciones de «cuando», then: [action], else?: [action]}",
@@ -1124,6 +1616,6 @@
     "regla": "Creá, consultá y administrá reglas por el buzón firmado. Hasta tres condiciones unidas con «y», una acción permitida sin interfaz o «avisarme» y hasta 12 reglas durante un máximo de 30 días. Se disparan al cumplirse las condiciones, según los eventos que Android entregue, incluso sin conexión con Instinct. Conservan los permisos y la autonomía del teléfono."
   },
   "rutinas": [],
-  "version_insto": "1.24.0",
+  "version_insto": "1.26.0",
   "version_protocolo": 8
 }

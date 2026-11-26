@@ -548,17 +548,17 @@ class InstinctExecutionJournal private constructor(private val file: File, priva
   }
 
   /** Observation may settle an uncertain plan step without reopening any other kind of terminal execution. */
-  internal fun verifyPlanDispatch(row: ExecutionRecord, result: String, data: String?): Boolean = transaction { db ->
+  internal fun verifyPlanDispatch(row: ExecutionRecord, result: String, data: String?, verified: Boolean = true): Boolean = transaction { db ->
     val current = getIn(db, row.executionId) ?: return@transaction false
     if (!runningPlan(db, current) || current.state != row.state || current.attempts != row.attempts ||
       current.state !in setOf(ExecutionState.DISPATCHING, ExecutionState.VERIFYING, ExecutionState.UNCERTAIN)) return@transaction false
     db.update("executions", ContentValues().apply {
-      put("state", ExecutionState.VERIFIED.name)
+      put("state", if (verified) ExecutionState.VERIFIED.name else ExecutionState.HANDED_OFF.name)
       put("owner", owner)
       put("updated_at", clock())
       put("result", result.take(MAX_TEXT))
       putNull("reason")
-      put("attribution", ExecutionAttribution.SATISFIED.name)
+      if (verified) put("attribution", ExecutionAttribution.SATISFIED.name)
       data?.let { put("execution_data", it) }
     }, "execution_id = ?", arrayOf(row.executionId)) == 1
   }

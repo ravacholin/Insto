@@ -45,7 +45,8 @@ object InstinctExecutionRecoveryManager {
       if (localOnly && !InstinctQuestion.isRelated(row.line) &&
         row.transport != ExecutionTransport.DECISION && row.transport != ExecutionTransport.CONTEXT) continue
       val mine = row.owner == InstinctExecutionJournal.owner
-      val action = ExecutionRecoveryPolicy.decide(row, now, effect(row))
+      val action = if (row.state == ExecutionState.DISPATCHING && command(row)?.let(OmniremoteCommands::isRemote) == true)
+        ExecutionRecoveryPolicy.Action.Verify else ExecutionRecoveryPolicy.decide(row, now, effect(row))
       if (action == ExecutionRecoveryPolicy.Action.RefreshQuestion) continue
       // A scheduled row is compared whoever owns it: cancelling a series does not pass through the journal.
       if (action == ExecutionRecoveryPolicy.Action.Reconcile) { if (reconcile(app, row, scheduledSeries)) touched++; continue }
@@ -91,6 +92,17 @@ object InstinctExecutionRecoveryManager {
   /** Reads the state back; runs nothing. */
   private fun verify(app: Context, row: ExecutionRecord) {
     val command = command(row) ?: return settle(app, row, ExecutionState.UNCERTAIN, ExecutionRecoveryPolicy.INTERRUPTED)
+    if (OmniremoteCommands.isRemote(command)) {
+      val result = runCatching {
+        InstinctDeviceCapabilities.observe(app, command as PhoneCommand.Platform, row.executionId)
+      }.getOrNull()
+      val state = when {
+        result?.verifiedLocally == true -> ExecutionState.VERIFIED
+        result?.outcome == PhoneActionOutcome.HANDOFF -> ExecutionState.HANDED_OFF
+        else -> ExecutionState.UNCERTAIN
+      }
+      return settle(app, row, state, result?.message ?: ExecutionRecoveryPolicy.INTERRUPTED)
+    }
     val observation = runCatching {
       InstinctProposalCenter.outcomeVerifier(app).verify(command, null, PhoneActionResult("", outcome = PhoneActionOutcome.COMPLETED))
     }.getOrNull()

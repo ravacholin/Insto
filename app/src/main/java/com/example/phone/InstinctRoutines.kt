@@ -91,7 +91,11 @@ class InstinctRoutineRun(
     val uncertain: Boolean, val statuses: List<StepStatus> = emptyList()) {
     val finished: Boolean get() = stoppedAt == null
     val kind: AckKind get() = when { finished -> AckKind.OK; uncertain -> AckKind.UNCERTAIN; else -> AckKind.ERROR }
-    val summary: String get() = if (finished) "Instinct ejecutó la rutina $name: ${completed.size} de $total pasos."
+    val summary: String get() = if (finished) {
+      val sent = statuses.count { it == StepStatus.SENT }
+      "Instinct ejecutó la rutina $name: ${completed.size} de $total pasos." +
+        if (sent > 0) " $sent enviados por OmniRemote, con efecto sin confirmar." else ""
+    }
       else "Instinct ejecutó la rutina $name: se detuvo en el paso $stoppedAt: $reason" + if (uncertain) " · no se repite" else ""
   }
 
@@ -122,7 +126,7 @@ class InstinctRoutineRun(
       }
       val status = runner.snapshot?.steps?.getOrNull(index)?.status
       when (status) {
-        StepStatus.COMPLETED -> done += Step(command, result)
+        StepStatus.COMPLETED, StepStatus.SENT -> done += Step(command, result)
         StepStatus.HANDED_OFF -> { done += Step(command, result); runCatching { runner.resumeHandoff() } }
         StepStatus.UNCERTAIN -> return stop(index, result.message, uncertain = true)
         else -> return stop(index, result.message)

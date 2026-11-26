@@ -308,6 +308,7 @@ object InstinctProtocolCatalog {
     availability: Map<String, String> = emptyMap(), calendarIds: List<Long> = emptyList(),
     calendarWriteIds: List<Long> = emptyList(), calendarLabels: Map<Long, String> = emptyMap(), routineRevisions: Map<String, String> = emptyMap(),
     capabilityTargets: Map<String, List<String>> = emptyMap(),
+    omniremoteDevices: List<Map<String, Any>> = emptyList(),
     parse: (String) -> PhoneRoute = PhoneCommandParser()::parse): InstinctCatalogJson {
     fun category(order: String) = (parse(order) as? PhoneRoute.Local)?.command?.let(InstinctCategory::of)?.label
     val quiet = autonomy.quiet
@@ -328,8 +329,9 @@ object InstinctProtocolCatalog {
       "calendarios" to calendarIds.map { mapOf("id" to it, "nombre" to calendarLabels[it].orEmpty(), "escritura" to (it in calendarWriteIds)) },
       "plan_json" to InstinctStructuredPlan.contract,
       "integraciones" to mapOf(
-        "omniremote" to if (capabilityTargets.keys.any { it.startsWith("omniremote_") }) "ver capacidades y destinos" else "sin interfaz local compatible",
+        "omniremote" to if (omniremoteDevices.isNotEmpty()) "ver omniremote_dispositivos" else "consultar disponibilidad en el teléfono",
         "appfunctions" to "sin proveedor autorizado"),
+      "omniremote_dispositivos" to omniremoteDevices,
       "acciones" to InstinctProposalValidator.immediateExamples.map { mapOf("orden" to it, "categoria" to category(it)) },
       "formas" to mapOf(
         "diferidas" to InstinctProposalValidator.deferredExamples.map { mapOf("orden" to it) },

@@ -46,10 +46,12 @@ internal object InstinctDeviceCapabilities {
   data class Block(val reason: String, val pending: Boolean)
   data class Discovery(val blocker: Block?, val targets: List<String> = emptyList())
 
+  val omniremote = OmniremoteAdapter()
+
   private val registry = mapOf(
     InstinctCapabilities.Adapter.ANDROID_LOCAL to AndroidLocalCapabilities,
     InstinctCapabilities.Adapter.ANDROID_INTENT to AndroidIntentCapabilities,
-    InstinctCapabilities.Adapter.OMNIREMOTE to OmniremoteAdapter(),
+    InstinctCapabilities.Adapter.OMNIREMOTE to omniremote,
   )
 
   fun granted(context: Context, permission: String): Boolean = when (permission) {
@@ -89,8 +91,8 @@ internal object InstinctDeviceCapabilities {
   /** Recovery can observe a provider only while its current authorization still permits the read. */
   fun observe(context: Context, command: PhoneCommand.Platform, executionId: String): PhoneActionResult? {
     val (spec, params) = InstinctCapabilities.platform(command)
-    if (blockers(context, spec, params) != null) return null
-    return registry.getValue(spec.adapter).observe(context, spec, params, executionId)?.takeIf { it.verifiedLocally }
+    if (spec.adapter != InstinctCapabilities.Adapter.OMNIREMOTE && blockers(context, spec, params) != null) return null
+    return registry.getValue(spec.adapter).observe(context, spec, params, executionId)
   }
 }
 
@@ -166,8 +168,5 @@ private object AndroidIntentCapabilities : InstinctCapabilityAdapter {
 
   private fun resource(url: String) = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
 }
-
-internal fun unavailableOmniremote() = InstinctDeviceCapabilities.Block(
-  "Falta un contrato local compatible de Omniremote.", pending = false)
 
 private fun rejected(message: String) = PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED)
