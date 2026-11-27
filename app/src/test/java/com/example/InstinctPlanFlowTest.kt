@@ -243,10 +243,10 @@ class InstinctPlanFlowTest {
       override val transport = OmniremoteAdapter.Transport.LOCAL_API
       var allowed = true
       var current = 10
-      override fun televisions(context: android.content.Context, id: String?) = if (allowed) listOf(
-        OmniremoteAdapter.Television("living-tv", setOf(OmniremoteAdapter.Control.VOLUME))) else emptyList()
+      override fun devices(context: android.content.Context, id: String?) = if (allowed) listOf(
+        OmniremoteAdapter.Device("living-tv", setOf(OmniremoteAdapter.Control.VOLUME))) else emptyList()
       override fun set(context: android.content.Context, id: String, setting: OmniremoteAdapter.Setting, executionId: String) =
-        PhoneActionResult("entregado", verifiedLocally = true)
+        OmniremoteAdapter.Dispatch(PhoneActionResult("entregado", verifiedLocally = true))
       override fun read(context: android.content.Context, id: String, control: OmniremoteAdapter.Control) =
         OmniremoteAdapter.Setting.Volume(current)
     }

@@ -480,7 +480,7 @@ private fun AssistantSetupSheet(
         InstinctProposalSettingsSection(prefs.pinnedContact, prefs.preferredFlavor)
       }
 
-      SettingsCategory("OMNIREMOTE", expandedCategory == "omniremote", { toggleCategory("omniremote") }) {
+      SettingsCategory("Omniremote", expandedCategory == "omniremote", { toggleCategory("omniremote") }) {
         OmniremoteSettingsSection()
       }
 

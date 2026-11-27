@@ -569,12 +569,15 @@ class MainViewModel @JvmOverloads constructor(
       retainDecisionRequest("No se pudo guardar el paso. No se ejecutó la acción."); return
     }
     val ticket = executions.open(session, command)
-    if (command is PhoneCommand.Platform && command.action == PlatformAction.EXECUTE_APP_SHORTCUT) {
+    val omniremote = InstinctCapabilities.isOmniremote(command)
+    if (omniremote || command is PhoneCommand.Platform && command.action == PlatformAction.EXECUTE_APP_SHORTCUT) {
+      if (omniremote) retainLocalAudio = true
       floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING)
       viewModelScope.launch {
         val job = coroutineContext[Job]
         val result = withContext(Dispatchers.IO) {
-          phoneExecutor.execute(command, confirmed, canLaunch = {
+          phoneExecutor.execute(command, confirmed, executionId = if (omniremote) UUID.randomUUID().toString() else null,
+            foreground = omniremote, canLaunch = {
             job?.isActive != false && session == floatingGeneration && !floatingPaused
           })
         }
@@ -738,7 +741,24 @@ class MainViewModel @JvmOverloads constructor(
     if (confirmation != null && normalized in listOf("si", "si confirmo", "confirmo", "dale", "acepto", "no")) {
       confirmFloatingAction(normalized != "no"); return true
     }
-    val local = phoneParser.parse(text)
+    val native = phoneParser.parse(text)
+    val remoteOrder = if (native is PhoneRoute.Local) null else OmniremoteCommands.parse(text)
+    val local = if (remoteOrder == null) native else {
+      val generation = floatingGeneration
+      val mode = floatingState.value.mode
+      decidingRequest = true
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, deciding = true)
+      val route = try {
+        withContext(Dispatchers.IO) { OmniremoteCommands.resolve(getApplication(), remoteOrder) }
+      } finally {
+        if (generation == floatingGeneration && !floatingPaused) {
+          decidingRequest = false
+          floatingState.value = floatingState.value.copy(mode = mode, deciding = false)
+        }
+      }
+      if (generation != floatingGeneration || floatingPaused) return true
+      route ?: native
+    }
     val searchQuery = phoneParser.chatGptSearchQuery(text, local)
     val fresh = searchQuery != null || local is PhoneRoute.Local || RequestSafetyPolicy.isQuestion(text) || text.trimStart().startsWith("¿") ||
       Regex("^(?:que|como|por que|donde|cual|instinct|explica|conta|ayuda|necesito|quiero|abri|busca|pone|agenda|llama)\\b").containsMatchIn(normalized)

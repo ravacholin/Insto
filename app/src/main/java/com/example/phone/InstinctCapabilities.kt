@@ -76,10 +76,10 @@ internal object InstinctCapabilities {
       permissions = if (category == InstinctCategory.RELOJ) listOf("com.android.alarm.permission.SET_ALARM") else emptyList(),
       adapter = Adapter.ANDROID_INTENT, decode = decode)
 
-  private fun television(id: String, parameter: Pair<String, CapabilityCatalog.Field>) =
+  private fun omniremote(id: String, parameter: Pair<String, CapabilityCatalog.Field>) =
     spec(id, InstinctCategory.APPS, "device ${parameter.first}", "device" to text(120), parameter,
-      verification = "relectura del televisor por el proveedor autorizado",
-      restriction = "requiere contrato local compatible de Omniremote y un televisor autorizado",
+      verification = "estado observado por el proveedor autorizado",
+      restriction = "requiere una API local compatible de Omniremote y un dispositivo registrado",
       adapter = Adapter.OMNIREMOTE)
 
   const val OMNIREMOTE_UNAVAILABLE = "no disponible: falta un contrato local compatible de Omniremote"
@@ -126,10 +126,13 @@ internal object InstinctCapabilities {
     external("open_resource", InstinctCategory.APPS, "url", "url" to text(2000)),
     external("youtube", InstinctCategory.APPS, "query", "query" to text(200)) { PhoneCommand.YouTubeSearch(it.getString("query")) },
     external("spotify", InstinctCategory.APPS, "query", "query" to text(200)) { PhoneCommand.SpotifySearch(it.getString("query")) },
-    television("omniremote_power", "on" to flag),
-    television("omniremote_volume", "percent" to number(0, 100)),
-    television("omniremote_mute", "muted" to flag),
+    omniremote("omniremote_power", "on" to flag),
+    omniremote("omniremote_volume", "percent" to number(0, 100)),
+    omniremote("omniremote_mute", "muted" to flag),
   ).associateBy(Spec::id)
+
+  fun isOmniremote(command: PhoneCommand): Boolean = command is PhoneCommand.Platform &&
+    command.action == PlatformAction.INSTINCT_CAPABILITY && specs[command.argument]?.adapter == Adapter.OMNIREMOTE
 
   /** Decode only after validating strict types, bounds and the capability's cross-field invariants. */
   fun command(id: String, params: JSONObject): PhoneCommand {

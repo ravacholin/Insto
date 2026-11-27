@@ -91,8 +91,8 @@ class OmniremoteLocalProviderTest {
       else -> device(id, "MACOS", listOf("SET_VOLUME", "SET_MUTE"), listOf("volume", "muted"))
     } }
     assertEquals(listOf(TV, "omniremote:${ID + 1}"), adapter.targets(context, power))
-    assertEquals(listOf(TV), adapter.targets(context, volume))
-    assertEquals(listOf(TV), adapter.targets(context, mute))
+    assertEquals(listOf(TV, "omniremote:${ID + 2}"), adapter.targets(context, volume))
+    assertEquals(listOf(TV, "omniremote:${ID + 2}"), adapter.targets(context, mute))
     assertEquals(listOf(0L, ID, 0L, ID, 0L, ID), remote.cursors)
     assertTrue(remote.details.contains(ID + 1))
   }
@@ -121,12 +121,75 @@ class OmniremoteLocalProviderTest {
     assertEquals(context.binds, context.unbinds)
   }
 
+  @Test fun instoRoutesNamesRoomsAndSavedAliasesToTheRightDevice() = offMain {
+    val living = ID + 1
+    val pc = ID + 2
+    remote.pages = mapOf(0L to (listOf(ID, living, pc) to null))
+    remote.device = { id -> when (id) {
+      ID -> defaultDevice(id).put("name", "TV Android").put("room", "Cuarto")
+      living -> device(id, "SAMSUNG_TIZEN", listOf("POWER_ON", "POWER_OFF"), emptyList()).put("room", "Living")
+      else -> device(id, "MACOS", listOf("GET_STATE", "SET_VOLUME", "SET_MUTE"), listOf("volume", "muted"))
+        .put("name", "MacBook").put("room", "Escritorio")
+    } }
+    OmniremoteAliases(context).save("omniremote:$pc", "PC, Computadóra")
+    val expected = listOf(
+      "Encender cuarto" to Triple(ID, "POWER_ON", "{}"),
+      "Apagá el cuarto" to Triple(ID, "POWER_OFF", "{}"),
+      "Encendé el televisor del living" to Triple(living, "POWER_ON", "{}"),
+      "Apagar living" to Triple(living, "POWER_OFF", "{}"),
+      "subi volumen pc al 100" to Triple(pc, "SET_VOLUME", """{"level":100}"""),
+      "Mutear computadora" to Triple(pc, "SET_MUTE", """{"muted":true}"""),
+      "Silenciar PC" to Triple(pc, "SET_MUTE", """{"muted":true}"""),
+      "Desmuteá la PC" to Triple(pc, "SET_MUTE", """{"muted":false}"""),
+    )
+    for ((index, entry) in expected.withIndex()) {
+      val (text, request) = entry
+      assertFalse(text, PhoneCommandParser().parse(text) is PhoneRoute.Local)
+      val order = requireNotNull(OmniremoteCommands.parse(text)) { text }
+      val route = OmniremoteCommands.resolve(context, order) as PhoneRoute.Local
+      assertEquals(SemanticCommandGuard.Verdict.Accepted, SemanticCommandGuard.check(text, listOf(route.command), java.util.Calendar.getInstance()))
+      val result = PhoneActionExecutor(context).execute(route.command, executionId = "insto-test:$index", foreground = true)
+      assertEquals(text, living != request.first, result.verifiedLocally)
+      val dispatched = remote.requests.last { it.command != "GET_STATE" }
+      assertEquals(text, request, Triple(dispatched.deviceId, dispatched.command, dispatched.arguments))
+    }
+  }
+
+  @Test fun ambiguousRoomsRequireAUniqueAliasAndNeverDispatch() = offMain {
+    remote.pages = mapOf(0L to (listOf(ID, ID + 1) to null))
+    remote.device = { id -> defaultDevice(id).put("name", "TV $id").put("room", "Living") }
+    val order = requireNotNull(OmniremoteCommands.parse("apagá living"))
+    assertTrue(OmniremoteCommands.resolve(context, order) is PhoneRoute.Unsupported)
+    assertTrue(remote.requests.isEmpty())
+
+    OmniremoteAliases(context).save(TV, "principal, pantalla")
+    val named = requireNotNull(OmniremoteCommands.parse("apagá principal"))
+    val route = OmniremoteCommands.resolve(context, named) as PhoneRoute.Local
+    assertEquals(TV, InstinctCapabilities.platform(route.command as PhoneCommand.Platform).second.getString("device"))
+  }
+
+  @Test fun wakesARegisteredDeviceWithoutFirstOpeningItsControlChannel() = offMain {
+    remote.stateFailure = "DEVICE_AUTHORIZATION_REQUIRED"
+    val result = adapter.execute(context, power, params("on", true), "wake-sleeping")
+    assertEquals(PhoneActionOutcome.UNCERTAIN, result.outcome)
+    assertTrue(result.message.contains("enviada"))
+    assertEquals(listOf("POWER_ON", "GET_STATE"), remote.requests.map { it.command })
+  }
+
+  @Test fun trustsAConfirmedPowerOffWhenTheTvCanNoLongerBeReached() = offMain {
+    remote.stateFailure = "DEVICE_UNREACHABLE"
+    remote.replyToWrite = { id -> reply(data = JSONObject().put("power", false), id = id) }
+    val result = adapter.execute(context, power, params("on", false), "verified-off")
+    assertTrue(result.message, result.verifiedLocally)
+    assertEquals(listOf("POWER_OFF"), remote.requests.map { it.command })
+  }
+
   @Test fun rejectsUnauthorizedTvAndDistinguishesUnreachableTv() = offMain {
     remote.failure = "DEVICE_AUTHORIZATION_REQUIRED"
-    val denied = adapter.execute(context, power, params("on", true), "denied")
+    val denied = adapter.execute(context, power, params("on", false), "denied")
     assertEquals(PhoneActionOutcome.REJECTED, denied.outcome)
     assertTrue(denied.message.contains("autorizá", ignoreCase = true))
-    assertEquals(listOf("GET_STATE"), remote.requests.map { it.command })
+    assertEquals(listOf("POWER_OFF"), remote.requests.map { it.command })
 
     val deniedVolume = adapter.execute(context, volume, params("percent", 75), "denied-volume")
     assertEquals(PhoneActionOutcome.REJECTED, deniedVolume.outcome)
@@ -260,6 +323,7 @@ class OmniremoteLocalProviderTest {
     var pages = mapOf(0L to (listOf(ID) to null as Long?))
     var device: (Long) -> JSONObject = ::defaultDevice
     var failure: String? = null
+    var stateFailure: String? = null
     var disconnectOnWrite: (() -> Unit)? = null
     var replyToWrite: ((String) -> String)? = null
     var applyWrites = true
@@ -300,7 +364,9 @@ class OmniremoteLocalProviderTest {
     override fun execute(apiVersion: Int, executionId: String, deviceId: Long, command: String, argumentsJson: String): String {
       assertEquals(1, apiVersion)
       requests += Request(executionId, deviceId, command, argumentsJson)
-      val response = if (failure != null) {
+      val response = if (command == "GET_STATE" && stateFailure != null) {
+        reply("UNCERTAIN", stateFailure!!, id = executionId)
+      } else if (failure != null) {
         reply(if (command == "GET_STATE") "UNCERTAIN" else "REJECTED", failure!!, id = executionId)
       } else if (command == "GET_STATE") {
         reply(data = state, id = executionId)

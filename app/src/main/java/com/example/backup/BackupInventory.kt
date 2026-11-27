@@ -55,6 +55,7 @@ object BackupInventory {
     Item("learned_phrases", Kind.DATASTORE, Class.CONFIG, BackupCategory.PHRASES, "frases y estructuras aprendidas, con su interruptor"),
     Item("saved_places", Kind.SHARED_PREFERENCES, Class.CONFIG, BackupCategory.PLACES, "casa y trabajo"),
     f("app-shortcuts.json", Class.CONFIG, BackupCategory.SHORTCUTS, "alias, favoritos y habilitación; catálogo y autorizaciones quedan en el teléfono"),
+    f("omniremote-aliases.json", Class.DEVICE_BOUND, null, "alias asociados a los identificadores locales de Omniremote"),
     f("configured-routines.json", Class.CONFIG, BackupCategory.ROUTINES, "rutinas"),
     // «Callar alarma con la voz» (1.25.0): nothing travels in a backup; it needs this phone's model and permissions.
     f("alarm-voice-enabled", Class.DEVICE_BOUND, null, "«Callar alarma con la voz»: se activa a mano en cada teléfono, con su modelo"),
