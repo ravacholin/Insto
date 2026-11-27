@@ -203,7 +203,8 @@ object SemanticCommandGuard {
   // ---- What the commands represent ------------------------------------------------------------------------
 
   private fun payloads(command: PhoneCommand): List<String> = when (command) {
-    is PhoneCommand.Platform -> listOfNotNull(command.argument, command.content)
+    is PhoneCommand.Platform -> if (InstinctCapabilities.isOmniremote(command)) emptyList()
+      else listOfNotNull(command.argument, command.content)
     is PhoneCommand.Timer -> listOf(command.label)
     is PhoneCommand.Alarm -> listOf(command.label)
     is PhoneCommand.CalendarEvent -> listOfNotNull(command.title, command.description)
@@ -253,7 +254,8 @@ object SemanticCommandGuard {
   private fun percentOf(command: PhoneCommand): Int? = when (command) {
     is PhoneCommand.Volume -> command.percent.takeIf { command.operation == VolumeOp.SET }
     is PhoneCommand.TemporaryMode -> command.percent.takeIf { command.kind == ModeKind.MEDIA_VOLUME }
-    is PhoneCommand.Platform -> command.percent
+    is PhoneCommand.Platform -> if (command.action == PlatformAction.INSTINCT_CAPABILITY && command.argument == "omniremote_volume")
+      runCatching { InstinctCapabilities.platform(command).second.getInt("percent") }.getOrNull() else command.percent
     else -> null
   }
 
@@ -279,7 +281,7 @@ object SemanticCommandGuard {
     is PhoneCommand.Timer, is PhoneCommand.Alarm -> true
     is PhoneCommand.Stopwatch -> command.operation != StopwatchOp.STATUS
     is PhoneCommand.Media -> command.operation != MediaOp.STATUS
-    is PhoneCommand.Platform -> command.action in setOf(PlatformAction.DND_ON, PlatformAction.DND_OFF,
+    is PhoneCommand.Platform -> InstinctCapabilities.isOmniremote(command) || command.action in setOf(PlatformAction.DND_ON, PlatformAction.DND_OFF,
       PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF, PlatformAction.VIBRATE_ON, PlatformAction.BRIGHTNESS)
     else -> false
   }

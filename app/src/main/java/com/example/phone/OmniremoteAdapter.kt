@@ -3,27 +3,49 @@ package com.example.phone
 import android.content.Context
 import org.json.JSONObject
 
-/** Insto-side television control with local authorization and independent read-back. */
+/** Control of registered Omniremote devices through an authorized provider. */
 internal class OmniremoteAdapter(private val providers: List<Provider> = emptyList()) : InstinctCapabilityAdapter {
   enum class Transport { LOCAL_API, APP_FUNCTION, ANDROID_INTENT }
-  enum class Control { POWER, VOLUME, MUTE }
+  enum class Control(val capability: String, val label: String) {
+    POWER("omniremote_power", "Encendido y apagado"),
+    VOLUME("omniremote_volume", "Volumen"),
+    MUTE("omniremote_mute", "Silencio"),
+  }
 
   sealed interface Setting {
     data class Power(val on: Boolean) : Setting
     data class Volume(val percent: Int, val scale: VolumeScale? = null) : Setting
     data class Mute(val muted: Boolean) : Setting
+
+    fun matches(observed: Setting?): Boolean {
+      if (this is Volume && observed is Volume) {
+        val scale = observed.scale ?: return observed.percent == percent
+        // Android TV rounds percentages to the nearest physical step.
+        return scale.level.toLong() == (percent.toLong() * scale.max + 50) / 100
+      }
+      return observed == this
+    }
   }
 
   data class VolumeScale(val level: Int, val max: Int)
+  data class Dispatch(val result: PhoneActionResult, val observed: Setting? = null)
 
-  data class Television(val id: String, val controls: Set<Control>)
+  data class Device(
+    val id: String,
+    val controls: Set<Control>,
+    val name: String = "",
+    val room: String = "",
+    val stateFields: Set<String> = emptySet(),
+  ) {
+    val label: String get() = listOf(name, room).filter(String::isNotBlank).distinct().joinToString(" · ").ifEmpty { id }
+  }
 
   interface Provider {
     val transport: Transport
-    /** Discover registered televisions through an authorized provider. A target's control channel may require pairing. */
-    fun televisions(context: Context, id: String? = null): List<Television>
+    /** Discover registered devices. The device's own control channel may require pairing. */
+    fun devices(context: Context, id: String? = null): List<Device>
     /** A headless absolute operation with no activity or permission prompt. */
-    fun set(context: Context, id: String, setting: Setting, executionId: String): PhoneActionResult
+    fun set(context: Context, id: String, setting: Setting, executionId: String): Dispatch
     /** Compare the current state through the same authorized provider. Null means it could not be observed. */
     fun read(context: Context, id: String, control: Control): Setting?
     fun recover(context: Context, id: String, control: Control, executionId: String): Setting? = read(context, id, control)
@@ -32,7 +54,7 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
   class DiscoveryFailure(message: String) : Exception(message)
 
   private class Candidates(
-    val entries: List<Pair<Provider, Television>>,
+    val entries: List<Pair<Provider, Device>>,
     val reason: String,
   )
 
@@ -40,16 +62,16 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
     var failure: String? = null
     val entries = providers.sortedBy { it.transport }.flatMap { provider ->
       try {
-        provider.televisions(context, id)
-          .filter { television -> control in television.controls && DEVICE_ID.matches(television.id) &&
-            (id == null || id == television.id) }
+        provider.devices(context, id)
+          .filter { device -> control in device.controls && DEVICE_ID.matches(device.id) &&
+            (id == null || id == device.id) }
           .map { provider to it }
       } catch (error: DiscoveryFailure) {
         if (failure == null) failure = error.message
         emptyList()
       }
     }
-    return Candidates(entries, failure ?: "No hay un televisor disponible para este control en Omniremote.")
+    return Candidates(entries, failure ?: "No hay un dispositivo disponible para este control en Omniremote.")
   }
 
   override fun discover(context: Context, spec: InstinctCapabilities.Spec): InstinctDeviceCapabilities.Discovery {
@@ -76,12 +98,14 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
     val provider = found.entries.firstOrNull()?.first
       ?: return PhoneActionResult(found.reason, outcome = PhoneActionOutcome.REJECTED)
     val setting = setting(control, params)
-    val result = runCatching { provider.set(context, id, setting, executionId) }.getOrNull()
+    val dispatch = runCatching { provider.set(context, id, setting, executionId) }.getOrNull()
+    val result = dispatch?.result
     if (result?.outcome == PhoneActionOutcome.REJECTED || result?.outcome == PhoneActionOutcome.NEEDS_INPUT)
       return result.copy(verifiedLocally = false)
-    return if (matches(setting, runCatching { provider.read(context, id, control) }.getOrNull())) verified() else
+    return if (setting.matches(dispatch?.observed) ||
+      setting.matches(runCatching { provider.read(context, id, control) }.getOrNull())) verified() else
       PhoneActionResult(result?.takeIf { it.outcome == PhoneActionOutcome.UNCERTAIN }?.message
-        ?: "No pude comprobar el estado del televisor.", outcome = PhoneActionOutcome.UNCERTAIN)
+        ?: "No pude comprobar el estado del dispositivo en Omniremote.", outcome = PhoneActionOutcome.UNCERTAIN)
   }
 
   override fun observe(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult? {
@@ -89,25 +113,11 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
     val id = params.getString("device")
     val provider = candidates(context, control, id).entries.firstOrNull()?.first ?: return null
     return verified().takeIf {
-      matches(setting(control, params), runCatching { provider.recover(context, id, control, executionId) }.getOrNull())
+      setting(control, params).matches(runCatching { provider.recover(context, id, control, executionId) }.getOrNull())
     }
   }
 
-  private fun matches(requested: Setting, observed: Setting?): Boolean {
-    if (requested is Setting.Volume && observed is Setting.Volume) {
-      val scale = observed.scale ?: return observed.percent == requested.percent
-      // OMNIREMOTE rounds a percentage to the nearest physical step on Android TV.
-      return scale.level.toLong() == (requested.percent.toLong() * scale.max + 50) / 100
-    }
-    return observed == requested
-  }
-
-  private fun control(id: String) = when (id) {
-    "omniremote_power" -> Control.POWER
-    "omniremote_volume" -> Control.VOLUME
-    "omniremote_mute" -> Control.MUTE
-    else -> error("Control de Omniremote desconocido")
-  }
+  private fun control(id: String) = Control.entries.first { it.capability == id }
 
   private fun setting(control: Control, params: JSONObject): Setting = when (control) {
     Control.POWER -> Setting.Power(params.getBoolean("on"))
@@ -115,7 +125,7 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
     Control.MUTE -> Setting.Mute(params.getBoolean("muted"))
   }
 
-  private fun verified() = PhoneActionResult("Estado del televisor comprobado.", verifiedLocally = true)
+  private fun verified() = PhoneActionResult("Omniremote confirmó el cambio.", verifiedLocally = true)
 
   companion object { private val DEVICE_ID = Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}") }
 }

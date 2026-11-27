@@ -772,8 +772,8 @@
       },
       "permisos": [],
       "recuperacion": "releer si hay evidencia, suspender si es incierto",
-      "restriccion": "requiere contrato local compatible de Omniremote y un televisor autorizado",
-      "verificacion": "relectura del televisor por el proveedor autorizado"
+      "restriccion": "requiere una API local compatible de Omniremote y un dispositivo registrado",
+      "verificacion": "estado observado por el proveedor autorizado"
     },
     {
       "bloqueado": true,
@@ -802,8 +802,8 @@
       },
       "permisos": [],
       "recuperacion": "releer si hay evidencia, suspender si es incierto",
-      "restriccion": "requiere contrato local compatible de Omniremote y un televisor autorizado",
-      "verificacion": "relectura del televisor por el proveedor autorizado"
+      "restriccion": "requiere una API local compatible de Omniremote y un dispositivo registrado",
+      "verificacion": "estado observado por el proveedor autorizado"
     },
     {
       "bloqueado": true,
@@ -830,8 +830,8 @@
       },
       "permisos": [],
       "recuperacion": "releer si hay evidencia, suspender si es incierto",
-      "restriccion": "requiere contrato local compatible de Omniremote y un televisor autorizado",
-      "verificacion": "relectura del televisor por el proveedor autorizado"
+      "restriccion": "requiere una API local compatible de Omniremote y un dispositivo registrado",
+      "verificacion": "estado observado por el proveedor autorizado"
     }
   ],
   "consultas": [
@@ -974,7 +974,7 @@
       }
     ]
   },
-  "hash": "feb9488d83cefb95c7e62b0678b5ec0b009be8452c7c4ef098511a5a96915960",
+  "hash": "c827cd43556bd076401175caf147b57bf6317b113a861ce1275765cc82591d3d",
   "horas_de_silencio": null,
   "integraciones": {
     "appfunctions": "sin proveedor autorizado",

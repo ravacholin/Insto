@@ -79,13 +79,15 @@ internal object InstinctDeviceCapabilities {
     else blocker
   }
 
-  fun execute(context: Context, command: PhoneCommand.Platform, executionId: String?, foreground: Boolean): PhoneActionResult {
+  fun execute(context: Context, command: PhoneCommand.Platform, executionId: String?, foreground: Boolean,
+    canDispatch: () -> Boolean = { true }): PhoneActionResult {
     val (spec, params) = InstinctCapabilities.platform(command)
-    if (executionId == null) return rejected("La acción requiere una ejecución registrada de Instinct.")
+    if (executionId == null) return rejected("Falta el identificador de ejecución de la acción.")
     blockers(context, spec, params)?.let { return PhoneActionResult(it.reason,
       outcome = if (it.pending) PhoneActionOutcome.NEEDS_INPUT else PhoneActionOutcome.REJECTED) }
     if (!spec.runsLocked && !foreground)
       return PhoneActionResult("Abrí Insto para continuar con esta acción.", outcome = PhoneActionOutcome.NEEDS_INPUT)
+    if (!canDispatch()) return rejected("Se canceló el pedido.")
     return registry.getValue(spec.adapter).execute(context, spec, params, executionId)
   }
 

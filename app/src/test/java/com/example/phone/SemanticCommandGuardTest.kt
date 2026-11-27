@@ -38,6 +38,13 @@ class SemanticCommandGuardTest {
     accepted("Bajá el volumen al treinta por ciento", PhoneCommand.Volume(VolumeOp.SET, 30))
   }
 
+  @Test fun conservaElPorcentajeDelVolumenDeOmniremote() {
+    val command = PhoneCommand.Platform(PlatformAction.INSTINCT_CAPABILITY, "omniremote_volume",
+      content = """{"device":"omniremote:7","percent":100}""")
+    accepted("Subí volumen PC al 100 %", command)
+    rejected("Subí volumen PC al 90", command)
+  }
+
   @Test fun volumenConDuracionUsaElModoTemporalYNuncaSoloElCambioPermanente() {
     val text = "Bajá el volumen al 30 % durante veinte minutos"
     assertEquals(InterpretationResult.Direct(PhoneCommand.TemporaryMode(ModeKind.MEDIA_VOLUME, 1200, 30)), interpret(text))

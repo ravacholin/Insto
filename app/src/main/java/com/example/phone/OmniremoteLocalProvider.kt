@@ -3,8 +3,9 @@ package com.example.phone
 import android.content.Context
 import android.os.SystemClock
 import com.example.phone.OmniremoteAdapter.Control
+import com.example.phone.OmniremoteAdapter.Device
+import com.example.phone.OmniremoteAdapter.Dispatch
 import com.example.phone.OmniremoteAdapter.Setting
-import com.example.phone.OmniremoteAdapter.Television
 import com.example.phone.OmniremoteAdapter.VolumeScale
 import com.example.phone.OmniremoteBinding.Companion.API_VERSION
 import com.example.phone.OmniremoteBinding.Session
@@ -19,13 +20,11 @@ internal class OmniremoteLocalProvider(
 ) : OmniremoteAdapter.Provider {
   override val transport = OmniremoteAdapter.Transport.LOCAL_API
 
-  override fun televisions(context: Context, id: String?): List<Television> = try {
+  override fun devices(context: Context, id: String?): List<Device> = try {
     binding.open(context).use { session ->
       val deadline = deadline(CATALOG_TIMEOUT)
       val ids = if (id == null) session.listDeviceIds(deadline) else listOfNotNull(deviceId(id))
-      ids.mapNotNull { deviceId ->
-        session.television(deviceId, deadline)?.let { Television("$ID_PREFIX$deviceId", it.controls) }
-      }
+      ids.mapNotNull { deviceId -> session.device(deviceId, deadline) }
     }
   } catch (error: SecurityException) {
     throw OmniremoteAdapter.DiscoveryFailure(CALLER_DENIED)
@@ -35,7 +34,7 @@ internal class OmniremoteLocalProvider(
     throw OmniremoteAdapter.DiscoveryFailure(INVALID_REPLY)
   }
 
-  override fun set(context: Context, id: String, setting: Setting, executionId: String): PhoneActionResult {
+  override fun set(context: Context, id: String, setting: Setting, executionId: String): Dispatch {
     val deviceId = deviceId(id) ?: return rejected(UNKNOWN_DEVICE)
     val control: Control
     val command: String
@@ -60,20 +59,18 @@ internal class OmniremoteLocalProvider(
 
     return try {
       binding.open(context).use { session ->
-        val television = session.television(deviceId, deadline(CATALOG_TIMEOUT)) ?: return rejected(UNKNOWN_DEVICE)
-        if (control !in television.controls) return rejected(UNSUPPORTED_CONTROL)
-        // Wake-on-LAN can be sent without opening the TV's control channel. Check for a known
-        // authorization failure first, while allowing wake when a sleeping TV is unreachable.
-        if (command == "POWER_ON") {
-          val state = session.send(deviceId, newStateId(), "GET_STATE", "{}")
-          if (state == null) return rejected("Omniremote no pudo comprobar el acceso al televisor.")
-          if (state.status != "VERIFIED" && state.code != "DEVICE_UNREACHABLE") return rejected(state.message())
-        }
+        val device = session.device(deviceId, deadline(CATALOG_TIMEOUT)) ?: return rejected(UNKNOWN_DEVICE)
+        if (control !in device.controls) return rejected(UNSUPPORTED_CONTROL)
+        // POWER_ON uses Wake-on-LAN. A sleeping device need not answer on its control channel.
         val reply = session.send(deviceId, remoteExecutionId(executionId), command, arguments.toString())
         when {
           reply == null -> uncertain()
           reply.status == "REJECTED" || reply.status == "UNSUPPORTED" -> rejected(reply.message())
-          reply.status == "VERIFIED" || reply.status == "SENT" -> PhoneActionResult("Omniremote procesó el control.")
+          reply.status == "SENT" -> uncertain("Orden enviada a ${device.label}. Omniremote todavía no confirmó el cambio.")
+          reply.status == "VERIFIED" -> Dispatch(
+            PhoneActionResult("Omniremote respondió sin confirmar el estado solicitado.", outcome = PhoneActionOutcome.UNCERTAIN),
+            reply.observed(control),
+          )
           else -> uncertain(reply.message())
         }
       }
@@ -94,28 +91,17 @@ internal class OmniremoteLocalProvider(
   private fun readState(context: Context, id: String, control: Control, recoveryId: String?): Setting? {
     val deviceId = deviceId(id) ?: return null
     return binding.open(context).use { session ->
-      val television = session.television(deviceId, deadline(CATALOG_TIMEOUT)) ?: return null
-      if (control !in television.controls) return null
+      val device = session.device(deviceId, deadline(CATALOG_TIMEOUT)) ?: return null
+      if (control !in device.controls) return null
+      var confirmedPowerOff: Setting? = null
       if (recoveryId != null) {
         val result = session.result(recoveryId, deadline(EXECUTION_TIMEOUT)) ?: return null
         if (result.status !in setOf("VERIFIED", "SENT", "UNCERTAIN") || result.code == "STORAGE_UNAVAILABLE") return null
+        // A device that confirmed power-off may stop serving fresh state immediately afterward.
+        confirmedPowerOff = result.observed(control).takeIf { it == Setting.Power(false) }
       }
-      if (control.field !in television.stateFields) return null
-
-      val reply = session.send(deviceId, newStateId(), "GET_STATE", "{}") ?: return null
-      val observed = reply.data?.opt(control.field).takeIf { reply.status == "VERIFIED" }
-      when (control) {
-        Control.POWER -> (observed as? Boolean)?.let { Setting.Power(it) }
-        Control.VOLUME -> observed.integer()?.takeIf { it in 0L..100L }?.let { percent ->
-          val max = reply.data?.opt("volumeMax").integer()
-          val level = reply.data?.opt("volumeLevel").integer()
-          val scale = if (max != null && max in 1L..Int.MAX_VALUE.toLong() && level != null && level in 0L..max) {
-            VolumeScale(level.toInt(), max.toInt())
-          } else null
-          Setting.Volume(percent.toInt(), scale)
-        }
-        Control.MUTE -> (observed as? Boolean)?.let { Setting.Mute(it) }
-      }
+      if (control.field !in device.stateFields) return confirmedPowerOff
+      session.send(deviceId, newStateId(), "GET_STATE", "{}")?.observed(control) ?: confirmedPowerOff
     }
   }
 
@@ -136,13 +122,11 @@ internal class OmniremoteLocalProvider(
     }
   }
 
-  private fun Session.television(deviceId: Long, deadline: Long): Device? {
+  private fun Session.device(deviceId: Long, deadline: Long): Device? {
     val reply = call(deadline) { parseReply(it.getDevice(API_VERSION, deviceId)) }
     if (reply.code == "UNKNOWN_DEVICE") return null
     val data = reply.catalogData()
     if (data.get("deviceId").integer() != deviceId) throw JSONException("Mismatched device ID")
-    if (data.getString("type") !in setOf("ANDROID_TV", "SAMSUNG_TIZEN")) return null
-
     val commands = data.getJSONArray("commands").strings()
     val controls = buildSet {
       if ("POWER_ON" in commands && "POWER_OFF" in commands) add(Control.POWER)
@@ -150,7 +134,7 @@ internal class OmniremoteLocalProvider(
       if ("SET_MUTE" in commands) add(Control.MUTE)
     }
     val fields = if ("GET_STATE" in commands) data.getJSONArray("stateFields").strings() else emptySet()
-    return Device(controls, fields)
+    return Device("$ID_PREFIX$deviceId", controls, data.optString("name", "").trim(), data.optString("room", "").trim(), fields)
   }
 
   private fun Session.send(deviceId: Long, id: String, command: String, arguments: String): Reply? {
@@ -189,20 +173,39 @@ internal class OmniremoteLocalProvider(
     return null
   }
 
-  private data class Device(val controls: Set<Control>, val stateFields: Set<String>)
-
   private data class Reply(val status: String, val code: String, val data: JSONObject?) {
     fun catalogData(): JSONObject = if (status == "VERIFIED") {
       data ?: throw JSONException("Missing catalog data")
     } else throw Unavailable(message())
 
+    fun observed(control: Control): Setting? {
+      if (status != "VERIFIED" || data == null) return null
+      val value = data.opt(control.field)
+      return when (control) {
+        Control.POWER -> (value as? Boolean)?.let { Setting.Power(it) }
+        Control.VOLUME -> value.integer()?.takeIf { it in 0L..100L }?.let { percent ->
+          val max = data.opt("volumeMax").integer()
+          val level = data.opt("volumeLevel").integer()
+          val scale = if (max != null && max in 1L..Int.MAX_VALUE.toLong() && level != null && level in 0L..max) {
+            VolumeScale(level.toInt(), max.toInt())
+          } else null
+          Setting.Volume(percent.toInt(), scale)
+        }
+        Control.MUTE -> (value as? Boolean)?.let { Setting.Mute(it) }
+      }
+    }
+
     fun message(): String = when (code) {
-      "DEVICE_AUTHORIZATION_REQUIRED" -> "Autorizá el televisor en Omniremote."
-      "DEVICE_UNREACHABLE" -> "El televisor está temporalmente inaccesible en Omniremote."
+      "DEVICE_AUTHORIZATION_REQUIRED" -> "Autorizá el dispositivo en Omniremote."
+      "DEVICE_UNREACHABLE" -> "El dispositivo está temporalmente inaccesible en Omniremote."
       "UNKNOWN_DEVICE", "TARGET_CHANGED", "TARGET_IDENTITY_CHANGED" -> UNKNOWN_DEVICE
       "NOT_SUPPORTED", "UNKNOWN_COMMAND" -> UNSUPPORTED_CONTROL
       "CALLER_NO_LONGER_AUTHORIZED" -> CALLER_DENIED
       "DEVICE_BUSY", "SERVICE_BUSY" -> "Omniremote está ocupado con otro control."
+      "MAC_ADDRESS_REQUIRED" -> "Guardá la dirección MAC del dispositivo en Omniremote para poder encenderlo."
+      "WAKE_NOT_CONFIRMED" -> "Omniremote no pudo confirmar el envío del encendido."
+      "POWER_OFF_NOT_CONFIRMED" -> "Omniremote no pudo confirmar el apagado."
+      "VOLUME_NOT_OBSERVED", "STATE_MISMATCH" -> "Omniremote no pudo confirmar el ajuste de audio solicitado."
       else -> "Omniremote no pudo completar la operación."
     }
   }
@@ -214,8 +217,8 @@ internal class OmniremoteLocalProvider(
     private const val EXECUTION_TIMEOUT = 42_000L
     private const val POLL_INTERVAL = 400L
     private const val CALLER_DENIED = "Omniremote no autoriza a Insto en este perfil."
-    private const val UNKNOWN_DEVICE = "El televisor ya no está disponible en Omniremote."
-    private const val UNSUPPORTED_CONTROL = "El televisor no admite este control en Omniremote."
+    private const val UNKNOWN_DEVICE = "El dispositivo ya no está disponible en Omniremote."
+    private const val UNSUPPORTED_CONTROL = "El dispositivo no admite este control en Omniremote."
     private const val INVALID_REPLY = "Omniremote devolvió una respuesta incompatible."
 
     private fun deadline(timeout: Long) = SystemClock.elapsedRealtime() + timeout
@@ -248,8 +251,8 @@ internal class OmniremoteLocalProvider(
       return Reply(value.getString("status"), value.getString("code"), value.optJSONObject("data"))
     }
 
-    private fun rejected(message: String) = PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED)
+    private fun rejected(message: String) = Dispatch(PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED))
     private fun uncertain(message: String = "No pude recuperar el resultado de Omniremote.") =
-      PhoneActionResult(message, outcome = PhoneActionOutcome.UNCERTAIN)
+      Dispatch(PhoneActionResult(message, outcome = PhoneActionOutcome.UNCERTAIN))
   }
 }
