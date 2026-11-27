@@ -5,6 +5,7 @@ import android.os.SystemClock
 import com.example.phone.OmniremoteAdapter.Control
 import com.example.phone.OmniremoteAdapter.Setting
 import com.example.phone.OmniremoteAdapter.Television
+import com.example.phone.OmniremoteAdapter.VolumeScale
 import com.example.phone.OmniremoteBinding.Companion.API_VERSION
 import com.example.phone.OmniremoteBinding.Session
 import com.example.phone.OmniremoteBinding.Unavailable
@@ -105,7 +106,14 @@ internal class OmniremoteLocalProvider(
       val observed = reply.data?.opt(control.field).takeIf { reply.status == "VERIFIED" }
       when (control) {
         Control.POWER -> (observed as? Boolean)?.let { Setting.Power(it) }
-        Control.VOLUME -> observed.integer()?.takeIf { it in 0L..100L }?.let { Setting.Volume(it.toInt()) }
+        Control.VOLUME -> observed.integer()?.takeIf { it in 0L..100L }?.let { percent ->
+          val max = reply.data?.opt("volumeMax").integer()
+          val level = reply.data?.opt("volumeLevel").integer()
+          val scale = if (max != null && max in 1L..Int.MAX_VALUE.toLong() && level != null && level in 0L..max) {
+            VolumeScale(level.toInt(), max.toInt())
+          } else null
+          Setting.Volume(percent.toInt(), scale)
+        }
         Control.MUTE -> (observed as? Boolean)?.let { Setting.Mute(it) }
       }
     }

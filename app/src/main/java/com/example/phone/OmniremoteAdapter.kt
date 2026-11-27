@@ -10,9 +10,11 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
 
   sealed interface Setting {
     data class Power(val on: Boolean) : Setting
-    data class Volume(val percent: Int) : Setting
+    data class Volume(val percent: Int, val scale: VolumeScale? = null) : Setting
     data class Mute(val muted: Boolean) : Setting
   }
+
+  data class VolumeScale(val level: Int, val max: Int)
 
   data class Television(val id: String, val controls: Set<Control>)
 
@@ -77,7 +79,7 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
     val result = runCatching { provider.set(context, id, setting, executionId) }.getOrNull()
     if (result?.outcome == PhoneActionOutcome.REJECTED || result?.outcome == PhoneActionOutcome.NEEDS_INPUT)
       return result.copy(verifiedLocally = false)
-    return if (runCatching { provider.read(context, id, control) }.getOrNull() == setting) verified() else
+    return if (matches(setting, runCatching { provider.read(context, id, control) }.getOrNull())) verified() else
       PhoneActionResult(result?.takeIf { it.outcome == PhoneActionOutcome.UNCERTAIN }?.message
         ?: "No pude comprobar el estado del televisor.", outcome = PhoneActionOutcome.UNCERTAIN)
   }
@@ -87,8 +89,17 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
     val id = params.getString("device")
     val provider = candidates(context, control, id).entries.firstOrNull()?.first ?: return null
     return verified().takeIf {
-      runCatching { provider.recover(context, id, control, executionId) }.getOrNull() == setting(control, params)
+      matches(setting(control, params), runCatching { provider.recover(context, id, control, executionId) }.getOrNull())
     }
+  }
+
+  private fun matches(requested: Setting, observed: Setting?): Boolean {
+    if (requested is Setting.Volume && observed is Setting.Volume) {
+      val scale = observed.scale ?: return observed.percent == requested.percent
+      // OMNIREMOTE rounds a percentage to the nearest physical step on Android TV.
+      return scale.level.toLong() == (requested.percent.toLong() * scale.max + 50) / 100
+    }
+    return observed == requested
   }
 
   private fun control(id: String) = when (id) {
