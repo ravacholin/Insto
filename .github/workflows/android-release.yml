@@ -35,16 +35,33 @@ jobs:
           ./gradlew --no-daemon --no-configuration-cache :app:assembleRelease
           apk=app/build/outputs/apk/release/app-release-unsigned.apk
           tools_dir="$ANDROID_HOME/build-tools/36.0.0"
-          test "$("$tools_dir/aapt" dump packagename "$apk")" = com.aistudio.pingassist.qvrtkm
+          badging=$("$tools_dir/aapt" dump badging "$apk")
+          grep -E "^package: name='com[.]aistudio[.]pingassist[.]qvrtkm' " <<< "$badging"
           if "$tools_dir/apksigner" verify "$apk" > unsigned-check.log 2>&1; then
             echo "::error::Se esperaba una APK sin firma."
             exit 1
           fi
           cat unsigned-check.log
           grep -F 'Missing META-INF/MANIFEST.MF' unsigned-check.log
+          sha256sum "$apk"
+          if (( $(stat -c '%s' "$apk") > 30000000 )); then
+            split -b 30000000 -d "$apk" unsigned-apk-part-
+          fi
       - name: Guardar APK sin firma
         uses: actions/upload-artifact@v5
         with:
           name: insto-release-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
+      - name: Guardar primera parte si es grande
+        if: ${{ hashFiles('unsigned-apk-part-00') != '' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: insto-release-unsigned-part-00
+          path: unsigned-apk-part-00
+      - name: Guardar segunda parte si es grande
+        if: ${{ hashFiles('unsigned-apk-part-01') != '' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: insto-release-unsigned-part-01
+          path: unsigned-apk-part-01
