@@ -2,13 +2,15 @@ name: Android release firmado
 
 on:
   workflow_dispatch:
+  push:
+    branches: [build/omniremote-apk]
 
 permissions:
   contents: read
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/build/omniremote-apk'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
