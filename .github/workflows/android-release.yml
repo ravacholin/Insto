@@ -1,4 +1,4 @@
-name: Android release firmado
+name: Android release sin firmar
 
 on:
   workflow_dispatch:
@@ -13,8 +13,6 @@ jobs:
     if: github.ref == 'refs/heads/build/omniremote-apk'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      EXPECTED_CERT_SHA256: 5d5824adbb2b4903914f5e9f836cf44c6bde93db56831d7ee819c4016ca41c5f
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
@@ -30,38 +28,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           cache-read-only: true
-      - name: Compilar y verificar la firma de distribución
+      - name: Compilar y verificar APK sin firma
         shell: bash
-        env:
-          RELEASE_KEYSTORE_B64: ${{ secrets.INSTO_RELEASE_KEYSTORE_B64 }}
-          STORE_PASSWORD: ${{ secrets.INSTO_RELEASE_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ -z "$RELEASE_KEYSTORE_B64" || -z "$STORE_PASSWORD" ]]; then
-            echo "::error::Faltan los secretos de firma de Insto."
+          ./gradlew --no-daemon --no-configuration-cache :app:assembleRelease
+          apk=app/build/outputs/apk/release/app-release-unsigned.apk
+          tools_dir="$ANDROID_HOME/build-tools/36.0.0"
+          test "$("$tools_dir/aapt" dump packagename "$apk")" = com.aistudio.pingassist.qvrtkm
+          if "$tools_dir/apksigner" verify "$apk" > unsigned-check.log 2>&1; then
+            echo "::error::Se esperaba una APK sin firma."
             exit 1
           fi
-          umask 077
-          signing_dir=$(mktemp -d)
-          trap 'rm -rf -- "$signing_dir"' EXIT
-          export KEYSTORE_PATH="$signing_dir/insto-release.p12"
-          export KEY_PASSWORD="$STORE_PASSWORD"
-          printf '%s' "$RELEASE_KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
-          unset RELEASE_KEYSTORE_B64
-
-          certificate=$(keytool -exportcert -alias upload -keystore "$KEYSTORE_PATH" -storepass:env STORE_PASSWORD |
-            sha256sum | cut -d ' ' -f 1)
-          if [[ "$certificate" != "$EXPECTED_CERT_SHA256" ]]; then
-            echo "::error::El certificado del keystore no coincide con la firma de distribución de Insto."
-            exit 1
-          fi
-          ./gradlew --no-daemon --no-configuration-cache assembleRelease
-          apk=app/build/outputs/apk/release/app-release.apk
-          signature=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk")
-          printf '%s\n' "$signature" | grep -Fx "Signer #1 certificate SHA-256 digest: $EXPECTED_CERT_SHA256"
-      - name: Guardar APK de distribución
+          cat unsigned-check.log
+          grep -F 'Missing META-INF/MANIFEST.MF' unsigned-check.log
+      - name: Guardar APK sin firma
         uses: actions/upload-artifact@v5
         with:
-          name: insto-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
+          name: insto-release-unsigned
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
