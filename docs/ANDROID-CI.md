@@ -39,8 +39,8 @@ Comprueba el certificado antes de compilar y verifica la firma del APK
 antes de guardar el artefacto `insto-release-apk`.
 
 El SHA-256 del certificado es
-`5D:58:24:AD:BB:2B:49:03:91:4F:5E:9F:83:6C:F4:4C:6B:DE:93:DB:56:83:1D:7E:E8:19:C4:01:6C:A4:1C:5F`.
-Usá esa huella si OMNIREMOTE necesita autorizar el certificado de Insto.
+`4F:CE:25:47:DD:FC:C4:6F:66:23:BA:7D:D7:4D:A8:7F:C2:F0:9F:43:1F:37:4C:29:B0:7C:A2:A7:A8:E9:D6:6C`.
+Omniremote usa esa huella para autorizar a Insto.
 Los APK firmados con este certificado pueden actualizarse entre sí
 si el identificador de la app coincide y la versión permite la actualización.
 
