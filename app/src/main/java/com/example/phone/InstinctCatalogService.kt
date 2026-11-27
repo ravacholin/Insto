@@ -71,8 +71,6 @@ object InstinctCatalogPublisher {
     val availability = InstinctCapabilities.specs.mapValues { (id, spec) ->
       val blocker = discovery[id]?.blocker
       when {
-        spec.adapter == InstinctCapabilities.Adapter.OMNIREMOTE && blocker == null && !channels.mailbox ->
-          InstinctCapabilities.OMNIREMOTE_UNAVAILABLE
         !channels.mailbox -> "requiere el buzón firmado"
         blocker?.pending == true -> "pendiente: ${blocker.reason}"
         blocker != null -> "no disponible: ${blocker.reason}"

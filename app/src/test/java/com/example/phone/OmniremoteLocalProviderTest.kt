@@ -152,6 +152,20 @@ class OmniremoteLocalProviderTest {
     assertFalse(result.verifiedLocally)
   }
 
+  @Test fun verifiesThePhysicalVolumeStepOnExecutionAndRecovery() = offMain {
+    remote.applyWrites = false
+    remote.reportVolume(percent = 33, level = 5, max = 15)
+    val request = params("percent", 32)
+
+    assertTrue(adapter.execute(context, volume, request, "rounded-volume").verifiedLocally)
+    assertTrue(adapter.observe(context, volume, request, "rounded-volume")!!.verifiedLocally)
+
+    remote.reportVolume(percent = 40, level = 6, max = 15)
+    assertNull(adapter.observe(context, volume, request, "rounded-volume"))
+    assertEquals(PhoneActionOutcome.UNCERTAIN,
+      adapter.execute(context, volume, request, "different-volume").outcome)
+  }
+
   @Test fun reconnectsAndRecoversTheSameIdWithoutExecutingAgain() = offMain {
     remote.disconnectOnWrite = { context.disconnect() }
     val result = adapter.execute(context, mute, params("muted", true), "stable-journal-id")
@@ -255,6 +269,10 @@ class OmniremoteLocalProviderTest {
     val lookups = mutableListOf<String>()
     private val ledger = mutableMapOf<String, String>()
     private val state = JSONObject().put("power", true).put("volume", 32).put("muted", false)
+
+    fun reportVolume(percent: Int, level: Int, max: Int) {
+      state.put("volume", percent).put("volumeLevel", level).put("volumeMax", max)
+    }
 
     override fun getApiVersion(): Int {
       assertFalse(Looper.myLooper() == Looper.getMainLooper())

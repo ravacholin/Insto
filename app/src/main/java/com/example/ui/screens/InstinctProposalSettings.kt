@@ -630,8 +630,7 @@ private fun InstinctCatalogSection(revision: Int, onChange: () -> Unit) {
   val shown = line ?: return
   Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("instinct_catalog")) {
     Text("Catálogo para Instinct", style = MaterialTheme.typography.bodyLarge)
-    SettingsDescription("Insto publica en la planilla las reglas vigentes (qué puede pedir Instinct, la autonomía, los límites) cada " +
-      "vez que cambian, para que Instinct no dependa de una copia pegada.")
+    SettingsDescription("En la planilla de Google de la Bitácora, abrí la pestaña «Catálogo». La celda C2 contiene el catálogo vigente.")
     SettingsDescription(shown, modifier = Modifier.testTag("instinct_catalog_line"))
     OutlinedButton(onClick = {
       busy = true; notice = "Publicando…"

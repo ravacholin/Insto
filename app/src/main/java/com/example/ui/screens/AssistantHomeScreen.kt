@@ -480,6 +480,10 @@ private fun AssistantSetupSheet(
         InstinctProposalSettingsSection(prefs.pinnedContact, prefs.preferredFlavor)
       }
 
+      SettingsCategory("OMNIREMOTE", expandedCategory == "omniremote", { toggleCategory("omniremote") }) {
+        OmniremoteSettingsSection()
+      }
+
       SettingsCategory("Callar alarma con la voz", expandedCategory == "alarmvoice", { toggleCategory("alarmvoice") }) {
         AlarmVoiceSettingsSection()
       }
