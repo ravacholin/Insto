@@ -1,5 +1,7 @@
 package com.example.phone
 
+import org.json.JSONObject
+
 /**
  * The «Órdenes para Insto» block for Instinct's prompt, generated from the code so it never drifts from the
  * grammar: the rules of the protocol, one example per allowed type ([InstinctProposalValidator.examples]), the routines
@@ -308,6 +310,9 @@ object InstinctProtocolCatalog {
     availability: Map<String, String> = emptyMap(), calendarIds: List<Long> = emptyList(),
     calendarWriteIds: List<Long> = emptyList(), calendarLabels: Map<Long, String> = emptyMap(), routineRevisions: Map<String, String> = emptyMap(),
     capabilityTargets: Map<String, List<String>> = emptyMap(),
+    capabilityHealth: Map<String, Map<String, Any>> = emptyMap(),
+    operationsHealth: Map<String, Map<String, Any>> = emptyMap(),
+    targetHealth: Map<String, Map<String, Any>> = emptyMap(),
     parse: (String) -> PhoneRoute = PhoneCommandParser()::parse): InstinctCatalogJson {
     fun category(order: String) = (parse(order) as? PhoneRoute.Local)?.command?.let(InstinctCategory::of)?.label
     val quiet = autonomy.quiet
@@ -324,7 +329,13 @@ object InstinctProtocolCatalog {
           if (autonomy.level(spec.category) == InstinctAutonomy.NUNCA) "nunca"
           else availability[spec.id] ?: if (spec.adapter == InstinctCapabilities.Adapter.OMNIREMOTE)
             InstinctCapabilities.OMNIREMOTE_UNAVAILABLE else "consultar catálogo del teléfono",
-          targets = capabilityTargets[spec.id].orEmpty().takeIf { autonomy.level(spec.category) != InstinctAutonomy.NUNCA }.orEmpty()))
+          targets = capabilityTargets[spec.id].orEmpty().takeIf { autonomy.level(spec.category) != InstinctAutonomy.NUNCA }.orEmpty()).apply {
+          if (channels.mailbox && autonomy.level(spec.category) != InstinctAutonomy.NUNCA) {
+            capabilityHealth[spec.id]?.let { put("salud", JSONObject(it)) }
+            val targets = capabilityTargets[spec.id].orEmpty().mapNotNull { id -> targetHealth[id]?.let { id to it } }.toMap()
+            if (targets.isNotEmpty()) put("salud_destinos", JSONObject(targets))
+          }
+        })
       },
       "calendarios_habilitados" to calendarIds,
       "calendarios_con_escritura" to calendarWriteIds,
@@ -420,7 +431,8 @@ object InstinctProtocolCatalog {
       "entrega_buzon" to listOf("push_directo_si_entra", "referencia_cifrada_id_sha256", "sondeo_de_respaldo"),
       "reglas" to listOf(TRIGGER_RULE, InstinctProbe.RULE),
     )
-    val canonical = InstinctCatalogCanonical.write(value)
+    val extended = if (channels.mailbox && operationsHealth.isNotEmpty()) value + ("salud_operativa" to operationsHealth) else value
+    val canonical = InstinctCatalogCanonical.write(extended)
     return InstinctCatalogJson(canonical, sha256(canonical))
   }
 }

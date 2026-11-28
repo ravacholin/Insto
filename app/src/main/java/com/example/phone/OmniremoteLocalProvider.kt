@@ -27,11 +27,11 @@ internal class OmniremoteLocalProvider(
       ids.mapNotNull { deviceId -> session.device(deviceId, deadline) }
     }
   } catch (error: SecurityException) {
-    throw OmniremoteAdapter.DiscoveryFailure(CALLER_DENIED)
+    throw OmniremoteAdapter.DiscoveryFailure(CALLER_DENIED, HealthCode.PROVIDER_UNTRUSTED)
   } catch (error: Unavailable) {
-    throw OmniremoteAdapter.DiscoveryFailure(error.reason)
+    throw OmniremoteAdapter.DiscoveryFailure(error.reason, error.health)
   } catch (error: JSONException) {
-    throw OmniremoteAdapter.DiscoveryFailure(INVALID_REPLY)
+    throw OmniremoteAdapter.DiscoveryFailure(INVALID_REPLY, HealthCode.RESPONSE)
   }
 
   override fun set(context: Context, id: String, setting: Setting, executionId: String): Dispatch {
@@ -65,21 +65,21 @@ internal class OmniremoteLocalProvider(
         val reply = session.send(deviceId, remoteExecutionId(executionId), command, arguments.toString())
         when {
           reply == null -> uncertain()
-          reply.status == "REJECTED" || reply.status == "UNSUPPORTED" -> rejected(reply.message())
+          reply.status == "REJECTED" || reply.status == "UNSUPPORTED" -> rejected(reply.message(), reply.healthCode())
           reply.status == "SENT" -> uncertain("Orden enviada a ${device.label}. Omniremote todavía no confirmó el cambio.")
           reply.status == "VERIFIED" -> Dispatch(
             PhoneActionResult("Omniremote respondió sin confirmar el estado solicitado.", outcome = PhoneActionOutcome.UNCERTAIN),
             reply.observed(control),
           )
-          else -> uncertain(reply.message())
+          else -> uncertain(reply.message(), reply.healthCode())
         }
       }
     } catch (error: SecurityException) {
-      rejected(CALLER_DENIED)
+      rejected(CALLER_DENIED, HealthCode.PROVIDER_UNTRUSTED)
     } catch (error: Unavailable) {
-      rejected(error.reason)
+      rejected(error.reason, error.health)
     } catch (error: JSONException) {
-      rejected(INVALID_REPLY)
+      rejected(INVALID_REPLY, HealthCode.RESPONSE)
     }
   }
 
@@ -176,7 +176,7 @@ internal class OmniremoteLocalProvider(
   private data class Reply(val status: String, val code: String, val data: JSONObject?) {
     fun catalogData(): JSONObject = if (status == "VERIFIED") {
       data ?: throw JSONException("Missing catalog data")
-    } else throw Unavailable(message())
+    } else throw Unavailable(message(), healthCode())
 
     fun observed(control: Control): Setting? {
       if (status != "VERIFIED" || data == null) return null
@@ -193,6 +193,17 @@ internal class OmniremoteLocalProvider(
         }
         Control.MUTE -> (value as? Boolean)?.let { Setting.Mute(it) }
       }
+    }
+
+    fun healthCode() = when (code) {
+      "CALLER_NO_LONGER_AUTHORIZED", "CALLER_NOT_AUTHORIZED" -> HealthCode.PROVIDER_UNTRUSTED
+      "UNSUPPORTED_VERSION" -> HealthCode.VERSION
+      "DEVICE_AUTHORIZATION_REQUIRED" -> HealthCode.CONSENT
+      "DEVICE_UNREACHABLE" -> HealthCode.DEVICE_UNREACHABLE
+      "UNKNOWN_DEVICE", "TARGET_CHANGED", "TARGET_IDENTITY_CHANGED" -> HealthCode.DEVICE_MISSING
+      "NOT_SUPPORTED", "UNKNOWN_COMMAND" -> HealthCode.UNSUPPORTED
+      "DEVICE_BUSY", "SERVICE_BUSY" -> HealthCode.RATE_LIMIT
+      else -> HealthCode.NO_RESULT
     }
 
     fun message(): String = when (code) {
@@ -251,8 +262,9 @@ internal class OmniremoteLocalProvider(
       return Reply(value.getString("status"), value.getString("code"), value.optJSONObject("data"))
     }
 
-    private fun rejected(message: String) = Dispatch(PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED))
-    private fun uncertain(message: String = "No pude recuperar el resultado de Omniremote.") =
-      Dispatch(PhoneActionResult(message, outcome = PhoneActionOutcome.UNCERTAIN))
+    private fun rejected(message: String, health: HealthCode? = null) =
+      Dispatch(PhoneActionResult(message, outcome = PhoneActionOutcome.REJECTED, healthCode = health?.name))
+    private fun uncertain(message: String = "No pude recuperar el resultado de Omniremote.", health: HealthCode? = null) =
+      Dispatch(PhoneActionResult(message, outcome = PhoneActionOutcome.UNCERTAIN, healthCode = health?.name))
   }
 }

@@ -98,7 +98,9 @@ class AlarmVoiceStopService : Service() {
       AlarmVoiceCoordinator.finishUi("Falta el permiso de micrófono."); return
     }
     ui.value = AlarmVoiceUiState(status = "Preparando el reconocimiento…")
+    val health = com.example.phone.CapabilityHealthRuntime.current()
     val model = AlarmVoiceEngine.obtain(this)
+    health?.report("vosk.load", if (model == null) com.example.phone.HealthCode.MODEL_LOAD else com.example.phone.HealthCode.VERIFIED)
     if (model == null) {
       AlarmVoiceLog.add(this, "No se pudo cargar el modelo de voz")
       AlarmVoiceCoordinator.finishUi("No se pudo cargar el modelo de voz."); return
@@ -120,6 +122,8 @@ class AlarmVoiceStopService : Service() {
       if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(record.audioSessionId)?.let { it.enabled = true; effects += it }
       if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(record.audioSessionId)?.let { it.enabled = true; effects += it }
       record.startRecording()
+      health?.report("system.foreground", com.example.phone.HealthCode.VERIFIED)
+      var captured = false
       AlarmVoiceLog.add(this, "Escuchando ${windowMs / 1000} s" + (if (test) " (prueba)" else "") +
         "; eco: ${if (effects.any { it is AcousticEchoCanceler }) "sí" else "no"}, ruido: ${if (effects.any { it is NoiseSuppressor }) "sí" else "no"}")
       val confirm = PartialConfirmation(keywords)
@@ -138,6 +142,10 @@ class AlarmVoiceStopService : Service() {
         }
         val n = record.read(frame, 0, frame.size)
         if (n <= 0) continue
+        if (!captured && (0 until n).any { frame[it] != 0.toShort() }) {
+          captured = true
+          if (!test) health?.report("alarm.listening", com.example.phone.HealthCode.VERIFIED)
+        }
         heard = if (recognizer.acceptWaveForm(frame, n)) {
           confirm.reset()
           KeywordMatcher.matchWords(AlarmVoiceEngine.words(recognizer.result), keywords)
@@ -157,6 +165,8 @@ class AlarmVoiceStopService : Service() {
         EyesFreeFeedbackManager.playSentCue(this, false)
       }
     } catch (e: Throwable) {
+      health?.report("alarm.listening", com.example.phone.HealthCode.MICROPHONE,
+        stage = com.example.phone.HealthStage.CAPTURE)
       outcome = "error: ${e.javaClass.simpleName}"
     } finally {
       runCatching { record?.stop() }

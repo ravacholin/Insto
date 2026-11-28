@@ -165,6 +165,7 @@ class LocalIntentRegistry(val definitions: List<LocalIntentDefinition>) {
     val default: LocalIntentRegistry by lazy { LocalIntentRegistry(defaultDefinitions()) }
 
     private fun defaultDefinitions(): List<LocalIntentDefinition> = buildList {
+      addAll(CapabilityHealthCommand.entries.map(CapabilityHealthCommand::definition))
       fun p(name: String, type: String = "texto", required: Boolean = true, detail: String = "valor explícito del usuario") =
         IntentParameter(name, type, required, detail)
       fun fixed(id: String, cat: IntentCategory, desc: String, first: String, second: String, command: PhoneCommand,

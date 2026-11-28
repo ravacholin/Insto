@@ -106,6 +106,8 @@ object BackupInventory {
     f("instinct-catalog-last.json", Class.TRANSIENT, null, "último catálogo publicado"),
     f("instinct-state-last.json", Class.TRANSIENT, null, "último estado publicado"),
     f("instinct-routine-workflow.json", Class.TRANSIENT, null, "rutina en curso"),
+    f("capability-health.json", Class.TRANSIENT, null, "evidencia operativa local, sin datos personales"),
+    f("capability-health-boot", Class.TRANSIENT, null, "generación local del arranque"),
     f("instinct-readiness-needed.json", Class.TRANSIENT, null, "permisos que una orden necesitó en este teléfono"),
     f("instinct-reactivation.json", Class.TRANSIENT, null, "pedido de reactivación después de restaurar"),
     // Other state

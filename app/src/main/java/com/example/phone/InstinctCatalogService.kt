@@ -20,7 +20,8 @@ import org.json.JSONObject
 object InstinctCatalogPublisher {
   const val LAST_FILE = "instinct-catalog-last.json"
   const val ACTION = "catalogo"
-  private const val JOB_ID = 7_321
+  // 7_321 is reserved for draining orders that arrived by push.
+  private const val JOB_ID = 7_323
   private const val BACKOFF_MILLIS = 30_000L
 
   internal var clock: () -> Long = { InstinctScheduler.wallClock() }
@@ -81,12 +82,19 @@ object InstinctCatalogPublisher {
     }
     val routines = InstinctRoutineGrants(app).access()
     val names = routines.enabledNames()
+    val health = CapabilityHealthRuntime.current()
     return InstinctProtocolCatalog.json(names, InstinctAutonomySettings(app).policy(), channels, instoVersion(),
       availability = availability, calendarIds = enabledCalendars, calendarWriteIds = writableCalendars,
       calendarLabels = calendars.filter { it.id in enabledCalendars }.associate {
         it.id to InstinctAck.cut(InstinctAck.flat(it.label), 80).takeIf(InstinctAck::safe).orEmpty()
       },
       capabilityTargets = discovery.mapValues { it.value.targets }.filterValues { it.isNotEmpty() },
+      capabilityHealth = health?.let { reader -> InstinctCapabilities.specs.keys.associateWith(reader::protocolStatus) }.orEmpty(),
+      operationsHealth = health?.protocolOperations().orEmpty(),
+      targetHealth = health?.let { reader ->
+        discovery.filterKeys { InstinctCapabilities.specs[it]?.adapter == InstinctCapabilities.Adapter.OMNIREMOTE }
+          .values.flatMap { it.targets }.distinct().associateWith { reader.protocolStatus(OmniremoteHealth.deviceId(it)) }
+      }.orEmpty(),
       routineRevisions = names.mapNotNull { name -> routines.resolve(name)?.let { name to InstinctRoutines.hash(it) } }.toMap())
   }
 
@@ -133,8 +141,15 @@ object InstinctCatalogPublisher {
     val raw = runCatching { client().post(url, body) }.getOrElse { InstinctLogClient.Raw.Failed(InstinctLogClient.Failure.NETWORK) }
     val outcome = parse(raw, catalog.hash)
     when (outcome) {
-      is Outcome.Published -> writeLast(app, Last(catalog.hash, clock(), null))
-      is Outcome.Failed -> writeLast(app, last.copy(failure = outcome.reason))
+      is Outcome.Published -> {
+        writeLast(app, Last(catalog.hash, clock(), null))
+        CapabilityHealthRuntime.current()?.report("instinct.catalog", HealthCode.VERIFIED, evidence = HealthEvidence.TRANSPORT)
+      }
+      is Outcome.Failed -> {
+        writeLast(app, last.copy(failure = outcome.reason))
+        CapabilityHealthRuntime.current()?.report("instinct.catalog", if (outcome.retry) HealthCode.PROVIDER_DOWN
+          else HealthCode.CONFIG, evidence = HealthEvidence.TRANSPORT)
+      }
       else -> Unit
     }
     outcome

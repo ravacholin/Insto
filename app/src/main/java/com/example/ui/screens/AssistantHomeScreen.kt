@@ -480,6 +480,10 @@ private fun AssistantSetupSheet(
         InstinctProposalSettingsSection(prefs.pinnedContact, prefs.preferredFlavor)
       }
 
+      SettingsCategory("Centro de salud", expandedCategory == "health", { toggleCategory("health") }) {
+        CapabilityHealthSettings()
+      }
+
       SettingsCategory("Omniremote", expandedCategory == "omniremote", { toggleCategory("omniremote") }) {
         OmniremoteSettingsSection()
       }

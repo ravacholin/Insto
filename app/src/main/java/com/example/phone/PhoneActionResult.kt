@@ -24,6 +24,7 @@ data class PhoneActionResult(
   val effectUnverified: Boolean = false,
   val verifiedLocally: Boolean = false,
   val executionData: String? = null,
+  internal val healthCode: String? = null,
 ) {
   val retainRequest: Boolean get() = outcome == PhoneActionOutcome.NEEDS_INPUT || outcome == PhoneActionOutcome.REJECTED || outcome == PhoneActionOutcome.UNCERTAIN || stopwatchAutomation != null || needsCamera || needsContacts || needsNotifications || contactOptions.isNotEmpty()
 }

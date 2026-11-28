@@ -10,6 +10,7 @@ open class InstoApplication:Application() {
 
  override fun onCreate() {
   super.onCreate()
+  runCatching { com.example.phone.CapabilityHealthRuntime.start(this) }
   preferencesCache // Starts loading now, before any screen, tile or widget asks for it.
   // A gap between processes may contain manual changes that no observer could see: a value that differs from the one
   // Insto applied is one, and is kept; an unchanged value is still Insto's to restore (1.20.0).

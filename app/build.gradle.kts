@@ -11,8 +11,8 @@ android {
     applicationId = "com.aistudio.pingassist.qvrtkm"
     minSdk = 24
     targetSdk = 36
-    versionCode = 35
-    versionName = "1.25.1"
+    versionCode = 36
+    versionName = "1.26.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

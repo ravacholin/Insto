@@ -99,6 +99,8 @@ class LearnedPhraseStore internal constructor(
     val activePatterns: List<PatternEntry> get() = patterns.filter { it.active }
   }
 
+  internal suspend fun healthEnabled(): Boolean = store.data.first()[enabled] ?: true
+
   private val settings = store.data.map { Settings(it[enabled] ?: true, entries(it), patterns(it)) }
 
   /**

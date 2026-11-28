@@ -29,7 +29,7 @@ class HybridPhoneRouter(
   internal fun isFixedCommand(command: PhoneCommand): Boolean = command in fixedCommands
 
   fun isEnabled(): Boolean = enabled()
-  fun needsDecision(text: String, local: PhoneRoute): Boolean = enabled() && local != PhoneRoute.Cancel
+  fun needsDecision(text: String, local: PhoneRoute): Boolean = enabled() && local != PhoneRoute.Cancel && CapabilityHealthCommand.of((local as? PhoneRoute.Local)?.command) == null
   suspend fun classify(request: InterpretationRequest): SemanticDecision = classifier.classify(request)
   fun resolve(choice: String, text: String): PhoneRoute = registry.resolve(choice, text)
   fun hasIntent(choice: String): Boolean = choice in registry.choices && choice !in LocalIntentRegistry.fallbackIds

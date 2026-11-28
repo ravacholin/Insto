@@ -46,10 +46,12 @@ internal object InstinctDeviceCapabilities {
   data class Block(val reason: String, val pending: Boolean)
   data class Discovery(val blocker: Block?, val targets: List<String> = emptyList())
 
+  internal val omniremoteProvider = OmniremoteLocalProvider()
+
   private val registry = mapOf(
     InstinctCapabilities.Adapter.ANDROID_LOCAL to AndroidLocalCapabilities,
     InstinctCapabilities.Adapter.ANDROID_INTENT to AndroidIntentCapabilities,
-    InstinctCapabilities.Adapter.OMNIREMOTE to OmniremoteAdapter(listOf(OmniremoteLocalProvider())),
+    InstinctCapabilities.Adapter.OMNIREMOTE to OmniremoteAdapter(listOf(omniremoteProvider)),
   )
 
   fun granted(context: Context, permission: String): Boolean = when (permission) {

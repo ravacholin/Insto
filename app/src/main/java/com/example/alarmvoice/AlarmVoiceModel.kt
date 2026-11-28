@@ -24,6 +24,11 @@ class AlarmVoiceModel(context: Context) {
 
   fun isInstalled(): Boolean = marker.exists() && marker.readTextOrNull() == SHA256 && File(directory, "am/final.mdl").exists()
 
+  /** Installed archive marker and the nonempty files needed by the recognizer. Native load checks the format. */
+  fun hasRequiredFiles(): Boolean = isInstalled() && listOf(
+    "am/final.mdl", "conf/model.conf", "conf/mfcc.conf", "graph/HCLr.fst", "graph/Gr.fst"
+  ).all { path -> File(directory, path).let { it.isFile && it.length() > 0 } }
+
   fun sizeOnDisk(): Long = directory.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
 
   fun delete() {

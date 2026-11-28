@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.ServiceConnection
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
@@ -20,6 +21,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -29,6 +31,27 @@ class OmniremoteLocalProviderTest {
   private val context = BindingContext(remote)
   private val provider = OmniremoteLocalProvider()
   private val adapter = OmniremoteAdapter(listOf(provider))
+
+  @Test fun healthCatalogDoesNotExecuteAndADeviceFailureLeavesProviderHealthy() = offMain {
+    shadowOf(context.packageManager).installPackage(PackageInfo().apply {
+      packageName = OmniremoteBinding.PACKAGE
+    })
+    val discovered = mutableMapOf<String, HealthCheck>()
+    val health = OmniremoteHealth(context, provider) { discovered[it.id] = it }
+    kotlinx.coroutines.runBlocking {
+      val catalog = health.checks().single { it.id == "omniremote.catalog" }
+      val device = OmniremoteHealth.deviceId(TV)
+      assertEquals(HealthCode.VERIFIED, catalog.probe().code)
+      assertEquals(HealthCode.PREFLIGHT, discovered.getValue(device).probe().code)
+      assertTrue(remote.requests.isEmpty())
+      val read = discovered.getValue("$device.read")
+      assertEquals(HealthEffect.RESOURCE, read.effect)
+      remote.stateFailure = "DEVICE_UNREACHABLE"
+      assertEquals(HealthCode.DEVICE_UNREACHABLE, read.probe().code)
+      assertEquals(HealthCode.VERIFIED, catalog.probe().code)
+      assertEquals(listOf("GET_STATE"), remote.requests.map { it.command })
+    }
+  }
 
   @Test fun bindsExplicitlyNegotiatesV1AndCloses() = offMain {
     remote.version = 2
@@ -199,6 +222,7 @@ class OmniremoteLocalProviderTest {
     val unreachable = adapter.execute(context, volume, params("percent", 75), "unreachable")
     assertEquals(PhoneActionOutcome.REJECTED, unreachable.outcome)
     assertTrue(unreachable.message.contains("temporalmente"))
+    assertEquals(HealthCode.DEVICE_UNREACHABLE.name, unreachable.healthCode)
     assertFalse(unreachable.verifiedLocally)
     assertEquals("SET_VOLUME", remote.requests.last().command)
   }

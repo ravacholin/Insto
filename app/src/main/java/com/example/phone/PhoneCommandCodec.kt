@@ -49,6 +49,10 @@ object PhoneCommandCodec {
    "platform" -> {
     fields("action","argument","percent","content")
     val action = PlatformAction.valueOf(str("action"))
+    if (action == PlatformAction.CAPABILITY_HEALTH) {
+      fields("action", "argument")
+      return CapabilityHealthCommand.valueOf(str("argument")).command
+    }
     if (action == PlatformAction.INSTINCT_CAPABILITY) {
       require(!o.has("percent"))
       return PhoneCommand.Platform(action, str("argument"), content = o.get("content").let {

@@ -132,6 +132,9 @@ object InstinctMailbox {
     schedule(app, if (settings.blocker() == null) InstinctDoorbell.backupMinutes(app, settings.intervalMinutes()) * 60_000L else null)
   }
 
+  internal fun scheduled(context: Context): Boolean =
+    context.getSystemService(JobScheduler::class.java)?.getPendingJob(JOB_ID) != null
+
   /** At once, off the main thread, unless one ran in the last 20 seconds. */
   fun pollSoon(context: Context) {
     val app = context.applicationContext
@@ -229,6 +232,18 @@ object InstinctMailbox {
       is Result.Failed -> o.put("failure", result.reason)
     }
     runCatching { writeAtomically(File(context.applicationContext.noBackupFilesDir, STATUS_FILE), o.toString(), "insto-mailbox-status-") }
+    CapabilityHealthRuntime.current()?.let { health ->
+      val code = when (result) {
+        is Result.Done -> HealthCode.VERIFIED
+        is Result.Failed -> instinctMailboxHealth(result.reason)
+      }
+      health.report("instinct.poll", code, evidence = HealthEvidence.TRANSPORT)
+      health.report("instinct.channel", code, evidence = HealthEvidence.TRANSPORT)
+      if (result is Result.Done && (result.orders > 0 || result.badSignatures > 0)) {
+        health.report("instinct.signature", if (result.badSignatures > 0) HealthCode.RESPONSE else HealthCode.VERIFIED,
+          evidence = HealthEvidence.TRANSPORT)
+      }
+    }
     return result
   }
 
@@ -302,4 +317,15 @@ object InstinctNotices {
     val id = synchronized(this) { NOTIFICATION_BASE + (next++ % 16) }
     return if (runCatching { manager.notify(id, notification) }.isSuccess) null else "Android no mostró el aviso."
   }
+}
+
+
+/** Legacy transport exposes only these sanitized reasons. Unknown replies keep an unknown cause. */
+internal fun instinctMailboxHealth(reason: String?): HealthCode = when (reason) {
+  InstinctLogClient.Failure.NETWORK.label -> HealthCode.NETWORK
+  InstinctLogClient.Failure.TOKEN.label -> HealthCode.CREDENTIAL_REJECTED
+  InstinctLogClient.Failure.NOT_CONFIGURED.label, "falta la clave", "apagado" -> HealthCode.CONFIG
+  InstinctLogClient.Failure.LOGIN.label -> HealthCode.PROVIDER_UNTRUSTED
+  InstinctLogClient.Failure.INVALID.label -> HealthCode.RESPONSE
+  else -> reason?.removePrefix("HTTP ")?.toIntOrNull()?.let { providerHealth(it) } ?: HealthCode.INTERNAL
 }

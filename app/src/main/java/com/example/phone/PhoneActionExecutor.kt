@@ -21,10 +21,21 @@ class PhoneActionExecutor(
   /** The media app of the brief operational context, to choose among several sessions instead of asking. */
   private val preferredMediaPackage: () -> String? = { null },
 ) {
-  fun execute(command: PhoneCommand, confirmed: Boolean = false, executionId: String? = null, foreground: Boolean = false, canLaunch: () -> Boolean = { true }): PhoneActionResult {
+  fun execute(command: PhoneCommand, confirmed: Boolean = false, executionId: String? = null, foreground: Boolean = false, healthSession: Long? = null, canLaunch: () -> Boolean = { true }): PhoneActionResult {
+    val started = android.os.SystemClock.elapsedRealtime()
+    val result = executeAction(command, confirmed, executionId, foreground, canLaunch)
+    CapabilityHealthRuntime.current()?.let { health ->
+      health.commandResult(command, result, android.os.SystemClock.elapsedRealtime() - started,
+        healthSession?.let(health::localRef) ?: executionId?.let { sha256("instinct:$it").take(20) })
+    }
+    return result
+  }
+
+  private fun executeAction(command: PhoneCommand, confirmed: Boolean, executionId: String?, foreground: Boolean,
+    canLaunch: () -> Boolean): PhoneActionResult {
     // 1.20.0: only what needs a screen waits for the phone to be unlocked; settings and reads run locked.
     if (!LockScreenPolicy.runsLocked(command) && context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true)
-      return PhoneActionResult(LOCKED, outcome = PhoneActionOutcome.REJECTED)
+      return PhoneActionResult(LOCKED, outcome = PhoneActionOutcome.REJECTED, healthCode = HealthCode.UNLOCK.name)
     return try {
       PhoneCommandCodec.decode(PhoneCommandCodec.encode(command))
       if(command is PhoneCommand.CalendarEvent && command.beginMillis<=System.currentTimeMillis()) return PhoneActionResult("La fecha del evento ya pasó. No preparé un evento con otra fecha.",outcome=PhoneActionOutcome.REJECTED)
