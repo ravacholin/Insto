@@ -88,7 +88,7 @@ internal class CapabilityHealthRuntime private constructor(private val app: Cont
     evidence: HealthEvidence = HealthEvidence.EXECUTION, executionRef: String? = null) {
     pending.trySend {
       engine.record(id, status(code, evidence = evidence), duration, stage, executionRef)
-      if (code.state.available == false && code !in setOf(HealthCode.CONSENT, HealthCode.UNLOCK)) reactive(id, code)
+      if (code.state.isProblem && code !in setOf(HealthCode.CONSENT, HealthCode.UNLOCK)) reactive(id, code)
     }
   }
 
@@ -127,11 +127,11 @@ internal class CapabilityHealthRuntime private constructor(private val app: Cont
       val label = engine.checks[id]?.label ?: id
       "$label. ${row.state.label}. ${row.observation.code.detail}"
     }
+    fun overview(checks: Collection<HealthCheck>) = HealthOverview(checks.map { engine.result(it.id) })
     fun summary(): String {
-      val rows = engine.checks.values.filter { it.effect == HealthEffect.READ_ONLY }.map { engine.result(it.id) }
-      val verified = rows.count { it.state == HealthState.VERIFIED }
-      val issues = rows.filter { it.state.available == false }
-      return "Hay $verified funciones verificadas, ${issues.size} con problemas y ${rows.size - verified - issues.size} pendientes o con limitaciones."
+      val health = overview(engine.checks.values)
+      return "Hay ${health.verified} funciones verificadas, ${health.available} disponibles para probar, " +
+        "${health.issues.size} avisos, ${health.pendingOrLimited} pendientes o limitadas y ${health.limits.size} sin soporte."
     }
     return when (command) {
       CapabilityHealthCommand.STATUS -> summary()
@@ -140,10 +140,16 @@ internal class CapabilityHealthRuntime private constructor(private val app: Cont
         val count = recover()
         if (count == 0) "No hay recuperaciones seguras confirmadas. Revisá el Centro de salud." else "Confirmé $count recuperaciones."
       }
-      CapabilityHealthCommand.UNAVAILABLE -> engine.checks.values.sortedBy { it.label }
-        .filter { engine.result(it.id).state.available == false }.take(3)
-        .joinToString(", ") { it.label }.takeIf(String::isNotEmpty)?.let { "Revisá $it." }
-        ?: "Todavía no hay fallas vigentes registradas."
+      CapabilityHealthCommand.UNAVAILABLE -> {
+        val checks = engine.checks
+        val health = overview(checks.values.sortedBy { it.label })
+        val issues = health.issues.take(3).map { it.label ?: checks.getValue(it.id).label }
+        when {
+          issues.isNotEmpty() -> "Revisá ${issues.joinToString(", ")}."
+          health.limits.isNotEmpty() -> "Hay ${health.limits.size} funciones sin soporte. Podés verlas en el Centro de salud."
+          else -> "Todavía no hay fallas vigentes registradas."
+        }
+      }
       CapabilityHealthCommand.OMNIREMOTE -> explain("omniremote.catalog")
       CapabilityHealthCommand.INSTINCT -> explain("instinct.channel")
       CapabilityHealthCommand.GEMINI -> explain("ai.gemini")
@@ -208,7 +214,7 @@ internal class CapabilityHealthRuntime private constructor(private val app: Cont
 
   suspend fun latestFailure(): String {
     engine.load()
-    val local = engine.snapshots.value.incidents.lastOrNull {
+    val local = engine.snapshots.value.reportedIncidents.lastOrNull {
       it.stage != null && it.stage != HealthStage.RESPONSE && it.recovery == null &&
         it.id in engine.checks && it.id !in setOf("instinct.execution", "ai.gemini", "ai.groq", "ai.llm", "ai.breaker", "ai.fallback")
     }

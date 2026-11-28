@@ -276,7 +276,14 @@ internal class InstinctHealthChecks(private val app: Context) : CapabilityHealth
     })
     InstinctCapabilities.specs.values.filter { it.adapter != InstinctCapabilities.Adapter.OMNIREMOTE &&
       it.id !in setOf("open_app", ShortcutResolver.CAPABILITY) }.forEach { spec ->
-      add(HealthCheck(spec.id) {
+      val label = when (spec.id) {
+        "calendar_query" -> "Consultar eventos"
+        "calendar_create" -> "Crear eventos"
+        "calendar_update" -> "Modificar eventos"
+        "calendar_cancel" -> "Cancelar eventos"
+        else -> spec.id
+      }
+      add(HealthCheck(spec.id, label) {
         when {
           spec.permissions.any { !InstinctDeviceCapabilities.granted(app, it) } -> permission(false)
           InstinctDeviceCapabilities.blockers(app, spec) != null -> status(HealthCode.LIMITED)

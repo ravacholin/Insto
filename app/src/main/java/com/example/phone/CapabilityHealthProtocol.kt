@@ -22,9 +22,17 @@ internal fun HealthDiagnostic.wire(): Map<String, Any> = buildMap {
 
 /** The export has no user-controlled labels, provider payloads, stack traces, order text or target IDs. */
 internal fun HealthSnapshot.sanitizedReport(now: Long, allowed: Set<String>): String {
-  val records = diagnostics.values.filter { it.id in allowed && !it.id.startsWith("omniremote.device.") }.sortedBy { it.id }
-  val history = incidents.filter { it.id in allowed && !it.id.startsWith("omniremote.device.") }
+  val records = diagnostics.values.filter { it.id in allowed && !it.id.startsWith("omniremote.device.") }
+    .sortedBy { it.id }
+  val history = reportedIncidents.filter { it.id in allowed && !it.id.startsWith("omniremote.device.") }
+  val overview = HealthOverview(records.map { it.at(now) })
   return JSONObject().put("version", 1).put("generated_at", now)
+    .put("summary", JSONObject()
+      .put("issues", JSONArray(overview.issues.map { issue ->
+        JSONObject().put("id", issue.id).put("code", issue.code.name)
+          .put("affected_capabilities", JSONArray(issue.capabilities.map(HealthDiagnostic::id)))
+      }))
+      .put("device_limits", JSONArray(overview.limits.map(HealthDiagnostic::id))))
     .put("capabilities", JSONArray(records.map { row ->
       JSONObject(row.at(now).wire()).put("id", row.id).put("source", row.observation.evidence.name)
         .put("last_success", row.lastSuccess).put("last_failure", row.lastFailure)

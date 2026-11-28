@@ -68,5 +68,39 @@ class CapabilityHealthProtocolTest {
     assertFalse(report.contains("omniremote.device"))
   }
 
+  @Test fun reportGroupsCalendarPermissionsAndListsUnsupportedActionsAsLimits() {
+    val calendar = listOf("calendar.write", "calendar_create", "calendar_update", "calendar_cancel")
+    val permissions = calendar + "contacts"
+    val records = (permissions.map { id -> HealthDiagnostic(id, HealthObservation(HealthCode.PERMISSION), 10, 100) } +
+      HealthDiagnostic("wifi_on", HealthObservation(HealthCode.UNSUPPORTED), 10, 100) +
+      HealthDiagnostic("expired", HealthObservation(HealthCode.UNSUPPORTED), 10, 20) +
+      HealthDiagnostic("omniremote.device.abc", HealthObservation(HealthCode.UNSUPPORTED), 10, 100))
+      .associateBy(HealthDiagnostic::id)
+    val history = permissions.map { HealthIncident(it, HealthCode.PERMISSION, 10) } + listOf(
+      HealthIncident("wifi_on", HealthCode.UNSUPPORTED, 10),
+      HealthIncident("calendar_create", HealthCode.PERMISSION, 12, HealthStage.PERMISSION),
+      HealthIncident("contacts", HealthCode.REJECTED, 15, HealthStage.EXECUTION),
+    )
+    val root = JSONObject(HealthSnapshot(records, history).sanitizedReport(30, records.keys))
+    val summary = root.getJSONObject("summary")
+    val issues = summary.getJSONArray("issues")
+    assertEquals(2, issues.length())
+    val calendarIssue = issues.getJSONObject(0)
+    assertEquals("calendar.permissions", calendarIssue.getString("id"))
+    assertEquals("PERMISSION", calendarIssue.getString("code"))
+    assertEquals(calendar.toSet(), calendarIssue.getJSONArray("affected_capabilities").let { rows ->
+      (0 until rows.length()).map(rows::getString).toSet()
+    })
+    assertEquals("contacts", issues.getJSONObject(1).getString("id"))
+    val limits = summary.getJSONArray("device_limits")
+    assertEquals(1, limits.length())
+    assertEquals("wifi_on", limits.getString(0))
+    assertEquals(7, root.getJSONArray("capabilities").length())
+    val incidents = root.getJSONArray("incidents")
+    assertEquals(2, incidents.length())
+    assertEquals("PERMISSION", incidents.getJSONObject(0).getString("stage"))
+    assertEquals("REJECTED", incidents.getJSONObject(1).getString("code"))
+  }
+
   private fun statusOf(code: HealthCode) = HealthObservation(code, HealthEvidence.EXECUTION)
 }
