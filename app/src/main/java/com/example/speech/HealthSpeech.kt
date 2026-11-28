@@ -25,7 +25,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
@@ -35,10 +34,10 @@ import kotlin.coroutines.coroutineContext
 
 /** Offline recognition is limited to the diagnostic vocabulary and uses the existing Vosk installation. */
 internal object HealthSpeechRecognition {
-  suspend fun recognize(context: Context, file: File): String? = withContext(Dispatchers.IO) {
+  suspend fun recognize(context: Context, file: File): String? {
     val model = AlarmVoiceModel(context)
-    if (!model.hasRequiredFiles()) return@withContext null
-    try {
+    if (!model.hasRequiredFiles()) return null
+    return try {
       decode(model.directory, file)
     } catch (error: CancellationException) {
       throw error

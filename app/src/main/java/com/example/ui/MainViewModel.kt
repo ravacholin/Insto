@@ -1628,7 +1628,9 @@ class MainViewModel @JvmOverloads constructor(
             is kotlinx.coroutines.TimeoutCancellationException -> HealthCode.TIMEOUT
             else -> HealthCode.INTERPRETATION
           }
-          val local = com.example.speech.HealthSpeechRecognition.recognize(getApplication(), audio.file)
+          val local = withContext(audioDispatcher) {
+            com.example.speech.HealthSpeechRecognition.recognize(getApplication(), audio.file)
+          }
           health?.report("ai.transcription", code, monotonicClock() - transcriptionStarted,
             if (local == null) HealthStage.TRANSCRIPTION else null, executionRef = executionRef)
           if (local == null) throw failure
