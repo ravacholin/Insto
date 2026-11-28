@@ -1,6 +1,8 @@
 package com.example.speech
 
+import com.example.phone.HealthCode
 import com.example.phone.ProviderHttp
+import com.example.phone.providerHealth
 import com.example.phone.readBounded
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -22,7 +24,7 @@ class GroqTranscriber(
 ) : AudioTranscriber {
   override suspend fun transcribe(file: File): String {
     val token = key()?.trim()?.takeIf { it.isNotEmpty() }
-      ?: throw TranscriptionException("Configurá tu clave de Groq para interpretar el audio.", needsKey = true)
+      ?: throw TranscriptionException("Configurá tu clave de Groq para interpretar el audio.", true, HealthCode.CREDENTIAL_MISSING)
     if (!file.isFile || file.length() == 0L || file.length() > MAX_AUDIO_BYTES) {
       throw TranscriptionException("El audio está vacío o supera el límite de 24 MB. La grabación se conserva.")
     }
@@ -39,7 +41,13 @@ class GroqTranscriber(
       try {
         ProviderHttp.post(TRANSCRIPTIONS_URL, mapOf("Authorization" to "Bearer $token"), body,
           ProviderHttp.Limits.UPLOAD, transport) { code, input ->
-          ProviderHttp.classifyStatus(code)?.let { throw TranscriptionException(statusMessage(it), needsKey = it == ProviderHttp.FailureKind.AUTH) }
+          ProviderHttp.classifyStatus(code)?.let { kind ->
+            val body = if (code == 429) try {
+              input().use { it.readBounded(16_384) { ProviderHttp.ResponseTooLarge() }.toString(Charsets.UTF_8) }
+            } catch (_: ProviderHttp.ResponseTooLarge) { null } else null
+            throw TranscriptionException(statusMessage(kind), kind == ProviderHttp.FailureKind.AUTH,
+              providerHealth(code, body) ?: HealthCode.RESPONSE)
+          }
           val bytes = input().use { it.readBounded(256 * 1024) { ProviderHttp.ResponseTooLarge() } }
           val text = JSONObject(bytes.toString(Charsets.UTF_8)).optString("text").trim()
           if (text.isBlank()) throw TranscriptionException("No se reconoció un pedido. El audio se conserva.")
@@ -49,8 +57,13 @@ class GroqTranscriber(
         throw error
       } catch (error: TranscriptionException) {
         throw error
-      } catch (_: Exception) {
-        throw TranscriptionException("No se pudo transcribir. Revisá la conexión y reintentá; el audio se conserva.")
+      } catch (error: Exception) {
+        val code = when (ProviderHttp.classify(error)) {
+          ProviderHttp.FailureKind.TIMEOUT -> HealthCode.TIMEOUT
+          ProviderHttp.FailureKind.NETWORK -> HealthCode.NETWORK
+          else -> HealthCode.RESPONSE
+        }
+        throw TranscriptionException("No se pudo transcribir. Revisá la conexión y reintentá; el audio se conserva.", false, code)
       }
     }
   }

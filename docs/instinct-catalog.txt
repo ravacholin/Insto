@@ -102,6 +102,7 @@ Consultas y gestión de programaciones y reglas (la respuesta llega si la person
 #insto ver programadas
 #insto cancelar programadas
 #insto ver estado
+#insto ver salud operativa
 #insto cancelar programada <id>
 #insto probar <orden>
 #insto ver ejecuciones

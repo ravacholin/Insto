@@ -281,6 +281,10 @@ object InstinctDoorbell {
         })
     }
     accept(app, classified.kind, classified.encrypted, classified.malformed, receivedAt)
+    CapabilityHealthRuntime.current()?.let { health ->
+      val code = if (classified.malformed || classified.undecryptable) HealthCode.RESPONSE else HealthCode.VERIFIED
+      health.report("instinct.push", code, (clock() - receivedAt).takeIf { it >= 0 }, evidence = HealthEvidence.TRANSPORT)
+    }
   }
 
   /** REGISTRATION_FAILED: the library keeps its token; the reason, for the diagnosis. */
@@ -293,6 +297,7 @@ object InstinctDoorbell {
 
   /** TEMP_UNAVAILABLE: the distributor's server is down; the backup poll covers it. */
   internal fun onTempUnavailable(context: Context) {
+    CapabilityHealthRuntime.current()?.report("instinct.push", HealthCode.PROVIDER_DOWN, evidence = HealthEvidence.TRANSPORT)
     settings(context).update { it.copy(lastError = "el servidor del distribuidor no está disponible por ahora; queda la revisión periódica") }
   }
 

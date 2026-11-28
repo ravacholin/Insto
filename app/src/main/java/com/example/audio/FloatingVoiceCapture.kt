@@ -196,7 +196,7 @@ class FloatingVoiceCapture internal constructor(
     runCatching { session.input.release() }
   }
 
-  private companion object {
+  internal companion object {
     const val FRAME_SAMPLES = 320
     val PREROLL_FRAMES = (VoiceSessionPolicy.PREROLL_MS / VoiceSessionPolicy.FRAME_MS).toInt()
     /** An unconfirmed candidate lasts about two seconds at most; this only bounds memory. */

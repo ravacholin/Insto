@@ -76,7 +76,7 @@ class GroqIntentVerifier(
   private suspend fun complete(
     key: () -> String?, instruction: String, input: String, timeoutMillis: Long,
     maxTokens: Int, json: Boolean = false,
-  ): String {
+  ): String = GeminiDiagnostics.measure("ai.groq") {
     val body = JSONObject()
       .put("model", "openai/gpt-oss-20b")
       .put("temperature", 0)
@@ -91,6 +91,6 @@ class GroqIntentVerifier(
     require(choices.length() == 1)
     val answer = choices.getJSONObject(0)
     require(answer.getString("finish_reason") == "stop")
-    return answer.getJSONObject("message").getString("content").trim()
+    answer.getJSONObject("message").getString("content").trim()
   }
 }

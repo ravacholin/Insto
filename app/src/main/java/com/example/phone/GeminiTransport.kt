@@ -27,7 +27,7 @@ internal object GeminiTransport {
   ): String {
     val service = provider.label
     val token = key()?.trim()?.takeIf { it.isNotBlank() }
-      ?: throw DecisionException("Configurá tu clave de $service. El pedido se conserva.", GeminiFailureKind.AUTH)
+      ?: throw DecisionException("Configurá tu clave de $service. El pedido se conserva.", GeminiFailureKind.AUTH, HealthCode.CREDENTIAL_MISSING)
     val headers = when (provider) {
       Provider.GEMINI -> mapOf("x-goog-api-key" to token)
       Provider.GROQ -> mapOf("Authorization" to "Bearer $token")
@@ -48,7 +48,14 @@ internal object GeminiTransport {
               if (modelRejected(errorBody)) throw ModelUnavailable()
             }
           }
-          ProviderHttp.classifyStatus(status)?.let { throw failure(service, it) }
+          ProviderHttp.classifyStatus(status)?.let { kind ->
+            val detail = if (status == 429) try {
+              input().use { it.readBounded(16_384) { OversizedErrorBody() }.toString(Charsets.UTF_8) }
+            } catch (_: OversizedErrorBody) { null } else null
+            val error = failure(service, kind)
+            throw DecisionException(error.message ?: service, error.kind,
+              providerHealth(status, detail) ?: error.operationalCode)
+          }
           input().use {
             it.readBounded(MAX_RESPONSE_BYTES) { failure(service, ProviderHttp.FailureKind.TOO_LARGE) }.toString(Charsets.UTF_8)
           }

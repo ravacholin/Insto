@@ -306,6 +306,7 @@ class GeminiCoordinator(
       throw error
     } finally {
       breaker.abandon(attempt)
+      GeminiDiagnostics.observe("ai.breaker", if (breaker.openRecently()) HealthCode.CIRCUIT_OPEN else HealthCode.PREFLIGHT)
     }
   }
 
@@ -351,6 +352,7 @@ class GeminiCoordinator(
         if (error.kind == GeminiFailureKind.TIMEOUT) "Groq tardó demasiado. Reintentá el pedido."
         else error.message ?: error.kind.label)
     }
+    GeminiDiagnostics.observe("ai.fallback", if (result is InterpretationResult.Failure) result.kind.healthCode() else HealthCode.VERIFIED)
     if (result is InterpretationResult.Failure) return unavailableRoute(request, local, result.kind, result.message)
     if (result is InterpretationResult.Query && choice == null && request.draft == null &&
       local == PhoneRoute.Instinct && steps.size == 1 && !RequestSafetyPolicy.isIndirectPhoneRequest(request.text) &&

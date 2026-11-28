@@ -51,15 +51,16 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
     fun recover(context: Context, id: String, control: Control, executionId: String): Setting? = read(context, id, control)
   }
 
-  class DiscoveryFailure(message: String) : Exception(message)
+  class DiscoveryFailure(message: String, val health: HealthCode = HealthCode.PROVIDER_DOWN) : Exception(message)
 
   private class Candidates(
     val entries: List<Pair<Provider, Device>>,
     val reason: String,
+    val health: HealthCode,
   )
 
   private fun candidates(context: Context, control: Control, id: String? = null): Candidates {
-    var failure: String? = null
+    var failure: DiscoveryFailure? = null
     val entries = providers.sortedBy { it.transport }.flatMap { provider ->
       try {
         provider.devices(context, id)
@@ -67,11 +68,12 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
             (id == null || id == device.id) }
           .map { provider to it }
       } catch (error: DiscoveryFailure) {
-        if (failure == null) failure = error.message
+        if (failure == null) failure = error
         emptyList()
       }
     }
-    return Candidates(entries, failure ?: "No hay un dispositivo disponible para este control en Omniremote.")
+    return Candidates(entries, failure?.message ?: "No hay un dispositivo disponible para este control en Omniremote.",
+      failure?.health ?: HealthCode.DEVICE_MISSING)
   }
 
   override fun discover(context: Context, spec: InstinctCapabilities.Spec): InstinctDeviceCapabilities.Discovery {
@@ -96,7 +98,7 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
     val id = params.getString("device")
     val found = candidates(context, control, id)
     val provider = found.entries.firstOrNull()?.first
-      ?: return PhoneActionResult(found.reason, outcome = PhoneActionOutcome.REJECTED)
+      ?: return PhoneActionResult(found.reason, outcome = PhoneActionOutcome.REJECTED, healthCode = found.health.name)
     val setting = setting(control, params)
     val dispatch = runCatching { provider.set(context, id, setting, executionId) }.getOrNull()
     val result = dispatch?.result
@@ -105,7 +107,7 @@ internal class OmniremoteAdapter(private val providers: List<Provider> = emptyLi
     return if (setting.matches(dispatch?.observed) ||
       setting.matches(runCatching { provider.read(context, id, control) }.getOrNull())) verified() else
       PhoneActionResult(result?.takeIf { it.outcome == PhoneActionOutcome.UNCERTAIN }?.message
-        ?: "No pude comprobar el estado del dispositivo en Omniremote.", outcome = PhoneActionOutcome.UNCERTAIN)
+        ?: "No pude comprobar el estado del dispositivo en Omniremote.", outcome = PhoneActionOutcome.UNCERTAIN, healthCode = result?.healthCode)
   }
 
   override fun observe(context: Context, spec: InstinctCapabilities.Spec, params: JSONObject, executionId: String): PhoneActionResult? {

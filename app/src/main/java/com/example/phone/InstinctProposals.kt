@@ -46,6 +46,7 @@ sealed interface ProposalCheck {
     CATALOG("ver catálogo"), SCHEDULED("ver programadas"), CANCEL_SCHEDULED("cancelar programadas", readOnly = false),
     /** Publishes the phone's state in the log now (1.16.0). Changes nothing on the phone. */
     STATE("ver estado"),
+    HEALTH("ver salud operativa"),
     /** One scheduled order, or a whole recurrence, by the short id of «ver programadas» (1.17.0). */
     CANCEL_ONE("cancelar programada", readOnly = false, form = "cancelar programada <id>"),
     /**

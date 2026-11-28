@@ -202,6 +202,7 @@ class MainViewModel @JvmOverloads constructor(
   private val shortcutEngine = AndroidShortcutEngine.of(application)
   private val phoneParser = shortcutEngine.parser()
   private val shortcutDecisions = GeminiDecisionsClient({ GeminiSettings(application).readKey() })
+  private val healthSpeech = com.example.speech.HealthSpeech(application, viewModelScope)
   private val phoneExecutor = PhoneActionExecutor(application, preferredMediaPackage = operationalContext::preferredMediaPackage)
   private val conversation = ConversationSession()
   private val groqInterpreter = com.example.phone.GroqIntentVerifier({ GroqKeyStore(application).readValue() })
@@ -577,7 +578,7 @@ class MainViewModel @JvmOverloads constructor(
         val job = coroutineContext[Job]
         val result = withContext(Dispatchers.IO) {
           phoneExecutor.execute(command, confirmed, executionId = if (omniremote) UUID.randomUUID().toString() else null,
-            foreground = omniremote, canLaunch = {
+            foreground = omniremote, healthSession = session, canLaunch = {
             job?.isActive != false && session == floatingGeneration && !floatingPaused
           })
         }
@@ -586,7 +587,7 @@ class MainViewModel @JvmOverloads constructor(
       }
       return
     }
-    val result = phoneExecutor.execute(command, confirmed)
+    val result = phoneExecutor.execute(command, confirmed, healthSession = session)
     // An automation result arrives later; anything else is final now.
     if (result.stopwatchAutomation == null) executions.complete(ticket, result)
     if (learning != null && result.confirmation == command) learningPreview = learning
@@ -679,6 +680,28 @@ class MainViewModel @JvmOverloads constructor(
   private suspend fun routeFloatingRequest(text: String, onDispatched: () -> Unit): Boolean {
     retainLocalAudio = false
     val normalized = PhoneCommandParser.normalize(text)
+    val diagnostic = CapabilityHealthCommand.of(
+      (LocalIntentRegistry.default.matchPhrase(PhoneCommandParser.canonicalRequest(normalized)) as? PhoneRoute.Local)?.command)
+    if (diagnostic != null) {
+      val generation = floatingGeneration
+      if (!sessions.transition(generation, com.example.session.SessionState.EXECUTING)) return true
+      decidingRequest = true
+      floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, status = "Consultando la salud de Insto…")
+      val health = CapabilityHealthRuntime.current()
+      val reply = try {
+        withContext(Dispatchers.IO) { health?.answer(diagnostic) }
+      } finally {
+        if (generation == floatingGeneration) decidingRequest = false
+      }
+        ?: "El Centro de salud todavía se está preparando."
+      if (generation == floatingGeneration && !floatingPaused) {
+        sessions.transition(generation, com.example.session.SessionState.COMPLETED)
+        floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", transcript = null,
+          status = reply, error = null)
+        healthSpeech.speak(reply)
+      }
+      return true
+    }
     if (approvedQueryText == text) { approvedQueryText = null; return false }
     pendingQuery?.let {
       if (normalized in listOf("si", "dale", "confirmar", "confirmo", "ok", "no", "cancelar")) {
@@ -1061,8 +1084,22 @@ class MainViewModel @JvmOverloads constructor(
         floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE, text = "", error = null,
           status = result.prompt)
       }
-      is InterpretationResult.Rejected -> { sessions.transition(floatingGeneration, com.example.session.SessionState.FAILED); retainDecisionRequest(result.message) }
-      is InterpretationResult.Failure -> { sessions.transition(floatingGeneration, com.example.session.SessionState.FAILED); retainDecisionRequest(result.message) }
+      is InterpretationResult.Rejected -> {
+        CapabilityHealthRuntime.current()?.let { health ->
+          health.report("ai.router", HealthCode.INTERPRETATION, stage = HealthStage.VALIDATION,
+            executionRef = health.localRef(floatingGeneration))
+        }
+        sessions.transition(floatingGeneration, com.example.session.SessionState.FAILED)
+        retainDecisionRequest(result.message)
+      }
+      is InterpretationResult.Failure -> {
+        CapabilityHealthRuntime.current()?.let { health ->
+          health.report("ai.router", HealthCode.INTERPRETATION, stage = HealthStage.INTERPRETATION,
+            executionRef = health.localRef(floatingGeneration))
+        }
+        sessions.transition(floatingGeneration, com.example.session.SessionState.FAILED)
+        retainDecisionRequest(result.message)
+      }
     }
     return true
   }
@@ -1334,6 +1371,8 @@ class MainViewModel @JvmOverloads constructor(
     pendingTranscript = null
     val result = floatingCapture.start()
     if (result.isFailure) {
+      CapabilityHealthRuntime.current()?.report("microphone", HealthCode.MICROPHONE,
+        stage = HealthStage.CAPTURE)
       floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE,
         error = "Micrófono no disponible. Podés escribir o volver a intentarlo.")
       return
@@ -1551,16 +1590,22 @@ class MainViewModel @JvmOverloads constructor(
     floatingState.value = floatingState.value.copy(mode = FloatingMode.SENDING, error = null, status = "Interpretando tu audio…", needsGroqKey = false, voiceLatency = latency)
     floatingJob = viewModelScope.launch {
       val reusedAudio = pendingFloatingAudio != null
+      val health = CapabilityHealthRuntime.current()
+      val executionRef = health?.localRef(generation)
       val finalizationStarted = monotonicClock()
       val audio = pendingFloatingAudio ?: finishFloatingCapture()
       if (generation != floatingGeneration) { audio?.file?.delete(); return@launch }
       if (audio == null) {
+        health?.report("microphone", HealthCode.MICROPHONE,
+          stage = HealthStage.CAPTURE, executionRef = executionRef)
         sessions.transition(generation, com.example.session.SessionState.FAILED)
         floatingState.value = floatingState.value.copy(mode = FloatingMode.IDLE,
           error = floatingCapture.snapshot.error ?: "No se pudo finalizar el audio. Activá el micrófono para volver a grabar.")
         return@launch
       }
       pendingFloatingAudio = audio
+      if (!reusedAudio) CapabilityHealthRuntime.current()?.report("microphone",
+        HealthCode.VERIFIED, monotonicClock() - finalizationStarted, HealthStage.CAPTURE)
       if (!reusedAudio) updateVoiceLatency(latency.copy(finalizationMs = monotonicClock() - finalizationStarted))
       if (floatingPaused) {
         sessions.transition(generation, com.example.session.SessionState.IDLE)
@@ -1570,8 +1615,26 @@ class MainViewModel @JvmOverloads constructor(
       transcribingAudio = true
       val reusedTranscript = pendingTranscript != null
       val transcriptionStarted = monotonicClock()
+      var offlineDiagnostic = false
       val transcript = try {
-        pendingTranscript ?: audioTranscriber.transcribe(audio.file).also {
+        pendingTranscript ?: try {
+          audioTranscriber.transcribe(audio.file).also {
+            require(it.isNotBlank()) { "La grabación no produjo una transcripción." }
+          }
+        } catch (failure: Exception) {
+          if (failure is kotlinx.coroutines.CancellationException && failure !is kotlinx.coroutines.TimeoutCancellationException) throw failure
+          val code = when (failure) {
+            is TranscriptionException -> failure.healthCode
+            is kotlinx.coroutines.TimeoutCancellationException -> HealthCode.TIMEOUT
+            else -> HealthCode.INTERPRETATION
+          }
+          val local = com.example.speech.HealthSpeechRecognition.recognize(getApplication(), audio.file)
+          health?.report("ai.transcription", code, monotonicClock() - transcriptionStarted,
+            if (local == null) HealthStage.TRANSCRIPTION else null, executionRef = executionRef)
+          if (local == null) throw failure
+          offlineDiagnostic = true
+          local
+        }.also {
           require(it.isNotBlank()) { "La grabación no produjo una transcripción." }
         }
       } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -1599,6 +1662,9 @@ class MainViewModel @JvmOverloads constructor(
       if (generation != floatingGeneration || !isActive || floatingPaused) return@launch
       transcribingAudio = false
       sessions.transition(generation, com.example.session.SessionState.INTERPRETING)
+      if (!reusedTranscript) CapabilityHealthRuntime.current()?.report(
+        if (offlineDiagnostic) "voice.vosk_diagnostics" else "ai.transcription",
+        HealthCode.VERIFIED, monotonicClock() - transcriptionStarted, HealthStage.TRANSCRIPTION)
       if (!reusedTranscript) updateVoiceLatency(floatingState.value.voiceLatency!!.copy(transcriptionMs = monotonicClock() - transcriptionStarted))
       pendingTranscript = transcript
       floatingState.value = floatingState.value.copy(transcript = transcript)

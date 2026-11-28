@@ -23,7 +23,8 @@ import java.util.concurrent.TimeoutException
 
 /** One short-lived session per interaction. A failed connection is released before the next call. */
 internal class OmniremoteBinding(private val callTimeoutMillis: Long = 4_000) {
-  class Unavailable(val reason: String = "Omniremote está temporalmente inaccesible.") : Exception(reason)
+  class Unavailable(val reason: String = "Omniremote está temporalmente inaccesible.",
+    val health: HealthCode = HealthCode.PROVIDER_DOWN) : Exception(reason)
 
   fun open(context: Context) = Session(context.applicationContext)
 
@@ -48,9 +49,9 @@ internal class OmniremoteBinding(private val callTimeoutMillis: Long = 4_000) {
       connection = pending
       try {
         val bound = context.bindService(Intent(ACTION).setComponent(COMPONENT), pending, Context.BIND_AUTO_CREATE)
-        if (!bound) throw Unavailable("Falta un servicio local compatible de Omniremote.")
+        if (!bound) throw Unavailable("Falta un servicio local compatible de Omniremote.", HealthCode.UNSUPPORTED)
         val version = pending.call(deadline) { it.apiVersion }
-        if (version < API_VERSION) throw Unavailable("La versión de la API local de Omniremote no es compatible.")
+        if (version < API_VERSION) throw Unavailable("La versión de la API local de Omniremote no es compatible.", HealthCode.VERSION)
         return pending
       } catch (error: Exception) {
         close()
@@ -82,7 +83,7 @@ internal class OmniremoteBinding(private val callTimeoutMillis: Long = 4_000) {
     override fun onServiceDisconnected(name: ComponentName) = disconnect()
     override fun onBindingDied(name: ComponentName) = disconnect()
     override fun onNullBinding(name: ComponentName) =
-      disconnect(Unavailable("Falta un servicio local compatible de Omniremote."))
+      disconnect(Unavailable("Falta un servicio local compatible de Omniremote.", HealthCode.UNSUPPORTED))
 
     @Synchronized
     fun disconnect(error: Unavailable = Unavailable()) {
@@ -119,7 +120,7 @@ internal class OmniremoteBinding(private val callTimeoutMillis: Long = 4_000) {
       try {
         return future.get(remaining, TimeUnit.MILLISECONDS)
       } catch (_: TimeoutException) {
-        throw Unavailable()
+        throw Unavailable(health = HealthCode.TIMEOUT)
       } catch (_: CancellationException) {
         throw Unavailable()
       } catch (error: ExecutionException) {
@@ -134,7 +135,7 @@ internal class OmniremoteBinding(private val callTimeoutMillis: Long = 4_000) {
 
   companion object {
     const val API_VERSION = 1
-    private const val PACKAGE = "com.aistudio.omnitvremote.qvrtm"
+    const val PACKAGE = "com.aistudio.omnitvremote.qvrtm"
     private const val ACTION = "$PACKAGE.BIND_EXTERNAL_CONTROL"
     private val COMPONENT = ComponentName(PACKAGE, "com.example.external.RemoteCommandService")
 

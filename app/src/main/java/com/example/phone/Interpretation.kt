@@ -72,4 +72,11 @@ enum class GeminiFailureKind(val label: String) {
 class DecisionException(
   message: String,
   val kind: GeminiFailureKind = GeminiFailureKind.NETWORK,
-) : Exception(message)
+) : Exception(message) {
+  internal var operationalCode: HealthCode = kind.healthCode()
+    private set
+
+  internal constructor(message: String, kind: GeminiFailureKind, code: HealthCode) : this(message, kind) {
+    operationalCode = code
+  }
+}

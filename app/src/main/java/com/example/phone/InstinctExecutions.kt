@@ -41,6 +41,19 @@ object InstinctExecutions {
     }.getOrDefault(false)
     if (moved && state.terminal) runCatching {
       closeParent(context, executionId, state)
+      val record = journal(context).get(executionId)
+      val health = CapabilityHealthRuntime.current()
+      val code = when (state) {
+        ExecutionState.VERIFIED -> HealthCode.VERIFIED
+        ExecutionState.HANDED_OFF -> HealthCode.HANDOFF
+        ExecutionState.UNCERTAIN -> HealthCode.NO_RESULT
+        ExecutionState.FAILED -> HealthCode.REJECTED
+        else -> null
+      }
+      if (code != null && record?.firstDispatchAt != null) {
+        health?.report("instinct.execution", code, record.dispatchLatencyMillis,
+          if (state == ExecutionState.UNCERTAIN) HealthStage.VERIFICATION else HealthStage.EXECUTION, HealthEvidence.JOURNAL, sha256("instinct:$executionId").take(20))
+      }
       if (journal(context).get(executionId)?.transport in setOf(ExecutionTransport.DECISION, ExecutionTransport.CONTEXT))
         InstinctLog.questionCompleted(context)
     }

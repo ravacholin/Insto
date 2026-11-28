@@ -252,16 +252,23 @@ object AlarmVoiceCoordinator {
       if (sent.isSuccess) method = "acción «${alarm.stopTitle}»"
       else AlarmVoiceLog.add(context, "La acción «${alarm.stopTitle}» falló: ${sent.exceptionOrNull()?.javaClass?.simpleName}")
     }
-    if (method != null && waitRemoved(alarm, verifyMs)) return method!!
+    if (method != null && waitRemoved(alarm, verifyMs)) {
+      com.example.phone.CapabilityHealthRuntime.current()?.report("alarm.stop_voice", com.example.phone.HealthCode.VERIFIED)
+      return method!!
+    }
     if (method != null) AlarmVoiceLog.add(context, "La alarma siguió sonando tras la acción; uso el intent del sistema")
     val fallback = fallbackIntent(context, alarm)
     val started = runCatching { context.startActivity(fallback) }
     if (started.isFailure) {
       dismissingKey = null
+      com.example.phone.CapabilityHealthRuntime.current()?.report("alarm.stop_voice", com.example.phone.HealthCode.REJECTED)
       return "no se pudo apagar (${started.exceptionOrNull()?.javaClass?.simpleName})"
     }
     val label = if (alarm.kind == AlarmKind.TIMER) "ACTION_DISMISS_TIMER" else "ACTION_DISMISS_ALARM"
-    return if (waitRemoved(alarm, verifyMs)) label else "$label enviado, sin confirmación"
+    val verified = waitRemoved(alarm, verifyMs)
+    com.example.phone.CapabilityHealthRuntime.current()?.report("alarm.stop_voice",
+      if (verified) com.example.phone.HealthCode.VERIFIED else com.example.phone.HealthCode.NO_RESULT)
+    return if (verified) label else "$label enviado, sin confirmación"
   }
 
   private fun waitRemoved(alarm: ActiveAlarm, ms: Long): Boolean {

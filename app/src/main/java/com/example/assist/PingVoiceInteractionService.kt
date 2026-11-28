@@ -38,6 +38,10 @@ class PingVoiceInteractionSession(context: Context) : VoiceInteractionSession(co
         putExtra(AssistActivity.EXTRA_FROM_SYSTEM_ASSIST, true)
       }
     context.startActivity(intent)
+    com.example.phone.CapabilityHealthRuntime.current()?.let {
+      it.report("assistant.role", com.example.phone.HealthCode.VERIFIED)
+      it.report("assistant.activation", com.example.phone.HealthCode.HANDOFF)
+    }
     finish()
   }
 }

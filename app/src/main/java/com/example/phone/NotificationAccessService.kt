@@ -19,10 +19,15 @@ class NotificationAccessService : NotificationListenerService() {
 
   override fun onListenerConnected() {
     connected=this; runCatching { state.start() }
+    CapabilityHealthRuntime.current()?.report("notifications.listener", HealthCode.VERIFIED)
     // «Callar alarma con la voz»: a volume lowered by a process that died is restored here.
     runCatching { AlarmVolumeDucker.restoreLeftover(this) }
   }
-  override fun onListenerDisconnected() { if(connected===this) connected=null; runCatching { state.stop() } }
+  override fun onListenerDisconnected() {
+    if (connected === this) connected = null
+    runCatching { state.stop() }
+    CapabilityHealthRuntime.current()?.report("notifications.listener", HealthCode.PROVIDER_DOWN)
+  }
   override fun onDestroy() { if(connected===this) connected=null; runCatching { state.stop() }; super.onDestroy() }
 
   internal fun calendarPermissionChanged() { state.watchCalendar() }

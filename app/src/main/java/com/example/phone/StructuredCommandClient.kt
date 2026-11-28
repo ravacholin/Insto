@@ -28,7 +28,7 @@ class StructuredCommandClient(
     val input = request.modelInput()
     if (input.isBlank() || input.length > 16000) throw DecisionException("El pedido o su contexto es demasiado largo. Se conserva para editarlo.", GeminiFailureKind.INVALID_REQUEST)
     val payload = buildRequest(input, request.now).toString()
-    return withTimeout(timeoutMillis) {
+    return GeminiDiagnostics.measure("ai.llm") { withTimeout(timeoutMillis) {
       val started = System.nanoTime()
       var model = PRIMARY_MODEL
       val body = try {
@@ -47,7 +47,7 @@ class StructuredCommandClient(
       }
       GeminiDiagnostics.extractionModel(model)
       result
-    }
+    } }
   }
 
   private suspend fun post(

@@ -852,6 +852,10 @@
       "solo_lectura": true
     },
     {
+      "orden": "ver salud operativa",
+      "solo_lectura": true
+    },
+    {
       "orden": "cancelar programada <id>",
       "solo_lectura": false
     },
@@ -974,7 +978,7 @@
       }
     ]
   },
-  "hash": "c827cd43556bd076401175caf147b57bf6317b113a861ce1275765cc82591d3d",
+  "hash": "572c7adf133dda445920ffe4806fa25db8a8185f85f355187520da21e8930845",
   "horas_de_silencio": null,
   "integraciones": {
     "appfunctions": "sin proveedor autorizado",

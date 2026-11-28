@@ -12,9 +12,11 @@ class GeminiDecisionsClient(
 ) : DecisionClassifier {
   override suspend fun classify(text: String): SemanticDecision {
     if (text.isBlank() || text.length > 16000) throw DecisionException("El pedido está vacío o es demasiado largo. Se conserva para editarlo.", GeminiFailureKind.INVALID_REQUEST)
-    val body = GeminiTransport.post(key, buildRequest(text).toString(), "https://generativelanguage.googleapis.com/v1beta/decisions", transport, 4000)
-    return try { parseResponse(JSONObject(body)) } catch (_: Exception) {
-      throw DecisionException("Respuesta inválida de Decisions. El pedido se conserva.", GeminiFailureKind.INVALID_RESPONSE)
+    return GeminiDiagnostics.measure("ai.gemini") {
+      val body = GeminiTransport.post(key, buildRequest(text).toString(), "https://generativelanguage.googleapis.com/v1beta/decisions", transport, 4000)
+      try { parseResponse(JSONObject(body)) } catch (_: Exception) {
+        throw DecisionException("Respuesta inválida de Decisions. El pedido se conserva.", GeminiFailureKind.INVALID_RESPONSE)
+      }
     }
   }
 

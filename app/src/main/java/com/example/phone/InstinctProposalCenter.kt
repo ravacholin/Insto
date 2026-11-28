@@ -459,7 +459,7 @@ object InstinctProposalCenter {
           else AckEntry(AckKind.ERROR, check.order, failure))
         }
         is ProposalCheck.Query -> answered(when {
-          check.kind in InstinctProposalValidator.ruleQueries && source != ProposalSource.BUZON ->
+          (check.kind in InstinctProposalValidator.ruleQueries || check.kind == ProposalCheck.QueryKind.HEALTH) && source != ProposalSource.BUZON ->
             AckEntry(AckKind.ERROR, check.order, InstinctContextScheduler.ONLY_SIGNED)
           !check.kind.readOnly && !InstinctExecutions.begin(app, execution, null) ->
             AckEntry(AckKind.ERROR, check.order, NOT_RECORDED)
@@ -663,6 +663,14 @@ object InstinctProposalCenter {
       1 -> "Se canceló 1 orden programada."
       else -> "Se cancelaron $n órdenes programadas."
     }
+    ProposalCheck.QueryKind.HEALTH -> {
+      val health = CapabilityHealthRuntime.current()
+      val policy = InstinctAutonomySettings(context).policy()
+      val allowed = InstinctCapabilities.specs.values.filter { policy.level(it.category) != InstinctAutonomy.NUNCA }
+      val states = allowed.mapNotNull { spec -> health?.engine?.result(spec.id)?.state }.groupingBy { it }.eachCount()
+      if (health == null) "Salud todavía sin comprobaciones." else
+        states.entries.joinToString(" · ", prefix = "Salud en el catálogo vivo: ") { (state, count) -> "${state.label} $count" }
+    }
     ProposalCheck.QueryKind.STATE -> stateAnswer(context, kind.phrase).message
     ProposalCheck.QueryKind.CANCEL_ONE -> InstinctScheduler.cancelShortAnswer(context, argument.orEmpty())
     ProposalCheck.QueryKind.PROBE -> probe(context, "${ProposalCheck.QueryKind.PROBE.phrase} ${argument.orEmpty()}", argument.orEmpty(),
@@ -704,7 +712,7 @@ object InstinctProposalCenter {
       }
       is ProposalCheck.Invalid -> InstinctProbe.Verdict.Invalid(InstinctAck.reason(check.reason))
       is ProposalCheck.Query -> if (check.kind == ProposalCheck.QueryKind.PROBE) InstinctProbe.Verdict.Invalid("no se puede probar una prueba")
-        else if (check.kind in InstinctProposalValidator.ruleQueries && source != ProposalSource.BUZON) InstinctProbe.Verdict.Invalid(InstinctContextScheduler.ONLY_SIGNED)
+        else if ((check.kind in InstinctProposalValidator.ruleQueries || check.kind == ProposalCheck.QueryKind.HEALTH) && source != ProposalSource.BUZON) InstinctProbe.Verdict.Invalid(InstinctContextScheduler.ONLY_SIGNED)
         else InstinctProbe.Verdict.Alone(if (check.kind.readOnly) "consulta" else "cambio de programación")
       is ProposalCheck.Notice -> when {
         source != ProposalSource.BUZON -> InstinctProbe.Verdict.Invalid(InstinctNotice.ONLY_MAILBOX)
