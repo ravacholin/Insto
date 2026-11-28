@@ -87,6 +87,35 @@ class CapabilityHealthEngineTest {
     assertEquals(8L, result.percentile(95))
   }
 
+  @Test fun unsupportedAndMissingPermissionChecksDoNotCreateIncidents() = runTest {
+    val engine = CapabilityHealthEngine(backgroundScope, HealthStore(file()), listOf(
+      HealthCheck("wifi_on") { HealthObservation(HealthCode.UNSUPPORTED) },
+      HealthCheck(id) { HealthObservation(HealthCode.PERMISSION) },
+    ), disk = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
+    val limit = engine.check("wifi_on")
+    assertEquals(HealthState.UNSUPPORTED, limit.state)
+    assertNull(limit.lastFailure)
+    assertEquals(0, limit.consecutiveFailures)
+    assertEquals(HealthState.PERMISSION_MISSING, engine.check(id).state)
+    assertTrue(engine.snapshots.value.incidents.isEmpty())
+
+    engine.record(id, HealthObservation(HealthCode.PERMISSION, HealthEvidence.EXECUTION), stage = HealthStage.PERMISSION)
+    assertEquals(HealthStage.PERMISSION, engine.snapshots.value.incidents.single().stage)
+  }
+
+  @Test fun explicitlyGrantedPermissionClearsTheWarningOnRefresh() = runTest {
+    var permitted = false
+    val engine = CapabilityHealthEngine(backgroundScope, HealthStore(file()), listOf(HealthCheck(id) {
+      HealthObservation(if (permitted) HealthCode.PREFLIGHT else HealthCode.PERMISSION, authorized = permitted)
+    }), disk = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
+    assertEquals(HealthState.PERMISSION_MISSING, engine.check(id).state)
+
+    permitted = true
+    val refreshed = engine.check(id, refresh = true)
+    assertEquals(HealthState.AVAILABLE, refreshed.state)
+    assertEquals(true, refreshed.observation.authorized)
+  }
+
   @Test fun deadlineAndSuccessAfterRecoveryAreDistinct() = runTest {
     var ready = false
     val engine = CapabilityHealthEngine(backgroundScope, HealthStore(file()), listOf(

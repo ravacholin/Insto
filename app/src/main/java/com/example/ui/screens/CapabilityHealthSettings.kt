@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import com.example.phone.CapabilityHealthRuntime
 import com.example.phone.HealthCheck
 import com.example.phone.HealthEffect
+import com.example.phone.HealthOverview
 import com.example.phone.HealthState
 import com.example.phone.healthSettings
 import com.example.phone.sanitizedReport
@@ -52,6 +53,7 @@ internal fun CapabilityHealthSettings() {
   var filter by remember { mutableStateOf<HealthState?>(null) }
   var limit by remember(filter) { mutableIntStateOf(12) }
   var history by remember { mutableStateOf(false) }
+  var showLimits by remember { mutableStateOf(false) }
 
   fun runCheck(work: suspend () -> String) {
     if (job != null) return
@@ -61,6 +63,12 @@ internal fun CapabilityHealthSettings() {
       } finally {
         job = null
       }
+    }
+  }
+
+  fun openSettings(id: String) {
+    runCatching { context.startActivity(healthSettings(context, id)) }.onFailure {
+      note = "Android no pudo abrir los ajustes."
     }
   }
 
@@ -80,14 +88,12 @@ internal fun CapabilityHealthSettings() {
 
   LaunchedEffect(engine) { engine.load() }
   val now = System.currentTimeMillis()
-  val checks = engine.checks.values.sortedBy { it.label }
+  val checksById = engine.checks
+  val checks = checksById.values.sortedBy { it.label }
   val rows = checks.associateWith { snapshot.diagnostics[it.id]?.at(now) ?: engine.result(it.id) }
-  val reviewed = rows.filterKeys { it.effect == HealthEffect.READ_ONLY }.values
-  val verified = reviewed.count { it.state == HealthState.VERIFIED }
-  val problems = reviewed.count { it.state.available == false }
-  Text(if (problems > 0) "Hay funciones que requieren atención" else if (verified > 0) "Hay funciones verificadas"
-    else "Esperando comprobaciones", style = MaterialTheme.typography.titleMedium)
-  Text("Verificadas $verified · Con problemas $problems · Pendientes o limitadas ${reviewed.size - verified - problems}")
+  val overview = HealthOverview(rows.values)
+  Text("Verificadas ${overview.verified} · Disponibles ${overview.available} · Avisos ${overview.issues.size} · " +
+    "Pendientes o limitadas ${overview.pendingOrLimited} · Sin soporte ${overview.limits.size}")
   Button(onClick = { runCheck { engine.checkAll(); "Comprobación general terminada." } }, enabled = job == null) {
     Text("Ejecutar diagnóstico general")
   }
@@ -99,9 +105,28 @@ internal fun CapabilityHealthSettings() {
 
   HorizontalDivider()
   TextButton(onClick = { filter = if (filter == HealthState.UNKNOWN) null else HealthState.UNKNOWN }) {
-    Text(if (filter == HealthState.UNKNOWN) "Mostrar todas" else "Mostrar pendientes")
+    Text(if (filter == HealthState.UNKNOWN) "Mostrar todas las compatibles" else "Mostrar pendientes")
   }
-  val visible = rows.entries.filter { filter == null || it.value.state == filter }
+  val groupedIssues = overview.issues.filter { it.capabilities.size > 1 }
+  val groupedIds = groupedIssues.flatMap { issue -> issue.capabilities.map { it.id } }.toSet()
+  if (filter == null) groupedIssues.forEach { issue ->
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+      Text(issue.label.orEmpty(), style = MaterialTheme.typography.titleSmall)
+      Text(issue.capabilities.joinToString(" · ") { checksById.getValue(it.id).label })
+      Row {
+        TextButton(enabled = job == null, onClick = {
+          runCheck {
+            issue.capabilities.forEach { engine.check(it.id, refresh = true) }
+            "Comprobación de calendario terminada."
+          }
+        }) { Text("Comprobar") }
+        TextButton(onClick = { openSettings(issue.capabilities.first().id) }) { Text("Ajustes") }
+      }
+    }
+  }
+  val visible = rows.entries.filter { (spec, row) ->
+    spec.id !in groupedIds && row.state != HealthState.UNSUPPORTED && (filter == null || row.state == filter)
+  }
     .sortedBy { (_, row) -> when {
       row.state.available == false -> 0
       row.state == HealthState.LIMITED -> 1
@@ -120,21 +145,26 @@ internal fun CapabilityHealthSettings() {
           if (spec.effect != HealthEffect.READ_ONLY) consent = spec
           else runCheck { engine.check(spec.id, refresh = true).observation.code.detail }
         }) { Text("Comprobar") }
-        if (row.observation.code.action != null) TextButton(onClick = {
-          runCatching { context.startActivity(healthSettings(context, spec.id)) }.onFailure {
-            note = "Android no pudo abrir los ajustes."
-          }
-        }) { Text("Ajustes") }
+        if (row.observation.code.action != null) TextButton(onClick = { openSettings(spec.id) }) { Text("Ajustes") }
       }
     }
   }
   if (visible.size > limit) TextButton(onClick = { limit += 12 }) { Text("Mostrar más capacidades") }
 
+  if (overview.limits.isNotEmpty()) {
+    HorizontalDivider()
+    TextButton(onClick = { showLimits = !showLimits }) {
+      Text(if (showLimits) "Ocultar límites del teléfono" else "Límites del teléfono (${overview.limits.size})")
+    }
+    if (showLimits) overview.limits.forEach { row -> Text(checksById.getValue(row.id).label) }
+  }
+
   HorizontalDivider()
   TextButton(onClick = { history = !history }) { Text(if (history) "Ocultar incidentes" else "Historial de incidentes") }
   if (history) {
-    if (snapshot.incidents.isEmpty()) Text("Todavía no hay incidentes registrados.")
-    snapshot.incidents.takeLast(12).asReversed().forEach { entry ->
+    val incidents = snapshot.reportedIncidents
+    if (incidents.isEmpty()) Text("Todavía no hay incidentes registrados.")
+    incidents.takeLast(12).asReversed().forEach { entry ->
       val label = engine.checks[entry.id]?.label ?: "Dispositivo"
       val result = when (entry.recovery) {
         true -> "Recuperación verificada."

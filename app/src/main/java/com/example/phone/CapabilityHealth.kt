@@ -29,7 +29,9 @@ internal enum class HealthState(val label: String, val available: Boolean? = fal
   INVALID_CREDENTIALS("Credenciales rechazadas"), PROVIDER_UNREACHABLE("Proveedor inaccesible"),
   QUOTA_EXHAUSTED("Cuota agotada"), VERSION_MISMATCH("Versión incompatible"),
   UNSUPPORTED("No compatible"), SYSTEM_RESTRICTED("Restricción del sistema"),
-  USER_REQUIRED("Requiere intervención"), NOT_OPERATIONAL("No operativa"), UNKNOWN("Sin comprobación vigente", null),
+  USER_REQUIRED("Requiere intervención"), NOT_OPERATIONAL("No operativa"), UNKNOWN("Sin comprobación vigente", null);
+
+  val isProblem get() = available == false && this != UNSUPPORTED
 }
 
 internal enum class HealthCode(
@@ -132,12 +134,48 @@ internal data class HealthIncident(
   val id: String, val code: HealthCode, val at: Long, val stage: HealthStage? = null,
   val recovery: Boolean? = null,
   val executionRef: String? = null,
-)
+) {
+  // Older stores included missing permissions from preflight and unsupported capabilities in the history.
+  val reportable get() = recovery != null || code.state.isProblem &&
+    (code != HealthCode.PERMISSION || stage != null || executionRef != null)
+}
 
 internal data class HealthSnapshot(
   val diagnostics: Map<String, HealthDiagnostic> = emptyMap(),
   val incidents: List<HealthIncident> = emptyList(),
-)
+) {
+  val reportedIncidents get() = incidents.filter(HealthIncident::reportable)
+}
+
+internal data class HealthIssue(val id: String, val capabilities: List<HealthDiagnostic>) {
+  val code get() = capabilities.first().observation.code
+
+  val label: String? get() {
+    if (id != "calendar.permissions") return null
+    val ids = capabilities.map(HealthDiagnostic::id)
+    val readMissing = "calendar.read" in ids || "calendar_query" in ids
+    return when {
+      "calendar.write" in ids && !readMissing -> "Permiso de escritura del calendario"
+      ids.all { it == "calendar.read" || it == "calendar_query" } -> "Permiso de lectura del calendario"
+      else -> "Permisos de calendario"
+    }
+  }
+}
+
+internal class HealthOverview(rows: Collection<HealthDiagnostic>) {
+  val verified = rows.count { it.state == HealthState.VERIFIED }
+  val available = rows.count { it.state == HealthState.AVAILABLE }
+  val pendingOrLimited = rows.count { it.state == HealthState.UNKNOWN || it.state == HealthState.LIMITED }
+  val limits = rows.filter { it.state == HealthState.UNSUPPORTED }
+  val issues = rows.filter { it.state.isProblem }.groupBy { row ->
+    if (row.observation.code == HealthCode.PERMISSION && row.id in calendarPermissionIds) "calendar.permissions" else row.id
+  }.map { (id, capabilities) -> HealthIssue(id, capabilities) }
+
+  private companion object {
+    val calendarPermissionIds = setOf("calendar.read", "calendar.write", "calendar_query", "calendar_create",
+      "calendar_update", "calendar_cancel")
+  }
+}
 
 /** The only data admitted to persistence is typed evidence. IDs must come from the registered catalog. */
 internal class HealthStore(private val file: File) {
@@ -164,7 +202,7 @@ internal class HealthStore(private val file: File) {
         HealthIncident(id, HealthCode.valueOf(row.getString("code")), row.getLong("at"),
           row.optString("stage").takeIf(String::isNotEmpty)?.let(HealthStage::valueOf), row.booleanOrNull("recovery"),
           row.optString("execution").takeIf(REFERENCE::matches))
-      }.getOrNull() })
+      }.getOrNull() }.filter(HealthIncident::reportable))
   }.getOrDefault(HealthSnapshot())
 
   fun save(snapshot: HealthSnapshot) {
@@ -323,10 +361,12 @@ internal class CapabilityHealthEngine(
     val old = snapshot.diagnostics[spec.id] ?: HealthDiagnostic(spec.id)
     val code = observation.code
     // A successful read-only preflight cannot disprove a failed execution or renew an earlier functional proof.
-    if (!operation && code in setOf(HealthCode.PREFLIGHT, HealthCode.DECLARATION) &&
+    val permissionGranted = old.observation.code == HealthCode.PERMISSION &&
+      code == HealthCode.PREFLIGHT && observation.authorized == true
+    if (!operation && !permissionGranted && code in setOf(HealthCode.PREFLIGHT, HealthCode.DECLARATION) &&
       old.at(now).state !in setOf(HealthState.UNKNOWN, HealthState.AVAILABLE)) return old
     val success = code == HealthCode.VERIFIED
-    val failure = code.state.available == false && code != HealthCode.CONSENT
+    val failure = code.state.isProblem && code != HealthCode.CONSENT && (operation || code != HealthCode.PERMISSION)
     val elapsed = duration?.coerceAtLeast(0)
     val updated = old.copy(
       observation = observation.copy(configured = observation.configured ?: old.observation.configured,
@@ -343,8 +383,9 @@ internal class CapabilityHealthEngine(
       recoveryAttempts = if (success) 0 else old.recoveryAttempts,
       retryAt = if (success) 0 else old.retryAt,
     )
+    val incidentStage = stage ?: HealthStage.PERMISSION.takeIf { operation && code == HealthCode.PERMISSION }
     val incidents = if (failure && (operation || old.observation.code != code))
-      snapshot.incidents + HealthIncident(spec.id, code, now, stage, executionRef = executionRef) else snapshot.incidents
+      snapshot.incidents + HealthIncident(spec.id, code, now, incidentStage, executionRef = executionRef) else snapshot.incidents
     save(HealthSnapshot(snapshot.diagnostics + (spec.id to updated), incidents.takeLast(64)))
     return updated
   }
