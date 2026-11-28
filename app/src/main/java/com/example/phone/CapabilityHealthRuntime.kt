@@ -301,7 +301,7 @@ internal class CapabilityHealthRuntime private constructor(private val app: Cont
     const val BOOT_FILE = "capability-health-boot"
     private val publicOperations = setOf("ai.router", "ai.llm", "instinct.channel", "instinct.mailbox", "instinct.push", "instinct.sync")
     private val observedSettings = setOf(PlatformAction.SILENT_ON, PlatformAction.SILENT_OFF,
-      PlatformAction.VIBRATE_ON, PlatformAction.VIBRATE_OFF, PlatformAction.DND_ON, PlatformAction.DND_OFF)
+      PlatformAction.VIBRATE_ON, PlatformAction.DND_ON, PlatformAction.DND_OFF)
     private val networkChecks = setOf("ai.gemini", "ai.groq", "ai.llm", "ai.transcription", "ai.fallback", "instinct.channel")
     private val omniremoteProviderErrors = setOf(HealthCode.PROVIDER_DOWN, HealthCode.PROVIDER_UNTRUSTED,
       HealthCode.RESPONSE, HealthCode.VERSION, HealthCode.PROVIDER_MISSING, HealthCode.TIMEOUT)
